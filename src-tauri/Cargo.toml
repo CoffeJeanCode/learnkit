@@ -1,0 +1,40 @@
+[package]
+name = "learnkit"
+version = "0.1.0"
+description = "LearnKit — multi-agent desktop boilerplate (Tauri 2 + Rig + React)"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "learnkit_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+cc = "1"
+embed-resource = "3"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-stronghold = { version = "2" }
+iota_stronghold = { version = "2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+rig-core = "0.42"
+rig-agent = "0.42"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+zeroize = "1"
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
