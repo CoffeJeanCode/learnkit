@@ -1,0 +1,787 @@
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::agents::AgentRegistry;
+    use crate::domain::notebook::{BlockStatus, DynamicBlockType, GateSubmission, GeneratedSectionBlock, PredictionComparison};
+    use crate::domain::roadmap::{EntryLevel, LearnerProfileCard, Micromodule, Milestone, RoadmapSyllabusPackage, SealedRoadmap, SessionStatus};
+    use crate::orchestration::PromptRunner;
+    use crate::providers::factory::PromptOutput;
+    use crate::tools::{BlockAuditCapture, BlockAuditResult, ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult, GateScaffold, NotebookBlockCapture, ScaffoldType};
+
+    fn sealed_roadmap_session() -> RoadmapSession {
+        let mut session = RoadmapSession::new("SID".to_string(), 0);
+        session.status = SessionStatus::Sealed;
+        session.roadmap_package = Some(SealedRoadmap {
+            schema_version: "1.0".to_string(),
+            package_id: "PID".to_string(),
+            session_id: "SID".to_string(),
+            generated_at_ms: 0,
+            learner_profile: LearnerProfileCard {
+                topic: "Ciclo de Krebs".to_string(),
+                target_goal: "Aprobar el examen".to_string(),
+                timeframe_weeks: 2,
+                weekly_commitment_hours: 3.0,
+                total_available_hours: 6.0,
+                entry_level: EntryLevel::TheoreticalFoundations,
+            },
+            diagnostic_summary: crate::domain::roadmap::DiagnosticSummaryCard {
+                core_focus: "Lo esencial".to_string(),
+                identified_needs: vec!["Entender el flujo".to_string()],
+                learning_strategy: "Guiado".to_string(),
+            },
+            syllabus: RoadmapSyllabusPackage {
+                course_title: "Dominio del Ciclo de Krebs".to_string(),
+                total_weeks: 1,
+                pace_hours_per_week: 3.0,
+                milestones: vec![Milestone {
+                    week: 1,
+                    title: "La gran imagen".to_string(),
+                    deliverable: "Mapa visual".to_string(),
+                    micromodules: vec![Micromodule {
+                        label: "Módulo 1".to_string(),
+                        hours: 3.0,
+                        deliverable: "Mapa visual anotado".to_string(),
+                        interactive_blocks: vec!["interactive_visual_anchor".to_string(), "metacognitive_closure".to_string()],
+                    }],
+                }],
+            },
+            diagnostic_battery: None,
+        });
+        session
+    }
+
+    fn micro_theory() -> GeneratedSectionBlock {
+        GeneratedSectionBlock::AnchoredMicroTheory {
+            title: "La gran imagen".to_string(),
+            intuitive_hook: "Piensa en una fábrica circular".to_string(),
+            system_rule: "Explicación breve del tema.".to_string(),
+            frequent_error: "Confundir la entrada con la salida".to_string(),
+        }
+    }
+
+    fn prediction_gate(correct: &str) -> GeneratedSectionBlock {
+        GeneratedSectionBlock::InteractivePredictionGate {
+            question: "¿Qué pasa primero?".to_string(),
+            options: vec!["A".to_string(), "B".to_string()],
+            conceptual_feedback_map: [("A".to_string(), "Casi".to_string()), ("B".to_string(), "Correcto".to_string())]
+                .into_iter()
+                .collect(),
+            correct_option: correct.to_string(),
+            visual_aid: None,
+        }
+    }
+
+    fn hands_on_mission() -> GeneratedSectionBlock {
+        GeneratedSectionBlock::HandsOnMission {
+            challenge_statement: "Resuelve este caso".to_string(),
+            expected_milestone_artifact: "Un diagrama completado".to_string(),
+            constraints: vec!["Sin librerías externas".to_string()],
+            scaffolding_hints: vec!["Empieza por identificar las entidades".to_string()],
+            evaluation_rubric_summary: vec!["Cubre el caso base".to_string()],
+            visual_aid: None,
+        }
+    }
+
+    fn closure() -> GeneratedSectionBlock {
+        GeneratedSectionBlock::MetacognitiveClosure {
+            synthesis_task: "Explica con tus palabras lo aprendido".to_string(),
+            prediction_comparison: PredictionComparison {
+                initial_prediction: "ip".to_string(),
+                final_result: "fr".to_string(),
+                contrast_narrative: "cn".to_string(),
+            },
+            self_evaluation_checklist: vec!["Puedo explicarlo sin ayuda".to_string()],
+        }
+    }
+
+    #[derive(Default)]
+    struct ScriptedNotebookRunner {
+        blocks: Mutex<VecDeque<Option<GeneratedSectionBlock>>>,
+        grading: Mutex<VecDeque<GateGradingResult>>,
+        closure_feedback: Mutex<VecDeque<ClosureFeedbackResult>>,
+        block_calls: Mutex<usize>,
+        grading_calls: Mutex<usize>,
+        closure_calls: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl PromptRunner for ScriptedNotebookRunner {
+        async fn run(&self, _: &str, _: &str, _: &str, _: &str, _: &[String]) -> AppResult<PromptOutput> {
+            unreachable!("notebook generation never calls the plain envelope runner")
+        }
+
+        async fn run_notebook_block_execution(
+            &self,
+            _provider_id: &str,
+            _model: &str,
+            _system_prompt: &str,
+            _input: &str,
+            capture: NotebookBlockCapture,
+        ) -> AppResult<PromptOutput> {
+            *self.block_calls.lock().unwrap() += 1;
+            if let Some(block) = self.blocks.lock().unwrap().pop_front().flatten() {
+                *capture.lock().unwrap() = Some(block);
+            }
+            Ok(PromptOutput { text: String::new(), tool_calls: vec![] })
+        }
+
+        async fn run_gate_grading_execution(
+            &self,
+            _provider_id: &str,
+            _model: &str,
+            _system_prompt: &str,
+            _input: &str,
+            capture: GateGradingCapture,
+        ) -> AppResult<PromptOutput> {
+            *self.grading_calls.lock().unwrap() += 1;
+            if let Some(result) = self.grading.lock().unwrap().pop_front() {
+                *capture.lock().unwrap() = Some(result);
+            }
+            Ok(PromptOutput { text: String::new(), tool_calls: vec![] })
+        }
+
+        async fn run_closure_grading_execution(
+            &self,
+            _provider_id: &str,
+            _model: &str,
+            _system_prompt: &str,
+            _input: &str,
+            capture: ClosureFeedbackCapture,
+        ) -> AppResult<PromptOutput> {
+            *self.closure_calls.lock().unwrap() += 1;
+            if let Some(result) = self.closure_feedback.lock().unwrap().pop_front() {
+                *capture.lock().unwrap() = Some(result);
+            }
+            Ok(PromptOutput { text: String::new(), tool_calls: vec![] })
+        }
+    }
+
+    fn service_with(runner: Arc<dyn PromptRunner>) -> NotebookService {
+        service_with_store(NotebookStore::open_in_memory().expect("open store"), runner)
+    }
+
+    fn service_with_store(store: NotebookStore, runner: Arc<dyn PromptRunner>) -> NotebookService {
+        let agents = Arc::new(AgentRegistry::new());
+        agents.register(crate::agents::notebook_agent::definition()).expect("register notebook agent");
+        agents.register(crate::agents::notebook_gate_grader_agent::definition()).expect("register gate grader agent");
+        agents.register(crate::agents::closure_feedback_grader_agent::definition()).expect("register closure feedback grader agent");
+        let orchestrator = Arc::new(Orchestrator::new(agents, runner));
+        NotebookService::new(store, orchestrator)
+    }
+
+    #[derive(Default)]
+    struct CriticRunner {
+        blocks: Mutex<VecDeque<Option<GeneratedSectionBlock>>>,
+        audits: Mutex<VecDeque<AppResult<BlockAuditResult>>>,
+        inputs: Mutex<Vec<String>>,
+        block_calls: Mutex<usize>,
+        audit_calls: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl PromptRunner for CriticRunner {
+        async fn run(&self, _: &str, _: &str, _: &str, _: &str, _: &[String]) -> AppResult<PromptOutput> {
+            unreachable!("notebook generation never calls the plain envelope runner")
+        }
+
+        async fn run_notebook_block_execution(
+            &self,
+            _provider_id: &str,
+            _model: &str,
+            _system_prompt: &str,
+            input: &str,
+            capture: NotebookBlockCapture,
+        ) -> AppResult<PromptOutput> {
+            *self.block_calls.lock().unwrap() += 1;
+            self.inputs.lock().unwrap().push(input.to_string());
+            if let Some(block) = self.blocks.lock().unwrap().pop_front().flatten() {
+                *capture.lock().unwrap() = Some(block);
+            }
+            Ok(PromptOutput { text: String::new(), tool_calls: vec![] })
+        }
+
+        async fn run_block_audit_execution(
+            &self,
+            _provider_id: &str,
+            _model: &str,
+            _system_prompt: &str,
+            _input: &str,
+            capture: BlockAuditCapture,
+        ) -> AppResult<PromptOutput> {
+            *self.audit_calls.lock().unwrap() += 1;
+            match self.audits.lock().unwrap().pop_front().expect("scripted audit verdict available") {
+                Ok(result) => {
+                    *capture.lock().unwrap() = Some(result);
+                    Ok(PromptOutput { text: String::new(), tool_calls: vec![] })
+                }
+                Err(e) => Err(e),
+            }
+        }
+    }
+
+    /// Like [`service_with`], but with the pedagogical critic registered —
+    /// the production registry always has it; `service_with` leaves it out
+    /// so the pre-critic tests exercise the "critic unavailable" fail-open.
+    fn service_with_critic(runner: Arc<dyn PromptRunner>) -> NotebookService {
+        let agents = Arc::new(AgentRegistry::new());
+        agents.register(crate::agents::notebook_agent::definition()).expect("register notebook agent");
+        agents.register(crate::agents::notebook_gate_grader_agent::definition()).expect("register gate grader agent");
+        agents.register(crate::agents::pedagogical_critic_agent::definition()).expect("register pedagogical critic");
+        let orchestrator = Arc::new(Orchestrator::new(agents, runner));
+        NotebookService::new(NotebookStore::open_in_memory().expect("open store"), orchestrator)
+    }
+
+    fn first_class_id(service: &NotebookService) -> String {
+        let classes = service.import_course_from_roadmap(&sealed_roadmap_session()).expect("import");
+        classes[0].id.clone()
+    }
+
+    /// Lets the current-thread test runtime poll a detached `tokio::spawn`
+    /// background chain to completion — the mock runner resolves instantly,
+    /// so a short sleep is enough to observe its effects deterministically
+    /// in practice.
+    async fn let_background_chain_settle() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    #[test]
+    fn import_course_from_roadmap_seeds_one_class_per_micromodule() {
+        let service = service_with(Arc::new(ScriptedNotebookRunner::default()));
+        let classes = service.import_course_from_roadmap(&sealed_roadmap_session()).expect("import ok");
+        assert_eq!(classes.len(), 1);
+        assert_eq!(classes[0].title, "Semana 1: Módulo 1");
+    }
+
+    #[test]
+    fn import_fails_without_a_sealed_syllabus() {
+        let service = service_with(Arc::new(ScriptedNotebookRunner::default()));
+        let session = RoadmapSession::new("SID".to_string(), 0);
+        let err = service.import_course_from_roadmap(&session).expect_err("must fail");
+        assert!(matches!(err, AppError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn start_class_notebook_returns_block_one_fast_and_buffers_block_two_in_the_background() {
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(vec![Some(micro_theory()), Some(prediction_gate("B"))].into()),
+            ..Default::default()
+        });
+        let service = service_with(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start ok");
+        assert_eq!(payload.blocks.len(), 1, "only block 1 returned synchronously");
+        assert_eq!(payload.blocks[0].block_type, DynamicBlockType::AnchoredMicroTheory);
+        assert_eq!(payload.document.current_block_index, 1, "non-gate block 1 auto-unlocks immediately");
+
+        let_background_chain_settle().await;
+        let progress = service.get_class_notebook_progress(&class_id).expect("progress");
+        assert_eq!(progress.blocks.len(), 2, "block 2 buffered in the background");
+        assert_eq!(progress.blocks[1].block_type, DynamicBlockType::InteractivePredictionGate);
+        assert_eq!(progress.document.current_block_index, 1, "the gate stays locked, cursor doesn't advance past it");
+        assert_eq!(*runner.block_calls.lock().unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn starting_an_already_started_notebook_resumes_instead_of_regenerating() {
+        let runner = Arc::new(ScriptedNotebookRunner { blocks: Mutex::new(vec![Some(micro_theory())].into()), ..Default::default() });
+        let service = service_with(runner.clone());
+        let class_id = first_class_id(&service);
+
+        service.start_class_notebook(None, &class_id).await.expect("first start");
+        let_background_chain_settle().await;
+        let calls_after_first = *runner.block_calls.lock().unwrap();
+
+        let resumed = service.start_class_notebook(None, &class_id).await.expect("resume");
+        assert_eq!(resumed.blocks.len(), 1);
+        assert_eq!(*runner.block_calls.lock().unwrap(), calls_after_first, "no new generation call on resume");
+    }
+
+    #[tokio::test]
+    async fn a_cursor_left_behind_by_a_lost_race_heals_on_reopen_and_the_gate_becomes_submittable() {
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(vec![Some(micro_theory()), Some(prediction_gate("B"))].into()),
+            grading: Mutex::new(vec![GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), scaffold: None }].into()),
+            ..Default::default()
+        });
+        let service = service_with(runner);
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("first block");
+        let_background_chain_settle().await; // background chain buffers the gate
+        let doc_id = payload.document.id.clone();
+
+        // Reproduce the production wedge: a stale concurrent writer parked
+        // the cursor back at block 0, so every gate submit was rejected
+        // with "este bloque ya no es el bloque activo de la clase".
+        service.store.set_document_current_index(&doc_id, 0).expect("stall cursor");
+        let stalled = service.store.get_document(&doc_id).expect("read").expect("present");
+        assert_eq!(stalled.current_block_index, 0, "raw document cursor is behind the persisted gate");
+
+        let resumed = service.start_class_notebook(None, &class_id).await.expect("reopen");
+        assert_eq!(resumed.document.current_block_index, 1, "reconcile walks the cursor back onto the gate");
+        let healed = service.get_class_notebook_progress(&class_id).expect("progress");
+        assert_eq!(healed.document.current_block_index, 1, "the heal is persisted, not just in the payload");
+
+        let gate = healed
+            .blocks
+            .iter()
+            .find(|b| b.block_type == DynamicBlockType::InteractivePredictionGate)
+            .expect("the buffered gate is returned");
+        let result = service
+            .submit_gate_response(None, &gate.id, GateSubmission::InteractivePredictionGate { selected_option: "B".to_string() })
+            .await
+            .expect("the gate is submittable again");
+        assert!(result.passed, "cursor heal restores the normal flow");
+    }
+
+    #[tokio::test]
+    async fn correct_answer_passes_the_gate_advances_the_cursor_and_answer_key_never_reaches_the_client() {
+        // metacognitive_closure can't legally land until the student has
+        // passed BOTH a conceptual gate (interactive_prediction_gate) and a
+        // practice gate (hands_on_mission) — see `grounding::mastery_progress`
+        // — so this fixture exercises the full "infinite notebook" arc: gate
+        // -> content -> gate -> closure, only once both are actually cleared.
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(vec![Some(prediction_gate("B")), Some(micro_theory()), Some(hands_on_mission()), Some(closure())].into()),
+            grading: Mutex::new(vec![GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), scaffold: None }].into()),
+            ..Default::default()
+        });
+        let service = service_with(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start");
+        let gate_block = &payload.blocks[0];
+        assert!(gate_block.content_json.get("correctOption").is_none(), "answer key must never reach the client");
+        let gate_id = gate_block.id.clone();
+
+        let result = service
+            .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: "B".to_string() })
+            .await
+            .expect("submit ok");
+        assert!(result.passed);
+        assert_eq!(result.block.status, BlockStatus::Passed);
+
+        let_background_chain_settle().await;
+        let progress = service.get_class_notebook_progress(&class_id).expect("progress");
+        assert_eq!(progress.blocks.len(), 3, "micro_theory auto-unlocked, then stopped at the practice gate");
+        assert_eq!(progress.document.current_block_index, 2, "the practice gate is still locked, awaiting submission");
+        let mission_block = progress.blocks.last().unwrap();
+        assert_eq!(mission_block.block_type, DynamicBlockType::HandsOnMission);
+
+        let mission_result = service
+            .submit_gate_response(None, &mission_block.id, GateSubmission::HandsOnMission { submission_text: "mi solución".to_string() })
+            .await
+            .expect("submit ok");
+        assert!(mission_result.passed, "both mastery dimensions are now satisfied");
+
+        let_background_chain_settle().await;
+        let progress = service.get_class_notebook_progress(&class_id).expect("progress");
+        assert_eq!(progress.blocks.len(), 4);
+        assert_eq!(
+            progress.document.current_block_index, 4,
+            "advanced past the passed practice gate and the auto-unlocked closing block"
+        );
+        assert_eq!(progress.blocks.last().unwrap().block_type, DynamicBlockType::MetacognitiveClosure);
+    }
+
+    #[tokio::test]
+    async fn wrong_answer_locks_the_gate_and_returns_a_hint_without_revealing_the_correct_option() {
+        let runner = Arc::new(ScriptedNotebookRunner { blocks: Mutex::new(vec![Some(prediction_gate("B"))].into()), ..Default::default() });
+        let service = service_with(runner.clone());
+        let class_id = first_class_id(&service);
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start");
+        let gate_id = payload.blocks[0].id.clone();
+
+        let result = service
+            .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: "A".to_string() })
+            .await
+            .expect("submit ok");
+        assert!(!result.passed);
+        assert_eq!(result.block.status, BlockStatus::Failed);
+        assert_eq!(result.block.attempt_count, 1);
+
+        let progress = service.get_class_notebook_progress(&class_id).expect("progress");
+        assert_eq!(progress.document.current_block_index, 0, "still locked, cursor unchanged");
+    }
+
+    #[tokio::test]
+    async fn three_failed_attempts_escalate_to_a_re_approach_block_never_revealing_the_answer() {
+        let runner = Arc::new(ScriptedNotebookRunner { blocks: Mutex::new(vec![Some(prediction_gate("B"))].into()), ..Default::default() });
+        let service = service_with(runner.clone());
+        let class_id = first_class_id(&service);
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start");
+        let gate_id = payload.blocks[0].id.clone();
+
+        for _ in 0..2 {
+            let r = service
+                .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: "A".to_string() })
+                .await
+                .expect("submit ok");
+            assert!(!r.passed);
+            assert!(r.escalation_block.is_none());
+        }
+
+        // 3rd fail: the mock's next scripted block IS the re-approach block.
+        runner.blocks.lock().unwrap().push_back(Some(hands_on_mission()));
+        let third = service
+            .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: "A".to_string() })
+            .await
+            .expect("submit ok");
+        assert!(!third.passed);
+        assert_eq!(third.block.status, BlockStatus::Escalated);
+        let escalation = third.escalation_block.expect("escalation block present on the 3rd fail");
+        assert_eq!(escalation.block_type, DynamicBlockType::HandsOnMission);
+
+        // Resubmitting the same escalated gate is rejected — it's locked forever, never retried.
+        let err = service
+            .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: "B".to_string() })
+            .await
+            .expect_err("must reject a resolved gate");
+        assert!(matches!(err, AppError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn free_text_gate_is_graded_by_the_model_and_its_scaffold_never_reveals_the_solution() {
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(
+                vec![Some(GeneratedSectionBlock::HeuristicErrorAudit {
+                    instruction: "Encuentra el error".to_string(),
+                    flawed_representation: crate::domain::notebook::FlawedRepresentation {
+                        context: "Un caso típico".to_string(),
+                        buggy_snippet_or_diagram: "x = x + 1 // nunca se ejecuta".to_string(),
+                        error_type: crate::domain::notebook::FlawErrorType::ConceptualMisunderstanding,
+                    },
+                    guiding_questions: vec!["¿Qué falta?".to_string()],
+                    model_solution: "La condición del bucle nunca se vuelve falsa".to_string(),
+                    visual_aid: None,
+                })]
+                .into(),
+            ),
+            grading: Mutex::new(
+                vec![GateGradingResult {
+                    passed: false,
+                    rationale: "no menciona la condición".to_string(),
+                    scaffold: Some(GateScaffold {
+                        scaffold_type: ScaffoldType::SocraticHint,
+                        content: "¿Qué tendría que pasar para que el bucle termine?".to_string(),
+                    }),
+                }]
+                .into(),
+            ),
+            ..Default::default()
+        });
+        let service = service_with(runner.clone());
+        let class_id = first_class_id(&service);
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start");
+        assert!(payload.blocks[0].content_json.get("modelSolution").is_none(), "modelSolution hidden until passed");
+        let block_id = payload.blocks[0].id.clone();
+
+        let result = service
+            .submit_gate_response(None, &block_id, GateSubmission::HeuristicErrorAudit { diagnosis_text: "algo está mal".to_string() })
+            .await
+            .expect("submit ok");
+        assert!(!result.passed);
+        assert_eq!(*runner.grading_calls.lock().unwrap(), 1);
+        let feedback = result.feedback.expect("scaffold feedback present on fail");
+        assert!(
+            !feedback.to_lowercase().contains("condición del bucle nunca"),
+            "scaffold must never quote the model_solution verbatim"
+        );
+    }
+
+    #[tokio::test]
+    async fn submitting_to_a_stale_or_non_current_block_is_rejected() {
+        let runner =
+            Arc::new(ScriptedNotebookRunner { blocks: Mutex::new(vec![Some(prediction_gate("B"))].into()), ..Default::default() });
+        let service = service_with(runner.clone());
+        let class_id = first_class_id(&service);
+        service.start_class_notebook(None, &class_id).await.expect("start");
+
+        let err = service
+            .submit_gate_response(None, "does-not-exist", GateSubmission::InteractivePredictionGate { selected_option: "B".to_string() })
+            .await
+            .expect_err("must fail for an unknown block id");
+        assert!(matches!(err, AppError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn never_calling_the_tool_repeatedly_surfaces_an_error_instead_of_fabricating_content() {
+        let runner = Arc::new(ScriptedNotebookRunner { blocks: Mutex::new(vec![None, None, None].into()), ..Default::default() });
+        let service = service_with(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let err = service.start_class_notebook(None, &class_id).await.expect_err("must surface, not fabricate");
+        assert!(matches!(err, AppError::AgentExecutionFailed(_)));
+        assert_eq!(*runner.block_calls.lock().unwrap(), 3, "used the full retry budget");
+        // The document SHELL exists (created up front so a resume/retry has
+        // somewhere to attach to — see `ensure_document_shell`), but no
+        // fabricated content was ever persisted into it.
+        let progress = service.get_class_notebook_progress(&class_id).expect("shell still resolvable");
+        assert!(progress.blocks.is_empty(), "nothing was fabricated");
+    }
+
+    #[tokio::test]
+    async fn a_grounding_violation_is_rejected_then_a_corrected_block_persists_on_retry() {
+        let mut bad_gate = prediction_gate("Z"); // Z is not one of the options — grounding rejects it
+        if let GeneratedSectionBlock::InteractivePredictionGate { correct_option, .. } = &mut bad_gate {
+            *correct_option = "Z".to_string();
+        }
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(vec![Some(bad_gate), Some(prediction_gate("B"))].into()),
+            ..Default::default()
+        });
+        let service = service_with(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("recovers on retry");
+        assert_eq!(payload.blocks[0].block_type, DynamicBlockType::InteractivePredictionGate);
+        assert_eq!(*runner.block_calls.lock().unwrap(), 2, "one rejected attempt + one corrected retry");
+    }
+
+    #[test]
+    fn save_notebook_state_updates_content_without_touching_gating_state() {
+        let service = service_with(Arc::new(ScriptedNotebookRunner::default()));
+        let class_id = first_class_id(&service);
+        let doc = service.store.ensure_document_shell(&class_id, "Clase 1").expect("shell");
+        let content = serde_json::to_value(closure()).expect("serializes");
+        let block = service.store.insert_block(&doc.id, DynamicBlockType::MetacognitiveClosure, &content, BlockStatus::Ready).expect("insert");
+
+        service
+            .save_notebook_state(&doc.id, &[BlockUpdate { id: block.id.clone(), content_json: serde_json::json!({"studentReflection": "listo"}) }])
+            .expect("save ok");
+
+        let reloaded = service.get_class_notebook_progress(&class_id).expect("load ok");
+        let edited = reloaded.blocks.iter().find(|b| b.id == block.id).expect("block present");
+        assert_eq!(edited.content_json, serde_json::json!({"studentReflection": "listo"}));
+        assert_eq!(edited.status, BlockStatus::Ready, "content save never changes gating status");
+    }
+
+    #[tokio::test]
+    async fn a_critic_rejection_retries_with_the_feedback_and_persists_the_corrected_block() {
+        let runner = Arc::new(CriticRunner {
+            blocks: Mutex::new(vec![Some(micro_theory()), Some(micro_theory())].into()),
+            audits: Mutex::new(
+                vec![
+                    Ok(BlockAuditResult { accepted: false, feedback: vec!["el hook es vago".to_string()] }),
+                    Ok(BlockAuditResult { accepted: true, feedback: vec![] }),
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        });
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("recovers on the corrected retry");
+        assert_eq!(payload.blocks[0].block_type, DynamicBlockType::AnchoredMicroTheory);
+        assert_eq!(*runner.block_calls.lock().unwrap(), 2, "one semantically-rejected attempt + one corrected retry");
+        assert_eq!(*runner.audit_calls.lock().unwrap(), 2, "the deterministic-clean block went to the critic both times");
+        assert!(
+            runner.inputs.lock().unwrap()[1].contains("el hook es vago"),
+            "the critic's feedback is fed back to the generator as the corrective note"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unavailable_critic_fails_open_and_ships_the_block_on_the_first_attempt() {
+        let runner = Arc::new(CriticRunner {
+            blocks: Mutex::new(vec![Some(micro_theory())].into()),
+            audits: Mutex::new(vec![Err(AppError::AgentExecutionFailed("critic is down".to_string()))].into()),
+            ..Default::default()
+        });
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("fails open instead of blocking the class");
+        assert_eq!(payload.blocks.len(), 1);
+        assert_eq!(*runner.block_calls.lock().unwrap(), 1, "a critic ERROR must not burn a generation retry");
+        assert_eq!(*runner.audit_calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_persistent_semantic_rejection_falls_back_to_the_last_grounded_block_instead_of_dead_ending() {
+        let reject = || -> AppResult<BlockAuditResult> { Ok(BlockAuditResult { accepted: false, feedback: vec!["no llega".to_string()] }) };
+        let runner = Arc::new(CriticRunner {
+            blocks: Mutex::new(vec![Some(micro_theory()), Some(micro_theory()), Some(micro_theory())].into()),
+            audits: Mutex::new(vec![reject(), reject(), reject()].into()),
+            ..Default::default()
+        });
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("backstop ships the grounded candidate");
+        assert_eq!(payload.blocks[0].block_type, DynamicBlockType::AnchoredMicroTheory);
+        assert_eq!(*runner.block_calls.lock().unwrap(), 3, "burned the full attempt budget before the backstop");
+        assert_eq!(*runner.audit_calls.lock().unwrap(), 3, "every attempt reached the semantic critic");
+    }
+
+    #[tokio::test]
+    async fn the_next_class_unlocks_only_once_the_previous_one_is_practiced_and_closed() {
+        let store = NotebookStore::open_in_memory().expect("store");
+        let course = store.create_course("Dominio del Ciclo de Krebs", "Aprobar el examen", 1).expect("course");
+        let milestone = store.create_milestone(&course.id, 1, "Semana 1", "Mapa visual").expect("milestone");
+        let first = store.create_class(&milestone.id, 1, "Semana 1: la gran imagen", 0, 3.0).expect("first class");
+        let second = store.create_class(&milestone.id, 1, "Semana 1: entradas y salidas", 1, 3.0).expect("second class");
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(vec![Some(micro_theory())].into()),
+            ..Default::default()
+        });
+        let service = service_with_store(store, runner.clone());
+
+        let err = service
+            .start_class_notebook(None, &second.id)
+            .await
+            .expect_err("must stay locked while the previous class is incomplete");
+        assert!(matches!(err, AppError::InvalidInput(_)), "unexpected error: {err:?}");
+        assert!(err.to_string().contains("Semana 1: la gran imagen"), "names the blocking class: {err}");
+        assert_eq!(*runner.block_calls.lock().unwrap(), 0, "no generation may run for a locked class");
+        let listed = service.list_course_classes(&course.id).expect("list");
+        assert!(listed.iter().all(|c| !c.complete), "nothing is complete yet");
+
+        let doc = service.store.ensure_document_shell(&first.id, &first.title).expect("shell");
+        service
+            .store
+            .insert_block(
+                &doc.id,
+                DynamicBlockType::InteractivePredictionGate,
+                &serde_json::json!({ "blockType": "interactive_prediction_gate" }),
+                BlockStatus::Passed,
+            )
+            .expect("gate");
+        let mut closed = serde_json::to_value(closure()).expect("closure json");
+        closed["studentReflection"] = serde_json::json!("Ya distingo la entrada de la salida");
+        service
+            .store
+            .insert_block(&doc.id, DynamicBlockType::MetacognitiveClosure, &closed, BlockStatus::Passed)
+            .expect("closure");
+        service.store.set_document_current_index(&doc.id, 2).expect("cursor past the closure");
+
+        let listed = service.list_course_classes(&course.id).expect("list");
+        assert!(listed[0].complete, "passed gates + revealed closure + written reflection + approved feedback = complete");
+        assert!(!listed[1].complete, "the second class has no notebook yet");
+
+        let payload = service.start_class_notebook(None, &second.id).await.expect("unlocked now");
+        assert_eq!(payload.blocks.len(), 1, "the second class generates its first block");
+        assert_eq!(*runner.block_calls.lock().unwrap(), 1, "exactly one generation ran");
+    }
+
+    #[tokio::test]
+    async fn the_closure_feedback_is_the_last_hurdle_that_completes_the_class() {
+        // Real arc to the closure: prediction gate -> content -> practice
+        // gate -> closure (grounding rejects a closure before mastery).
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(
+                vec![Some(prediction_gate("B")), Some(micro_theory()), Some(hands_on_mission()), Some(closure())].into(),
+            ),
+            grading: Mutex::new(
+                vec![GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), scaffold: None }].into(),
+            ),
+            closure_feedback: Mutex::new(
+                vec![
+                    ClosureFeedbackResult {
+                        passed: false,
+                        feedback: "Menciona qué cambió respecto a tu predicción antes de cerrar.".to_string(),
+                    },
+                    ClosureFeedbackResult {
+                        passed: true,
+                        feedback: "Conectaste tu predicción con lo observado — módulo completado.".to_string(),
+                    },
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        });
+        let service = service_with(runner.clone());
+        let class_id = first_class_id(&service);
+        let course_id = service.list_courses().expect("courses")[0].id.clone();
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start");
+        let gate = &payload.blocks[0];
+        service
+            .submit_gate_response(None, &gate.id, GateSubmission::InteractivePredictionGate { selected_option: "B".to_string() })
+            .await
+            .expect("prediction gate passes");
+        let_background_chain_settle().await;
+        let progress = service.get_class_notebook_progress(&class_id).expect("progress");
+        let mission = progress
+            .blocks
+            .iter()
+            .find(|b| b.block_type == DynamicBlockType::HandsOnMission)
+            .expect("practice gate buffered after the prediction gate");
+        service
+            .submit_gate_response(
+                None,
+                &mission.id,
+                GateSubmission::HandsOnMission { submission_text: "mi solución".to_string() },
+            )
+            .await
+            .expect("practice gate passes");
+        let_background_chain_settle().await;
+
+        let progress = service.get_class_notebook_progress(&class_id).expect("progress");
+        let closure_block = progress
+            .blocks
+            .iter()
+            .find(|b| b.block_type == DynamicBlockType::MetacognitiveClosure)
+            .expect("closure revealed after both gates");
+        let listed = service.list_course_classes(&course_id).expect("list");
+        assert!(!listed[0].complete, "no reflection and no feedback yet");
+
+        let err = service
+            .submit_closure_feedback(None, &closure_block.id, "   ")
+            .await
+            .expect_err("a blank reflection can't be graded");
+        assert!(matches!(err, AppError::InvalidInput(_)), "unexpected error: {err:?}");
+
+        let other = service
+            .store
+            .insert_block(
+                &payload.document.id,
+                DynamicBlockType::AnchoredMicroTheory,
+                &serde_json::to_value(micro_theory()).expect("serializes"),
+                BlockStatus::Ready,
+            )
+            .expect("non-closure block");
+        let err = service
+            .submit_closure_feedback(None, &other.id, "texto")
+            .await
+            .expect_err("only the closure takes closure feedback");
+        assert!(matches!(err, AppError::InvalidInput(_)), "unexpected error: {err:?}");
+
+        let failed = service
+            .submit_closure_feedback(None, &closure_block.id, "Entendí todo.")
+            .await
+            .expect("graded");
+        assert!(!failed.passed, "a vague reflection must not pass");
+        assert!(!failed.feedback.is_empty(), "feedback is always student-facing");
+        assert_eq!(failed.block.status, BlockStatus::Failed);
+        let progress = service.get_class_notebook_progress(&class_id).expect("progress");
+        let stored = progress.blocks.iter().find(|b| b.id == closure_block.id).expect("closure present");
+        assert_eq!(stored.content_json["studentReflection"], serde_json::json!("Entendí todo."), "the graded text is persisted");
+        assert_eq!(stored.status, BlockStatus::Failed);
+        let listed = service.list_course_classes(&course_id).expect("list");
+        assert!(!listed[0].complete, "a failed closure feedback keeps the class locked");
+
+        let passed = service
+            .submit_closure_feedback(None, &closure_block.id, "Predije A pero observé B, y ahora sé que C conecta ambas")
+            .await
+            .expect("graded");
+        assert!(passed.passed, "a substantive reflection passes");
+        assert_eq!(passed.block.status, BlockStatus::Passed);
+        let listed = service.list_course_classes(&course_id).expect("list");
+        assert!(listed[0].complete, "approved closure feedback completes the class");
+
+        let calls_before = *runner.closure_calls.lock().unwrap();
+        let again = service
+            .submit_closure_feedback(None, &closure_block.id, "intentar de nuevo para borrarlo")
+            .await
+            .expect("re-grade is a no-op");
+        assert!(again.passed, "an approved closure never re-opens");
+        assert_eq!(again.feedback, passed.feedback, "the stored verdict stands");
+        assert_eq!(*runner.closure_calls.lock().unwrap(), calls_before, "no second grader call after approval");
+    }

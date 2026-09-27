@@ -68,6 +68,37 @@ impl FileStore {
         Ok(Some(session))
     }
 
+    pub fn delete_roadmap_session(&self, session_id: &str) -> AppResult<()> {
+        let path = self.roadmap_session_path(session_id)?;
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| AppError::Persistence(format!("delete: {e}")))?;
+        }
+        Ok(())
+    }
+
+    /// Every saved roadmap session, newest first. Corrupt/unparseable files
+    /// are skipped (never fail the whole list because of one bad file).
+    pub fn list_roadmap_sessions(&self) -> AppResult<Vec<RoadmapSession>> {
+        let dir = self.dir.join("roadmap_sessions");
+        if !dir.exists() {
+            return Ok(vec![]);
+        }
+        let entries = std::fs::read_dir(&dir).map_err(|e| AppError::Persistence(format!("list: {e}")))?;
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(raw) = std::fs::read_to_string(&path) else { continue };
+            if let Ok(session) = serde_json::from_str::<RoadmapSession>(&raw) {
+                out.push(session);
+            }
+        }
+        out.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+        Ok(out)
+    }
+
     fn write_json<T: serde::Serialize + ?Sized>(path: &PathBuf, value: &T) -> AppResult<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
@@ -92,7 +123,6 @@ mod tests {
     use super::*;
     use crate::domain::model::ModelRef;
     use crate::domain::provider::ProviderKind;
-
     #[test]
     fn persists_and_loads_without_secrets() {
         let dir = std::env::temp_dir().join(format!("learnkit-store-{}", uuid::Uuid::new_v4()));
@@ -122,6 +152,31 @@ mod tests {
             }])
             .expect("save agents");
         assert_eq!(store.load_agents().expect("load").len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn lists_sessions_newest_first_skipping_corrupt_files() {
+        let dir = std::env::temp_dir().join(format!("learnkit-sessions-{}", uuid::Uuid::new_v4()));
+        let store = FileStore::new(dir.clone());
+
+        assert!(store.list_roadmap_sessions().expect("empty dir").is_empty());
+
+        let mut older = RoadmapSession::new("older".to_string(), 100);
+        older.updated_at_ms = 100;
+        let mut newer = RoadmapSession::new("newer".to_string(), 200);
+        newer.updated_at_ms = 200;
+        store.save_roadmap_session(&older).expect("save older");
+        store.save_roadmap_session(&newer).expect("save newer");
+        // Corrupt file + non-json file must not break the list.
+        std::fs::create_dir_all(dir.join("roadmap_sessions")).expect("dir");
+        std::fs::write(dir.join("roadmap_sessions").join("broken.json"), "{not json").expect("write");
+        std::fs::write(dir.join("roadmap_sessions").join("notes.txt"), "hi").expect("write");
+
+        let listed = store.list_roadmap_sessions().expect("list");
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].session_id, "newer");
+        assert_eq!(listed[1].session_id, "older");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -15,9 +15,9 @@ pub enum AppError {
     ModelNotConfigured(String),
     #[error("tool not found: {0}")]
     ToolNotFound(String),
-    #[error("provider connection failed")]
+    #[error("provider connection failed: {0}")]
     ProviderConnectionFailed(String),
-    #[error("agent execution failed")]
+    #[error("agent execution failed: {0}")]
     AgentExecutionFailed(String),
     #[error("secret vault error")]
     Vault(String),
@@ -25,11 +25,38 @@ pub enum AppError {
     Persistence(String),
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    #[error("operation timed out: {0}")]
+    Timeout(String),
 }
 
 impl AppError {
-    pub fn code(&self) -> &'static str {
-        match self {
+    /// Whether retrying the same operation could plausibly succeed: model
+    /// runtime failures (including tool-call errors surfaced by Rig),
+    /// network blips and timeouts. Config errors (missing key, unknown
+    /// agent/tool, bad input, vault/persistence failures) are permanent —
+    /// retrying them would just burn another slow LLM call.
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::AgentExecutionFailed(_) | Self::ProviderConnectionFailed(_) | Self::Timeout(_)
+        )
+    }
+
+    /// Whether this failure is specifically the model running out of output
+    /// tokens mid-response (`finish_reason=Length`, surfaced by `rig_agent`/
+    /// `rig_core`) — distinct from a generic transient failure because a
+    /// blind backoff-and-resend-the-same-input retry (see `is_transient`)
+    /// will very likely fail identically again: the input didn't get
+    /// shorter. Callers that see `true` here should inject a corrective
+    /// "be more concise" note into the NEXT attempt's input instead of just
+    /// waiting and resending (see `notebook_service::generation::
+    /// generate_and_persist_block` and `notebook_service::grading::
+    /// grade_with_model`).
+    pub fn is_output_budget_exhausted(&self) -> bool {
+        matches!(self, Self::AgentExecutionFailed(msg) if msg.contains("finish_reason=Length"))
+    }
+
+    pub fn code(&self) -> &'static str {        match self {
             Self::ProviderNotConfigured(_) => "ProviderNotConfigured",
             Self::ProviderKeyMissing(_) => "ProviderKeyMissing",
             Self::AgentNotFound(_) => "AgentNotFound",
@@ -40,6 +67,7 @@ impl AppError {
             Self::Vault(_) => "VaultError",
             Self::Persistence(_) => "PersistenceError",
             Self::InvalidInput(_) => "InvalidInput",
+            Self::Timeout(_) => "Timeout",
         }
     }
 }
@@ -57,6 +85,13 @@ impl Serialize for AppError {
     }
 }
 
+impl From<rusqlite::Error> for AppError {
+    fn from(e: rusqlite::Error) -> Self {
+        // rusqlite errors never carry secrets — safe to surface verbatim.
+        Self::Persistence(e.to_string())
+    }
+}
+
 pub type AppResult<T> = Result<T, AppError>;
 
 #[cfg(test)]
@@ -69,5 +104,28 @@ mod tests {
         let v = serde_json::to_value(&err).expect("serializable");
         assert_eq!(v["code"], "ProviderKeyMissing");
         assert!(v["message"].as_str().unwrap().contains("openai"));
+    }
+
+    #[test]
+    fn transient_covers_runtime_failures_only() {
+        assert!(AppError::AgentExecutionFailed("tool call blew up".to_string()).is_transient());
+        assert!(AppError::ProviderConnectionFailed("reset".to_string()).is_transient());
+        assert!(AppError::Timeout("slow".to_string()).is_transient());
+        assert!(!AppError::ProviderKeyMissing("openai".to_string()).is_transient());
+        assert!(!AppError::ToolNotFound("echo".to_string()).is_transient());
+        assert!(!AppError::AgentNotFound("ghost".to_string()).is_transient());
+        assert!(!AppError::InvalidInput("bad".to_string()).is_transient());
+    }
+
+    #[test]
+    fn output_budget_exhausted_only_matches_the_length_finish_reason() {
+        assert!(
+            AppError::AgentExecutionFailed(
+                "CompletionError: ResponseError: the model produced no answer and stopped with finish_reason=Length".to_string()
+            )
+            .is_output_budget_exhausted()
+        );
+        assert!(!AppError::AgentExecutionFailed("some other failure".to_string()).is_output_budget_exhausted());
+        assert!(!AppError::Timeout("slow".to_string()).is_output_budget_exhausted());
     }
 }

@@ -67,9 +67,17 @@ export interface AppError {
   message: string;
 }
 
-export type View = "chat" | "agents" | "workflows" | "providers" | "roadmap";
+export type View = "chat" | "agents" | "workflows" | "providers" | "roadmap" | "notebook";
 
 // Roadmap & Syllabus Diagnostic Agent types live in `../lib/schemas` now —
 // they're Zod schemas (the runtime validation boundary for the agent's JSON
 // contract), with `z.infer` types derived from them, not hand-duplicated
 // here. Import `RoadmapSession`, `RoadmapPhase`, etc. from `../lib/schemas`.
+// Same for the Notebook engine types (`Course`, `ClassRecord`,
+// `NotebookPayload`, etc.).
+
+/** One block's edited content, sent to `save_notebook_state`. */
+export interface BlockUpdate {
+  id: string;
+  content_json: Record<string, unknown>;
+}

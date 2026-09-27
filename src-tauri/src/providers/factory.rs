@@ -5,7 +5,30 @@ use rig_core::client::CompletionClient;
 use crate::domain::model::ModelInfo;
 use crate::domain::provider::{ProviderConfig, ProviderKind};
 use crate::error::{AppError, AppResult};
-use crate::tools::{EchoTool, is_known_tool};
+use crate::tools::{
+    BlockAuditCapture, ClosureFeedbackCapture, ConfirmSyllabusPlanTool, DiagnosticToolScope, EchoTool, GateGradingCapture,
+    GradeClosureSubmissionTool, GradeGateSubmissionTool, NotebookBlockCapture, PresentDiagnosticBatteryTool,
+    ProposeSyllabusPlanTool, PublishNotebookBlockTool, SharedRoadmapCapture, SubmitBlockAuditTool, SubmitDiagnosticAssessmentTool,
+    is_known_tool,
+};
+
+/// Límite para una llamada al LLM: sin esto, una red colgada o un proveedor
+/// lento deja el comando Tauri pendiente para siempre y la ventana parece
+/// "no responder" (el composer queda deshabilitado en `sending` sin salida).
+const PROMPT_TIMEOUT_SECS: u64 = 120;
+/// Límite para los chequeos HTTP ligeros (verificar conexión, listar modelos).
+const HTTP_TIMEOUT_SECS: u64 = 30;
+/// Presupuesto de salida por defecto: cubre texto + args de herramientas de
+/// los turnos chicos (preguntas, echo). Los turnos que emiten artefactos
+/// gigantes (assessment + syllabus + notebook) usan `output_budget`.
+const PLAIN_MAX_TOKENS: u64 = 8192;
+
+fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(HTTP_TIMEOUT_SECS))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
 
 /// Output of a single prompt execution.
 #[derive(Debug, Clone)]
@@ -44,6 +67,18 @@ impl ProviderFactory {
         Ok(())
     }
 
+    /// Presupuesto de salida según proveedor. Los turnos de ejecución emiten
+    /// artefactos enormes (un syllabus de 4 semanas + notebook completo
+    /// caben justos en 8192 — observado `finish_reason=Length`), así que se
+    /// pide 16384 donde el proveedor lo admite. DeepSeek capa a 8192 en su
+    /// API: pedir más falla del lado del proveedor.
+    pub fn output_budget(provider: &ProviderKind) -> u64 {
+        match provider {
+            ProviderKind::DeepSeek => 8192,
+            _ => 16384,
+        }
+    }
+
     /// Build a Rig agent and run one prompt with optional tools.
     pub async fn run_prompt(
         config: &ProviderConfig,
@@ -67,7 +102,7 @@ impl ProviderFactory {
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
-                    .map_err(|e| AppError::ProviderConnectionFailed(format!("build client: {e}")))?;
+                    .map_err(|e| connect_error(&e))?;
                 let model = client.completion_model(model_name);
                 Self::prompt_with(model, system_prompt, input, tools).await
             }
@@ -76,7 +111,7 @@ impl ProviderFactory {
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
-                    .map_err(|e| AppError::ProviderConnectionFailed(format!("build client: {e}")))?;
+                    .map_err(|e| connect_error(&e))?;
                 let model = client.completion_model(model_name);
                 Self::prompt_with(model, system_prompt, input, tools).await
             }
@@ -85,7 +120,7 @@ impl ProviderFactory {
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
-                    .map_err(|e| AppError::ProviderConnectionFailed(format!("build client: {e}")))?;
+                    .map_err(|e| connect_error(&e))?;
                 let model = client.completion_model(model_name);
                 Self::prompt_with(model, system_prompt, input, tools).await
             }
@@ -94,7 +129,7 @@ impl ProviderFactory {
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
-                    .map_err(|e| AppError::ProviderConnectionFailed(format!("build client: {e}")))?;
+                    .map_err(|e| connect_error(&e))?;
                 let model = client.completion_model(model_name);
                 Self::prompt_with(model, system_prompt, input, tools).await
             }
@@ -103,7 +138,7 @@ impl ProviderFactory {
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
-                    .map_err(|e| AppError::ProviderConnectionFailed(format!("build client: {e}")))?;
+                    .map_err(|e| connect_error(&e))?;
                 let model = client.completion_model(model_name);
                 Self::prompt_with(model, system_prompt, input, tools).await
             }
@@ -115,26 +150,506 @@ impl ProviderFactory {
         M: rig_agent::completion::CompletionModel + 'static,
     {
         let use_echo = tools.iter().any(|t| t == "echo");
-        let builder = AgentBuilder::new(model).preamble(system_prompt);
+        let builder = AgentBuilder::new(model).preamble(system_prompt).max_tokens(PLAIN_MAX_TOKENS);
         let agent = if use_echo {
             builder.tool(EchoTool).build()
         } else {
             builder.build()
         };
-        let text = agent
-            .prompt(input)
+        let text = tokio::time::timeout(std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS), agent.prompt(input))
             .await
-            .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+            .map_err(|_| {
+                AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s"))
+            })?
+            .map_err(|e| agent_error(&e))?;
         Ok(PromptOutput {
             text,
             tool_calls: if use_echo { vec!["echo".to_string()] } else { vec![] },
         })
     }
 
+    /// Build a Rig agent with the roadmap agent's 2 tools registered (real
+    /// native LLM tool-calling, not the `tools: &[String]` id-gated path
+    /// `run_prompt` uses) and run one turn. The model may call neither (a
+    /// plain clarifying question), one, or both in sequence — see
+    /// `RoadmapService::advance`.
+    pub async fn run_diagnostic_prompt(
+        config: &ProviderConfig,
+        api_key: &str,
+        system_prompt: &str,
+        input: &str,
+        capture: SharedRoadmapCapture,
+        scope: DiagnosticToolScope,
+    ) -> AppResult<PromptOutput> {
+        Self::require_key(api_key, &config.id)?;
+        let model_name = Self::resolve_model(config, None)?;
+        let base_url = config.effective_base_url();
+
+        match config.provider {
+            ProviderKind::OpenAI => {
+                let client = rig_core::providers::openai::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_diagnostic_tools(model, system_prompt, input, capture, Self::output_budget(&config.provider), scope).await
+            }
+            ProviderKind::Anthropic => {
+                let client = rig_core::providers::anthropic::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_diagnostic_tools(model, system_prompt, input, capture, Self::output_budget(&config.provider), scope).await
+            }
+            ProviderKind::Gemini => {
+                let client = rig_core::providers::gemini::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_diagnostic_tools(model, system_prompt, input, capture, Self::output_budget(&config.provider), scope).await
+            }
+            ProviderKind::OpenRouter => {
+                let client = rig_core::providers::openrouter::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_diagnostic_tools(model, system_prompt, input, capture, Self::output_budget(&config.provider), scope).await
+            }
+            ProviderKind::DeepSeek => {
+                let client = rig_core::providers::deepseek::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_diagnostic_tools(model, system_prompt, input, capture, Self::output_budget(&config.provider), scope).await
+            }
+        }
+    }
+
+    async fn prompt_with_diagnostic_tools<M>(
+        model: M,
+        system_prompt: &str,
+        input: &str,
+        capture: SharedRoadmapCapture,
+        max_tokens: u64,
+        scope: DiagnosticToolScope,
+    ) -> AppResult<PromptOutput>
+    where
+        M: rig_agent::completion::CompletionModel + 'static,
+    {
+        // Rig's builder is typestate-based: the FIRST `.tool()` call moves it
+        // from `NoToolConfig` to `WithBuilderTools`, so a runtime-conditional
+        // `if scope... { builder = builder.tool(...) }` won't typecheck. Each
+        // scope registers its subset in its own branch instead — every scope
+        // has at least one tool, so every branch ends in `.tool(...)`.
+        let base = AgentBuilder::new(model)
+            .preamble(system_prompt)
+            // Presupuesto por proveedor (ver `output_budget`): un turno puede
+            // emitir texto + 2 tool calls encadenados, el segundo cargando un
+            // syllabus completo + notebook — con el cap modesto por defecto de
+            // algunos proveedores trunca a mitad de tool-call
+            // (`finish_reason=Length`, observado en producción).
+            .max_tokens(max_tokens);
+        let agent = match scope {
+            DiagnosticToolScope::Assessment => base.tool(SubmitDiagnosticAssessmentTool(capture)).build(),
+            DiagnosticToolScope::Battery => base.tool(PresentDiagnosticBatteryTool(capture)).build(),
+            DiagnosticToolScope::Propose => base.tool(ProposeSyllabusPlanTool(capture)).build(),
+            DiagnosticToolScope::All => base
+                .tool(SubmitDiagnosticAssessmentTool(capture.clone()))
+                .tool(PresentDiagnosticBatteryTool(capture.clone()))
+                .tool(ProposeSyllabusPlanTool(capture.clone()))
+                .tool(ConfirmSyllabusPlanTool(capture))
+                .build(),
+        };
+        // Rig's implicit budget is ONE model call — enough for a single tool
+        // call at most. This agent may chain up to 2 SEQUENTIAL tool calls in
+        // one turn (submit_diagnostic_assessment + present_diagnostic_battery,
+        // OR submit_diagnostic_assessment + propose_syllabus_plan for the
+        // absolute_zero skip path — propose/confirm are never chained with
+        // the first two otherwise, see `RoadmapCapture`'s doc comment) — each
+        // consumes at least one turn, since the model sees each result before
+        // deciding the next call — plus a final turn, or Rig aborts with
+        // `MaxTurnsError` before the 2nd call ever happens.
+        const DIAGNOSTIC_MAX_TURNS: usize = 6;
+        let text = tokio::time::timeout(
+            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
+            agent.prompt(input).max_turns(DIAGNOSTIC_MAX_TURNS),
+        )
+        .await
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
+        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        Ok(PromptOutput {
+            text,
+            tool_calls: vec!["submit_diagnostic_assessment".to_string(), "generate_syllabus_execution".to_string()],
+        })
+    }
+
+    /// Build a Rig agent with the single `publish_notebook_block` tool
+    /// registered and run one turn — produces ONE block, not a whole
+    /// notebook. Used only by `notebook_service::generation`.
+    pub async fn run_notebook_block_prompt(
+        config: &ProviderConfig,
+        api_key: &str,
+        system_prompt: &str,
+        input: &str,
+        capture: NotebookBlockCapture,
+    ) -> AppResult<PromptOutput> {
+        Self::require_key(api_key, &config.id)?;
+        let model_name = Self::resolve_model(config, None)?;
+        let base_url = config.effective_base_url();
+
+        match config.provider {
+            ProviderKind::OpenAI => {
+                let client = rig_core::providers::openai::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_notebook_block_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider)).await
+            }
+            ProviderKind::Anthropic => {
+                let client = rig_core::providers::anthropic::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_notebook_block_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider)).await
+            }
+            ProviderKind::Gemini => {
+                let client = rig_core::providers::gemini::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_notebook_block_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider)).await
+            }
+            ProviderKind::OpenRouter => {
+                let client = rig_core::providers::openrouter::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_notebook_block_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider)).await
+            }
+            ProviderKind::DeepSeek => {
+                let client = rig_core::providers::deepseek::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_notebook_block_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider)).await
+            }
+        }
+    }
+
+    async fn prompt_with_notebook_block_tool<M>(
+        model: M,
+        system_prompt: &str,
+        input: &str,
+        capture: NotebookBlockCapture,
+        max_tokens: u64,
+    ) -> AppResult<PromptOutput>
+    where
+        M: rig_agent::completion::CompletionModel + 'static,
+    {
+        // A single block can still be a rich visual spec (mermaid/SVG groups,
+        // walkthrough steps): the budget comes from the provider (see
+        // `output_budget`), not the modest plain-turn default — same as the
+        // retired whole-notebook call, just spent on one block instead of 3-5.
+        let agent = AgentBuilder::new(model).preamble(system_prompt).max_tokens(max_tokens).tool(PublishNotebookBlockTool(capture)).build();
+        // A single tool call still sometimes needs a follow-up turn (provider
+        // dependent) — same generous budget as the roadmap execution turn.
+        const NOTEBOOK_BLOCK_MAX_TURNS: usize = 6;
+        let text = tokio::time::timeout(
+            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
+            agent.prompt(input).max_turns(NOTEBOOK_BLOCK_MAX_TURNS),
+        )
+        .await
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
+        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        Ok(PromptOutput { text, tool_calls: vec!["publish_notebook_block".to_string()] })
+    }
+
+    /// Build a Rig agent with the single `grade_gate_submission` tool
+    /// registered and run one turn. Used only by `notebook_service::grading`
+    /// for the two free-text-graded block types (`heuristic_error_audit`,
+    /// `hands_on_mission`) — deterministic gates never reach this path.
+    pub async fn run_gate_grading_prompt(
+        config: &ProviderConfig,
+        api_key: &str,
+        system_prompt: &str,
+        input: &str,
+        capture: GateGradingCapture,
+    ) -> AppResult<PromptOutput> {
+        Self::require_key(api_key, &config.id)?;
+        let model_name = Self::resolve_model(config, None)?;
+        let base_url = config.effective_base_url();
+
+        match config.provider {
+            ProviderKind::OpenAI => {
+                let client = rig_core::providers::openai::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_gate_grading_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::Anthropic => {
+                let client = rig_core::providers::anthropic::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_gate_grading_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::Gemini => {
+                let client = rig_core::providers::gemini::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_gate_grading_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::OpenRouter => {
+                let client = rig_core::providers::openrouter::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_gate_grading_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::DeepSeek => {
+                let client = rig_core::providers::deepseek::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_gate_grading_tool(model, system_prompt, input, capture).await
+            }
+        }
+    }
+
+    async fn prompt_with_gate_grading_tool<M>(
+        model: M,
+        system_prompt: &str,
+        input: &str,
+        capture: GateGradingCapture,
+    ) -> AppResult<PromptOutput>
+    where
+        M: rig_agent::completion::CompletionModel + 'static,
+    {
+        // A grading verdict + one short scaffold hint is tiny compared to a
+        // notebook block — the modest plain-turn budget is plenty, no need
+        // for the per-provider `output_budget`.
+        let agent =
+            AgentBuilder::new(model).preamble(system_prompt).max_tokens(PLAIN_MAX_TOKENS).tool(GradeGateSubmissionTool(capture)).build();
+        const GATE_GRADING_MAX_TURNS: usize = 4;
+        let text = tokio::time::timeout(
+            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
+            agent.prompt(input).max_turns(GATE_GRADING_MAX_TURNS),
+        )
+        .await
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
+        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        Ok(PromptOutput { text, tool_calls: vec!["grade_gate_submission".to_string()] })
+    }
+
+    /// Build a Rig agent with the single `grade_closure_submission` tool
+    /// registered and run one turn. Used only by `notebook_service::grading`
+    /// for the closing block's student reflection — its pass is what
+    /// completes the class (see `domain::notebook::class_is_complete`).
+    pub async fn run_closure_grading_prompt(
+        config: &ProviderConfig,
+        api_key: &str,
+        system_prompt: &str,
+        input: &str,
+        capture: ClosureFeedbackCapture,
+    ) -> AppResult<PromptOutput> {
+        Self::require_key(api_key, &config.id)?;
+        let model_name = Self::resolve_model(config, None)?;
+        let base_url = config.effective_base_url();
+
+        match config.provider {
+            ProviderKind::OpenAI => {
+                let client = rig_core::providers::openai::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_closure_grading_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::Anthropic => {
+                let client = rig_core::providers::anthropic::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_closure_grading_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::Gemini => {
+                let client = rig_core::providers::gemini::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_closure_grading_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::OpenRouter => {
+                let client = rig_core::providers::openrouter::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_closure_grading_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::DeepSeek => {
+                let client = rig_core::providers::deepseek::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_closure_grading_tool(model, system_prompt, input, capture).await
+            }
+        }
+    }
+
+    async fn prompt_with_closure_grading_tool<M>(
+        model: M,
+        system_prompt: &str,
+        input: &str,
+        capture: ClosureFeedbackCapture,
+    ) -> AppResult<PromptOutput>
+    where
+        M: rig_agent::completion::CompletionModel + 'static,
+    {
+        // A verdict + one short student-facing feedback is tiny — the same
+        // modest plain-turn budget as gate grading is plenty.
+        let agent = AgentBuilder::new(model)
+            .preamble(system_prompt)
+            .max_tokens(PLAIN_MAX_TOKENS)
+            .tool(GradeClosureSubmissionTool(capture))
+            .build();
+        const CLOSURE_GRADING_MAX_TURNS: usize = 4;
+        let text = tokio::time::timeout(
+            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
+            agent.prompt(input).max_turns(CLOSURE_GRADING_MAX_TURNS),
+        )
+        .await
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
+        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        Ok(PromptOutput { text, tool_calls: vec!["grade_closure_submission".to_string()] })
+    }
+
+    pub async fn run_block_audit_prompt(
+        config: &ProviderConfig,
+        api_key: &str,
+        system_prompt: &str,
+        input: &str,
+        capture: BlockAuditCapture,
+    ) -> AppResult<PromptOutput> {
+        Self::require_key(api_key, &config.id)?;
+        let model_name = Self::resolve_model(config, None)?;
+        let base_url = config.effective_base_url();
+
+        match config.provider {
+            ProviderKind::OpenAI => {
+                let client = rig_core::providers::openai::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_block_audit_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::Anthropic => {
+                let client = rig_core::providers::anthropic::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_block_audit_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::Gemini => {
+                let client = rig_core::providers::gemini::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_block_audit_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::OpenRouter => {
+                let client = rig_core::providers::openrouter::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_block_audit_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::DeepSeek => {
+                let client = rig_core::providers::deepseek::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_block_audit_tool(model, system_prompt, input, capture).await
+            }
+        }
+    }
+
+    async fn prompt_with_block_audit_tool<M>(
+        model: M,
+        system_prompt: &str,
+        input: &str,
+        capture: BlockAuditCapture,
+    ) -> AppResult<PromptOutput>
+    where
+        M: rig_agent::completion::CompletionModel + 'static,
+    {
+        // One verdict + a short feedback list — same plain-turn budget as the
+        // gate grader, no per-provider output_budget needed.
+        let agent = AgentBuilder::new(model).preamble(system_prompt).max_tokens(PLAIN_MAX_TOKENS).tool(SubmitBlockAuditTool(capture)).build();
+        const BLOCK_AUDIT_MAX_TURNS: usize = 4;
+        let text = tokio::time::timeout(
+            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
+            agent.prompt(input).max_turns(BLOCK_AUDIT_MAX_TURNS),
+        )
+        .await
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
+        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        Ok(PromptOutput { text, tool_calls: vec!["submit_block_audit".to_string()] })
+    }
+
     /// Lightweight connectivity check (no tokens spent, no prompt sent).
     pub async fn verify_connection(config: &ProviderConfig, api_key: &str) -> AppResult<()> {
         Self::require_key(api_key, &config.id)?;
-        let http = reqwest::Client::new();
+        let http = http_client();
         let base_url = config.effective_base_url();
 
         let response = match config.provider {
@@ -182,7 +697,7 @@ impl ProviderFactory {
     /// since discovery is not reliable for every provider.
     pub async fn list_models(config: &ProviderConfig, api_key: &str) -> AppResult<Vec<ModelInfo>> {
         Self::require_key(api_key, &config.id)?;
-        let http = reqwest::Client::new();
+        let http = http_client();
         let base_url = config.effective_base_url();
 
         match config.provider {
@@ -283,58 +798,28 @@ fn trim_error(msg: &str) -> String {
     out
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn openai_cfg() -> ProviderConfig {
-        ProviderConfig {
-            id: "openai".to_string(),
-            provider: ProviderKind::OpenAI,
-            name: "OpenAI".to_string(),
-            default_model: None,
-            base_url: None,
-        }
-    }
-
-    #[test]
-    fn resolve_model_prefers_override_then_default() {
-        let mut cfg = openai_cfg();
-        assert!(matches!(
-            ProviderFactory::resolve_model(&cfg, None),
-            Err(AppError::ModelNotConfigured(_))
-        ));
-        cfg.default_model = Some("gpt-5".to_string());
-        assert_eq!(ProviderFactory::resolve_model(&cfg, None).expect("ok"), "gpt-5");
-        assert_eq!(
-            ProviderFactory::resolve_model(&cfg, Some("other")).expect("ok"),
-            "other"
+/// Maps a Rig prompt failure to a UI-safe error. A `finish_reason=Length`
+/// truncation (the model ran out of output budget mid-answer) gets a plain
+/// Spanish hint instead of raw provider English — retrying the same input
+/// usually reproduces it, so the message says what actually helps.
+fn agent_error(raw: &impl std::fmt::Display) -> AppError {
+    let msg = raw.to_string();
+    if msg.contains("finish_reason=Length") {
+        return AppError::AgentExecutionFailed(
+            "el modelo se quedó sin espacio de respuesta a mitad del turno \
+             (límite de tokens de salida). Prueba con un modelo con mayor límite \
+             o responde en dos mensajes más cortos."
+                .to_string(),
         );
     }
-
-    #[tokio::test]
-    async fn rejects_empty_key_without_network() {
-        let cfg = openai_cfg();
-        let err = ProviderFactory::verify_connection(&cfg, "   ").await.expect_err("must fail");
-        assert!(matches!(err, AppError::ProviderKeyMissing(_)));
-        let err = ProviderFactory::list_models(&cfg, "").await.expect_err("must fail");
-        assert!(matches!(err, AppError::ProviderKeyMissing(_)));
-    }
-
-    #[tokio::test]
-    async fn rejects_unknown_tool_without_network() {
-        let mut cfg = openai_cfg();
-        cfg.default_model = Some("gpt-5".to_string());
-        let err = ProviderFactory::run_prompt(&cfg, "sk-test", "sys", "hi", &["nope".to_string()])
-            .await
-            .expect_err("must fail");
-        assert!(matches!(err, AppError::ToolNotFound(_)));
-    }
-
-    #[test]
-    fn error_trimming_redacts_bearer() {
-        let msg = trim_error("401 Unauthorized Bearer sk-abc123 tail");
-        assert!(!msg.contains("sk-abc123"));
-        assert!(msg.contains("[redacted]"));
-    }
+    AppError::AgentExecutionFailed(trim_error(&msg))
 }
+
+/// Client-build failures go through the same redaction: a builder error can
+/// echo the base URL (and, in theory, key material), so it never travels raw.
+fn connect_error(raw: &impl std::fmt::Display) -> AppError {
+    AppError::ProviderConnectionFailed(format!("build client: {}", trim_error(&raw.to_string())))
+}
+
+#[cfg(test)]
+mod tests;

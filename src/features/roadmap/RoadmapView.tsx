@@ -1,18 +1,43 @@
-import { useEffect, useState } from "react";
-import type { RoadmapPhase } from "../../lib/schemas";
+﻿import { useEffect, useRef, useState } from "react";
+import type { UnlistenFn } from "@tauri-apps/api/event";
+import { ThinkingSketch, ToolSketch } from "../../components/AgentLoader";
+import { ClassPath } from "../../components/ClassPath";
+import { DiagnosticBatteryCard } from "../../components/DiagnosticBatteryCard";
+import { DiagnosticBatteryStage } from "../../components/DiagnosticBatteryStage";
+import { ENTRY_LEVEL_LABEL } from "../../lib/schemas";
+import type { ClassRecord, RoadmapPhase } from "../../lib/schemas";
+import { ensureCourseImported, listCourseClasses, onAgentEvent, tauriError } from "../../lib/tauri";
+import { useNotebookNav } from "../../stores/notebook";
 import { useProviders } from "../../stores/providers";
 import { useRoadmap } from "../../stores/roadmap";
+import { useUi } from "../../stores/ui";
 
+// User-facing labels for the phase tracker — deliberately about the
+// milestone the student reaches, not the agent's internal vocabulary.
+// "2. Diagnóstico" and "3. Tu plan" now close together in the same turn as
+// "1. Tu meta" (see `roadmap_agent`'s autonomy rules): there is no
+// confirmation step in between anymore.
 const PHASES: { id: RoadmapPhase; label: string }[] = [
-  { id: "exploration", label: "1. Exploración" },
+  { id: "onboarding", label: "1. Tu meta" },
   { id: "diagnostic", label: "2. Diagnóstico" },
-  { id: "syllabus", label: "3. Syllabus" },
-  { id: "negotiation", label: "4. Negociación" },
+  { id: "roadmap", label: "3. Tu plan" },
 ];
 
-function dodLabel(id: string): string {
-  return id.replace(/_/g, " ");
-}
+// Roles rendered as handwritten margin annotations, not system labels.
+const ROLE_LABEL: Record<string, string> = {
+  assistant: "mentor ✎",
+  user: "tú →",
+  error: "⚠ nota",
+};
+
+// Tool id → what the student reads while the agent runs it (agent://tool).
+const TOOL_LABEL: Record<string, string> = {
+  submit_diagnostic_assessment: "Guardando tu diagnóstico…",
+  present_diagnostic_battery: "Diseñando tu batería…",
+  propose_syllabus_plan: "Armando tu plan…",
+  confirm_syllabus_plan: "Escribiendo tu primera clase…",
+  publish_class_notebook: "Escribiendo el notebook…",
+};
 
 // Step 0 of onboarding: connect a provider before the diagnostic conversation
 // can start. Shown only while no provider has a key configured — env-var
@@ -25,9 +50,10 @@ function ProviderSetup() {
   const busy = busyId === providerId;
 
   // Saving the key updates the shared providers store; RoadmapView reacts to
-  // that (its `anyConfigured` flips true) and starts the conversation on its
-  // own — starting it here too would race it (and `saveKey` swallows its own
-  // errors, so it would even fire after a failed save).
+  // that (`anyConfigured` flips true) and offers the "Iniciar sesión"
+  // prompt — the conversation itself starts only on explicit user action,
+  // never here (and `saveKey` swallows its own errors, so starting here
+  // would even fire after a failed save).
   const submit = async () => {
     if (!providerId || !apiKey.trim()) return;
     await saveKey(providerId, apiKey);
@@ -69,7 +95,11 @@ function ProviderSetup() {
       {error && <div className="alert error">{error}</div>}
 
       <div className="row">
-        <button disabled={busy || !providerId || !apiKey.trim()} onClick={submit}>
+        <button
+          className="btn-primary"
+          disabled={busy || !providerId || !apiKey.trim()}
+          onClick={submit}
+        >
           {busy ? "Guardando…" : "Guardar y comenzar"}
         </button>
       </div>
@@ -78,32 +108,201 @@ function ProviderSetup() {
 }
 
 export function RoadmapView() {
-  const { session, messages, sending, error, start, send, reset } = useRoadmap();
+  const {
+    session,
+    messages,
+    sending,
+    opening,
+    error,
+    retryable,
+    retryPhase,
+    sendOrStart,
+    retry,
+    setSession,
+    answerDiagnostic,
+    restoreHistory,
+    setRestoreHistory,
+  } = useRoadmap();
   const { providers, loading: providersLoading, refresh: refreshProviders } = useProviders();
   const [input, setInput] = useState("");
+  const openNotebooks = useNotebookNav((s) => s.open);
+  const setView = useUi((s) => s.setView);
+  const [notebookError, setNotebookError] = useState<string | null>(null);
+  const [openingNotebook, setOpeningNotebook] = useState(false);
+  const [planClasses, setPlanClasses] = useState<ClassRecord[]>([]);
 
   useEffect(() => {
     refreshProviders();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A fresh session started from the header leaves stale composer text
+  // behind — clear it whenever the conversation identity changes.
+  const sessionId = session?.session_id;
+  useEffect(() => {
+    setInput("");
+  }, [sessionId]);
+
+  // The agent is autonomous: the instant a session is sealed — whether it
+  // just sealed this turn, or it's an old plan reopened from the drawer —
+  // the course + first class's notebook already exist in SQLite (see
+  // `RoadmapService::seal_session`). Land directly in that roadmap/notebook
+  // view (which carries the plan as a side note plus the full class path,
+  // see `ClassNotebookView`) rather than stopping on this chat/plan screen:
+  // the plan screen is for the live conversation, not a second landing page
+  // for a plan that already exists.
+  const courseId = session?.imported_course_id;
+  const firstClassId = session?.first_class_id;
+  useEffect(() => {
+    if (session?.status !== "sealed") return;
+    let cancelled = false;
+
+    const openClass = (cId: string, clsId: string) => {
+      setOpeningNotebook(true);
+      listCourseClasses(cId)
+        .then((classes) => {
+          if (cancelled) return;
+          openNotebooks(classes, clsId, cId);
+          setView("notebook");
+        })
+        .catch((e) => {
+          if (!cancelled) setNotebookError(tauriError(e).message);
+        })
+        .finally(() => {
+          if (!cancelled) setOpeningNotebook(false);
+        });
+    };
+
+    if (courseId && firstClassId) {
+      openClass(courseId, firstClassId);
+    } else {
+      ensureCourseImported(session.session_id)
+        .then((recovered) => {
+          if (cancelled) return;
+          setSession(recovered);
+          if (recovered.imported_course_id && recovered.first_class_id) {
+            openClass(recovered.imported_course_id, recovered.first_class_id);
+          }
+        })
+        .catch((e) => {
+          if (!cancelled) setNotebookError(tauriError(e).message);
+        });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.status, courseId, firstClassId]);
+
+  // Fallback only: if the auto-navigate above fails (surfaced via
+  // `notebookError`), this still lists the classes so the "Ver tu primera
+  // clase" button and the path below can recover manually instead of
+  // leaving the student stuck on an empty plan screen.
+  useEffect(() => {
+    if (session?.status !== "sealed") {
+      setPlanClasses([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        let cId = courseId;
+        if (!cId) {
+          const recovered = await ensureCourseImported(session.session_id);
+          if (cancelled) return;
+          setSession(recovered);
+          cId = recovered.imported_course_id ?? undefined;
+        }
+        if (!cId) return;
+        const classes = await listCourseClasses(cId);
+        if (!cancelled) setPlanClasses(classes);
+      } catch {
+        // Non-critical for this list — the auto-navigate/manual-button
+        // paths above already surface a `notebookError` for real failures.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.status, session?.session_id, courseId]);
+
   const anyConfigured = providers.some((p) => p.configured);
 
-  // Onboarding begins on its own — no click required — but only once we know
-  // a provider is actually configured; otherwise ProviderSetup below owns
-  // the "start" trigger (right after the key is saved).
-  useEffect(() => {
-    if (!providersLoading && anyConfigured && !session && !sending && messages.length === 0) {
-      start();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providersLoading, anyConfigured]);
+  // No auto-start: visiting this view must never create a session on its
+  // own (that filled the drawer with empty sessions). The conversation
+  // begins only on explicit interaction — the "Iniciar sesión" button below
+  // or "Nueva sesión" in the header.
 
   const submit = () => {
     if (!input.trim()) return;
-    send(input);
+    sendOrStart(input);
     setInput("");
   };
+
+  // Auto-scroll: new turns (user echo, mentor reply, or the "Pensando…"
+  // placeholder appearing) should always bring the latest line into view.
+  // Exception: while the diagnostic battery is on screen there is no scroll
+  // at all — the student is reading/answering a fixed card and jumping to
+  // the bottom yanks the questions out from under them (hold position).
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Truthy only while the student still has unanswered questions — once the
+  // last one is answered (or the model proposes a plan straight away for
+  // `absolute_zero`), the battery stays on the session but is DONE: it must
+  // no longer hold the composer hostage or re-render as an open card, since
+  // by then a `proposed_plan` (or the sealed package) is what's current.
+  const pb = session?.pending_diagnostic_battery ?? null;
+  const diagnosticOpen = !!pb && Object.keys(pb.answers).length < pb.questions.length;
+  useEffect(() => {
+    if (diagnosticOpen) return;
+    const end = messagesEndRef.current;
+    if (!end) return;
+    // Scroll the real scroller (`.workspace`) to its ABSOLUTE bottom instead
+    // of aligning a sentinel with `scrollIntoView({ block: "end" })`: the
+    // composer is a sticky dock floating over the bottom ~60px of the
+    // viewport, so any alignment that stops short of max scroll leaves the
+    // "Pensando…" row (and the tail of the last message) hidden underneath
+    // the floating input.
+    const scroller = end.closest(".workspace");
+    if (scroller instanceof HTMLElement) {
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+    } else {
+      end.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [messages.length, sending, opening, diagnosticOpen, error]);
+
+  // Real activity, not a timer: while a turn runs, every tool call the
+  // model makes emits `agent://tool` — so the status row can show the gear
+  // figure (tools grinding) instead of the thinking spiral. The run's
+  // `agent://completed` (and the turn resolving) drop it back.
+  const [workingTool, setWorkingTool] = useState<string | null>(null);
+  useEffect(() => {
+    if (!sending) setWorkingTool(null);
+  }, [sending]);
+  useEffect(() => {
+    let alive = true;
+    let unlisteners: UnlistenFn[] = [];
+    (async () => {
+      const acquired = await Promise.all([
+        onAgentEvent("agent://tool", (e) => {
+          if (alive && e.tool) setWorkingTool(e.tool);
+        }),
+        onAgentEvent("agent://completed", () => {
+          if (alive) setWorkingTool(null);
+        }),
+      ]);
+      if (alive) {
+        unlisteners = acquired;
+      } else {
+        acquired.forEach((u) => u());
+      }
+    })();
+    return () => {
+      alive = false;
+      unlisteners.forEach((u) => u());
+    };
+  }, []);
 
   if (providersLoading) {
     return (
@@ -118,25 +317,49 @@ export function RoadmapView() {
   }
 
   const phaseIndex = session ? PHASES.findIndex((p) => p.id === session.phase) : -1;
-  const dodEntries = session ? Object.entries(session.dod) : [];
   const sealed = session?.status === "sealed";
-  const pkg = session?.final_package ?? null;
+  const pkg = session?.roadmap_package ?? null;
+  const profileCard = session?.learner_profile_card ?? null;
+  const diagnosticCard = session?.diagnostic_summary_card ?? null;
+  const pendingBattery = session?.pending_diagnostic_battery ?? null;
+  const proposedPlan = session?.proposed_plan ?? null;
+
+  // Opens `targetClassId` (any class in the path), defaulting to the first
+  // class when called from the plain "Ver tu primera clase" button.
+  const openClassManually = async (targetClassId?: string) => {
+    if (!session) return;
+    setOpeningNotebook(true);
+    setNotebookError(null);
+    try {
+      let cId = courseId;
+      let clsId = targetClassId ?? firstClassId;
+      if (!cId || !clsId) {
+        const recovered = await ensureCourseImported(session.session_id);
+        setSession(recovered);
+        cId = recovered.imported_course_id ?? undefined;
+        clsId = targetClassId ?? recovered.first_class_id ?? undefined;
+      }
+      if (!cId || !clsId) {
+        setNotebookError("No se pudo generar tu primera clase todavía. Intenta de nuevo.");
+        return;
+      }
+      const classes = await listCourseClasses(cId);
+      openNotebooks(classes, clsId, cId);
+      setView("notebook");
+    } catch (e) {
+      setNotebookError(tauriError(e).message);
+    } finally {
+      setOpeningNotebook(false);
+    }
+  };
 
   return (
     <div className="view roadmap">
-      <h2>Roadmap & Syllabus Diagnostic</h2>
+      <h2>Tu ruta de aprendizaje</h2>
       <p className="muted">
-        Diagnóstico conversacional con diseño inverso (Backward Design). El estado de fase y las
-        compuertas DoD se validan en el backend, no solo en el modelo.
+        Cuéntale a tu mentor sobre tu proyecto. En cuanto tenga lo esencial, arma tu plan y tu
+        primera clase de inmediato — sin pasos de más.
       </p>
-
-      {!session && (
-        <div className="row">
-          <button onClick={start} disabled={sending}>
-            {sending ? "Iniciando…" : "Iniciar sesión"}
-          </button>
-        </div>
-      )}
 
       {session && (
         <>
@@ -155,78 +378,241 @@ export function RoadmapView() {
             ))}
           </div>
 
-          {dodEntries.length > 0 && (
-            <div className="dod-panel">
-              <div className="dod-title">Definition of Done — fase actual</div>
-              <ul className="dod-list">
-                {dodEntries.map(([id, done]) => (
-                  <li key={id} className={done ? "done" : ""}>
-                    <span className="dod-mark">{done ? "✓" : "○"}</span> {dodLabel(id)}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          <div className="messages">
-            {messages.map((m, i) => (
-              <div key={i} className={`msg ${m.role}`}>
-                <div className="msg-role">{m.role}</div>
-                <div className="msg-body">{m.content}</div>
-              </div>
-            ))}
-            {sending && (
-              <div className="msg status">
-                <div className="msg-body">Pensando…</div>
-              </div>
-            )}
-          </div>
-
-          {error && <div className="alert error">{error}</div>}
-
-          {!sealed && (
-            <div className="row composer">
-              <input
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && submit()}
-                placeholder="Responde al mentor…"
-                disabled={sending}
-              />
-              <button onClick={submit} disabled={sending || !input.trim()}>
-                Enviar
-              </button>
-            </div>
-          )}
-
-          {sealed && pkg && (
-            <div className="card final-package">
+          {profileCard && (
+            <div className="card learner-profile-card">
               <div className="card-head">
-                <h3>RoadmapPackageFinal sellado</h3>
-                <span className="badge ok">listo para Notebook Builder</span>
+                <h3>{profileCard.topic}</h3>
+                <span className="badge ok">meta confirmada</span>
               </div>
-              <p>{pkg.executive_summary}</p>
-              <p className="hint">Aprobación: “{pkg.approval.approved_verbatim_quote}”</p>
-              <ul className="dod-list">
-                {pkg.syllabus.milestones.map((m) => (
-                  <li key={m.id} className="done">
-                    <strong>{m.title}</strong> — {m.learning_objective} ({m.bloom_level},{" "}
-                    {m.estimated_hours}h)
-                  </li>
-                ))}
-              </ul>
-              <details>
-                <summary>Ver payload completo (JSON)</summary>
-                <pre className="output">{JSON.stringify(pkg, null, 2)}</pre>
-              </details>
+              <p className="hint">{profileCard.targetGoal}</p>
+              <p className="hint">
+                {profileCard.timeframeWeeks} semanas · {profileCard.weeklyCommitmentHours} h/semana (
+                {profileCard.totalAvailableHours} h en total) · {ENTRY_LEVEL_LABEL[profileCard.entryLevel] ?? profileCard.entryLevel}
+              </p>
             </div>
           )}
-
-          <div className="row">
-            <button onClick={reset}>Nueva sesión</button>
-          </div>
         </>
       )}
+
+      {/* La conversación va antes de las tarjetas de estado: el diagnóstico
+          y la propuesta son el RESULTADO del último turno, así que deben
+          aparecer después del último mensaje, nunca antes — mantiene la
+          secuencia cronológica que el estudiante ya está leyendo. */}
+      <div className="messages">
+        {session && messages.length > 0 && (
+          // Filter for THIS conversation's messages: on (default) the saved
+          // chat shows and keeps growing; off collapses it to the hint below
+          // — the log on disk is intact either way.
+          <label className="check history-filter" title="Muestra u oculta los mensajes guardados de esta conversación">
+            <input type="checkbox" checked={restoreHistory} onChange={(e) => setRestoreHistory(e.target.checked)} />
+            Mensajes guardados ✎ {restoreHistory ? "(visibles)" : "(ocultos)"}
+          </label>
+        )}
+        {messages.map((m, i) => (
+          <div key={i} className={`msg ${m.role}`}>
+            <div className="msg-role">{ROLE_LABEL[m.role] ?? m.role}</div>
+            <div className="msg-body">{m.content}</div>
+          </div>
+        ))}
+        {session && messages.length === 0 && !sending && !opening && (
+          <p className="muted">
+            ✎ Sesión recuperada del diario
+            {restoreHistory ? "" : " (mensajes ocultos por el filtro)"}. ¡Sigue donde quedaste!
+          </p>
+        )}
+      </div>
+
+      {/* El diagnóstico y la propuesta son mensajes del sistema — resultado
+          YA resuelto del último turno — así que van justo después del chat,
+          y el indicador de "pensando" (para el turno SIGUIENTE, todavía en
+          curso) va debajo de ellos, no encima. */}
+      {session && (
+        <>
+          {diagnosticCard && (
+            <div className="card diagnostic-card">
+              <div className="card-head">
+                <h3>Cómo vamos a abordarlo</h3>
+                <span className="badge ok">diagnóstico listo</span>
+              </div>
+              <p className="hint">{diagnosticCard.coreFocus}</p>
+              <ul className="dod-list">
+                {diagnosticCard.identifiedNeeds.map((need) => (
+                  <li key={need}>{need}</li>
+                ))}
+              </ul>
+              <p>{diagnosticCard.learningStrategy}</p>
+            </div>
+          )}
+
+          {diagnosticOpen && pendingBattery && (
+            <DiagnosticBatteryStage
+              battery={pendingBattery}
+              onAnswer={(index, answer) => answerDiagnostic(index, answer)}
+              busy={sending}
+            />
+          )}
+
+          {proposedPlan && !sealed && (
+            <div className="card final-package proposed-plan-card">
+              <div className="card-head">
+                <h3>{proposedPlan.syllabus.courseTitle}</h3>
+                <span className="badge">propuesta — sin confirmar</span>
+              </div>
+              <p className="hint">
+                {proposedPlan.syllabus.totalWeeks} semanas · {proposedPlan.syllabus.paceHoursPerWeek} h/semana
+              </p>
+              <ul className="dod-list">
+                {proposedPlan.syllabus.milestones.map((m) => (
+                  <li key={m.week}>
+                    <strong>
+                      Semana {m.week}: {m.title}
+                    </strong>{" "}
+                    — {m.deliverable}
+                    <ul className="dod-list">
+                      {m.micromodules.map((mod, i) => (
+                        <li key={i}>
+                          <strong>
+                            {mod.label} ({mod.hours} h)
+                          </strong>{" "}
+                          — {mod.deliverable}.{" "}
+                          {mod.interactiveBlocks.map((b) => b.replace(/_/g, " ")).join(" · ")}
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+              <p>{proposedPlan.closingQuestion}</p>
+              <div className="row">
+                <button
+                  className="btn-primary"
+                  onClick={() => sendOrStart("Sí, me parece bien.")}
+                  disabled={sending}
+                >
+                  Confirmar
+                </button>
+                {sending && <span className="hint">Guardando…</span>}
+              </div>
+              <p className="hint">O escribe abajo si prefieres ajustar el ritmo antes de confirmar.</p>
+            </div>
+          )}
+
+          {pkg && (
+            <div className="card final-package">
+              <div className="card-head">
+                <h3>{pkg.syllabus.courseTitle}</h3>
+                <span className="badge ok">guardado</span>
+              </div>
+              <p className="hint">
+                {pkg.syllabus.totalWeeks} semanas · {pkg.syllabus.paceHoursPerWeek} h/semana
+              </p>
+              <ul className="dod-list">
+                {pkg.syllabus.milestones.map((m) => (
+                  <li key={m.week} className="done">
+                    <strong>
+                      Semana {m.week}: {m.title}
+                    </strong>{" "}
+                    — {m.deliverable}
+                    <ul className="dod-list">
+                      {m.micromodules.map((mod, i) => (
+                        <li key={i} className="done">
+                          <strong>
+                            {mod.label} ({mod.hours} h)
+                          </strong>{" "}
+                          — {mod.deliverable}.{" "}
+                          {mod.interactiveBlocks.map((b) => b.replace(/_/g, " ")).join(" · ")}
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+
+              {courseId && <DiagnosticBatteryCard courseId={courseId} />}
+
+              <div className="row">
+                <button className="btn-primary" onClick={() => openClassManually()} disabled={openingNotebook}>
+                  {openingNotebook ? "Abriendo…" : "Ver tu primera clase"}
+                </button>
+                {notebookError && <span className="hint">{notebookError}</span>}
+              </div>
+
+              {planClasses.length > 0 && (
+                <>
+                  <h4 className="side-note-title">Tus clases</h4>
+                  <ClassPath classes={planClasses} activeClassId={null} onSelect={(id) => openClassManually(id)} />
+                </>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {opening && (
+        <div className="msg status">
+          <div className="msg-body">Abriendo sesión…</div>
+        </div>
+      )}
+      {sending && (
+        <div className="msg status">
+          <div className="msg-body">
+            {workingTool ? (
+              <ToolSketch label={TOOL_LABEL[workingTool] ?? "Trabajando…"} />
+            ) : (
+              // "Reintentando…" during the automatic second wave (and the
+              // manual one) — a retry must not read as a fresh "Pensando…",
+              // or it looks like the same call is just hanging again.
+              <ThinkingSketch label={retryPhase ? "Reintentando…" : "Pensando…"} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="alert error">
+          <span className="alert-text">{error}</span>
+          {retryable && (
+            <button className="btn-quiet btn-retry" onClick={() => void retry()} disabled={sending}>
+              Reintentar
+            </button>
+          )}
+        </div>
+      )}
+
+      {!sealed && !diagnosticOpen && (
+        // Dock siempre visible: si aún no hay sesión, el primer envío la
+        // crea en el acto — no hay pantalla de "Iniciar sesión". Oculto SOLO
+        // mientras quedan preguntas sin responder (`diagnosticOpen`): esa
+        // espera se resuelve con clics (DiagnosticBatteryStage). Una vez
+        // respondida la batería — incluida toda la etapa de propuesta/ajuste
+        // del plan — el composer vuelve a estar visible, porque confirmar o
+        // pedir cambios es de nuevo texto libre.
+        <div className="row composer dock">
+          {!session && !sending && !opening && (
+            <p className="hint dock-hint">
+              ✎ Cuéntale a tu mentor qué quieres lograr — escribe abajo y tu sesión arranca sola.
+            </p>
+          )}
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+            placeholder={session ? "Responde al mentor…" : "Cuéntale a tu mentor qué quieres lograr…"}
+            disabled={sending}
+            autoFocus
+          />
+          <button className="btn-primary" onClick={submit} disabled={sending || !input.trim()}>
+            {session ? "Enviar" : "Empezar"}
+          </button>
+        </div>
+      )}
+
+      {/* Sentinel MUST stay the LAST node of the view: it anchors the
+          auto-scroll effect above (via `closest(".workspace")`) and its
+          fallback `scrollIntoView` — placing it before the sticky dock made
+          that fallback stop short of the bottom, where the floating composer
+          covers the "Pensando…" row and the tail of the last message. */}
+      <div ref={messagesEndRef} />
     </div>
   );
 }

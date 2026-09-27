@@ -1,6 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { RoadmapSessionSchema, RoadmapTurnPayloadSchema } from "./schemas";
+import {
+  ClassRecordSchema,
+  ClosureFeedbackSchema,
+  CourseSchema,
+  DiagnosticBatteryStateSchema,
+  GateResultSchema,
+  NotebookBlockEventSchema,
+  NotebookPayloadSchema,
+  RoadmapSessionSchema,
+  RoadmapSessionSummarySchema,
+  RoadmapTurnPayloadSchema,
+} from "./schemas";
+import type { GateSubmission, NotebookBlockEvent } from "./schemas";
+import type { BlockUpdate } from "../types";
 import type {
   AgentDefinition,
   AgentEventPayload,
@@ -95,14 +108,164 @@ export const sendRoadmapMessage = (session_id: string, message: string) =>
     RoadmapTurnPayloadSchema.parse(v),
   );
 
+/**
+ * Re-runs the turn that just failed (network blip / timeout) after the
+ * backend's own retry budget ran out. Doesn't replay the student's input —
+ * a failed turn already persisted it — so the log never duplicates.
+ */
+export const retryRoadmapTurn = (session_id: string) =>
+  invoke("retry_roadmap_turn", { sessionId: session_id }).then((v) => RoadmapTurnPayloadSchema.parse(v));
+
 export const getRoadmapSession = (session_id: string) =>
   invoke("get_roadmap_session", { sessionId: session_id }).then((v) => RoadmapSessionSchema.parse(v));
+
+export const listRoadmapSessions = () =>
+  invoke("list_roadmap_sessions").then((v) => RoadmapSessionSummarySchema.array().parse(v));
+
+export const renameRoadmapSession = (session_id: string, title: string) =>
+  invoke("rename_roadmap_session", { sessionId: session_id, title }).then((v) =>
+    RoadmapSessionSummarySchema.parse(v),
+  );
+
+export const deleteRoadmapSession = (session_id: string) =>
+  invoke<void>("delete_roadmap_session", { sessionId: session_id });
+
+/**
+ * Idempotent recovery for sessions sealed before the SQLite course import
+ * existed (missing imported_course_id/first_class_id). Safe to call whenever
+ * those ids are missing — a no-op if they're already set.
+ */
+export const ensureCourseImported = (session_id: string) =>
+  invoke("ensure_course_imported", { sessionId: session_id }).then((v) => RoadmapSessionSchema.parse(v));
+
+/**
+ * Records one answer to the session's pending diagnostic battery. Once the
+ * last question is answered, this also runs the Roadmap-stage turn and
+ * returns an (often now-sealed) session in the same response.
+ */
+export const answerDiagnosticQuestion = (session_id: string, question_index: number, answer: string) =>
+  invoke("answer_diagnostic_question", { sessionId: session_id, questionIndex: question_index, answer }).then((v) =>
+    RoadmapTurnPayloadSchema.parse(v),
+  );
+
+/** Escape hatch: finishes the Diagnostic stage with whatever's answered so far. */
+export const skipDiagnosticBattery = (session_id: string) =>
+  invoke("skip_diagnostic_battery", { sessionId: session_id }).then((v) => RoadmapTurnPayloadSchema.parse(v));
+
+// --- Notebook engine ---------------------------------------------------------
+//
+// Same "Generative UI" validation boundary as the roadmap agent: every
+// payload from these commands is parsed through the Zod schemas in
+// `./schemas.ts` before a component ever touches it.
+
+export const importCourseFromRoadmap = (session_id: string) =>
+  invoke("import_course_from_roadmap", { sessionId: session_id }).then((v) => ClassRecordSchema.array().parse(v));
+
+export const listCourseClasses = (course_id: string) =>
+  invoke("list_course_classes", { courseId: course_id }).then((v) => ClassRecordSchema.array().parse(v));
+
+export const listCourses = () =>
+  invoke("list_courses").then((v) => CourseSchema.array().parse(v));
+
+/**
+ * Starts (or resumes) a class's notebook: returns block 1 immediately, and
+ * buffers subsequent blocks in the background — announced via
+ * `notebook_block://*` events (see `onNotebookBlockEvent`). Calling this
+ * again on an already-started class just returns current progress, never
+ * regenerates.
+ */
+export const startClassNotebook = (class_id: string) =>
+  invoke("start_class_notebook", { classId: class_id }).then((v) => NotebookPayloadSchema.parse(v));
+
+/** Whatever's persisted so far for this class — the resume/reload path. Never triggers generation itself. */
+export const getClassNotebookProgress = (class_id: string) =>
+  invoke("get_class_notebook_progress", { classId: class_id }).then((v) => NotebookPayloadSchema.parse(v));
+
+/**
+ * The literal mastery gate: grades `submission` against `block_id`'s
+ * content and advances (or locks/escalates) the notebook accordingly.
+ */
+export const submitGateResponse = (block_id: string, submission: GateSubmission) =>
+  invoke("submit_gate_response", { blockId: block_id, submission }).then((v) => GateResultSchema.parse(v));
+
+// Grades the closing block's reflection: the backend persists the submitted
+// text, stores the verdict on the block, and returns the always
+// student-facing feedback. A `passed` verdict is what completes the class.
+export const gradeClosureReflection = (block_id: string, reflection: string) =>
+  invoke("grade_closure_reflection", { blockId: block_id, reflection }).then((v) => ClosureFeedbackSchema.parse(v));
+
+/**
+ * Atomic retry of the pending (still-generating-or-failed) block for a
+ * document — call this when a `notebook_block://error` event fires.
+ */
+export const retryPendingBlock = (document_id: string) =>
+  invoke<void>("retry_pending_block", { documentId: document_id });
+
+export const saveNotebookState = (notebook_id: string, blocks: BlockUpdate[]) =>
+  invoke<void>("save_notebook_state", { notebookId: notebook_id, blocks });
+
+/**
+ * The course's calibration battery (generated once, alongside its
+ * syllabus — never as a notebook block) plus whatever the student has
+ * answered so far. `null` if this course predates the feature or its
+ * syllabus generation didn't produce one.
+ */
+export const getCourseDiagnosticBattery = (course_id: string) =>
+  invoke("get_course_diagnostic_battery", { courseId: course_id }).then((v) =>
+    DiagnosticBatteryStateSchema.nullable().parse(v),
+  );
+
+export const saveDiagnosticBatteryAnswers = (course_id: string, answers: Record<string, string>) =>
+  invoke<void>("save_diagnostic_battery_answers", { courseId: course_id, answers });
+
+// --- Lexical assistant (popover) --------------------------------------------
+//
+// One isolated question at a time: only `term`/`fragmentContext`/
+// `keyConcepts`/`history`/`question` reach the model — never the current
+// gate's answer key or session state. `answerBearingStrings` is used only
+// for a deterministic server-side redaction guard, never sent into the
+// model prompt itself.
+
+export interface LexicalTurn {
+  question: string;
+  answer: string;
+}
+
+export const askLexicalAssistant = (
+  term: string,
+  fragmentContext: string | null,
+  keyConcepts: string[],
+  history: LexicalTurn[],
+  question: string,
+  answerBearingStrings: string[],
+) =>
+  invoke<string>("ask_lexical_assistant", {
+    term,
+    fragmentContext,
+    keyConcepts,
+    history,
+    question,
+    answerBearingStrings,
+  });
 
 // --- Events ----------------------------------------------------------------
 
 export async function onAgentEvent(
-  channel: "agent://started" | "agent://completed" | "agent://error",
+  channel: "agent://started" | "agent://completed" | "agent://error" | "agent://tool",
   handler: (e: AgentEventPayload) => void,
 ): Promise<UnlistenFn> {
   return listen<AgentEventPayload>(channel, (evt) => handler(evt.payload));
+}
+
+/**
+ * Per-block notebook generation progress — the buffering counterpart to
+ * `onAgentEvent`'s per-agent-run events. Fires once for every block
+ * `notebook_service::generation` persists in the background, so the
+ * frontend can reveal it without polling.
+ */
+export async function onNotebookBlockEvent(
+  channel: "notebook_block://generating" | "notebook_block://ready" | "notebook_block://error",
+  handler: (e: NotebookBlockEvent) => void,
+): Promise<UnlistenFn> {
+  return listen<unknown>(channel, (evt) => handler(NotebookBlockEventSchema.parse(evt.payload)));
 }

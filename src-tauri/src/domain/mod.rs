@@ -1,6 +1,8 @@
 pub mod agent;
 pub mod message;
 pub mod model;
+pub mod notebook;
+pub mod pedagogy_guardrails;
 pub mod provider;
 pub mod roadmap;
 pub mod workflow;

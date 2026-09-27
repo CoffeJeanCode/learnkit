@@ -23,6 +23,16 @@ impl From<VaultError> for AppError {
 /// Key storage abstraction. Implementations must never log or return key material.
 pub trait SecretVault: Send + Sync {
     fn save_provider_key(&self, provider_id: &str, key: &str) -> Result<(), VaultError>;
+    /// Batch variant so snapshot-backed vaults persist once instead of once
+    /// per key — every persist re-encrypts the whole snapshot (seconds in
+    /// debug builds, hence startup must not call it in a loop). The default
+    /// impl just loops for vaults where persist is cheap.
+    fn save_provider_keys(&self, keys: &[(String, String)]) -> Result<(), VaultError> {
+        for (provider_id, key) in keys {
+            self.save_provider_key(provider_id, key)?;
+        }
+        Ok(())
+    }
     fn get_provider_key(&self, provider_id: &str) -> Result<Option<String>, VaultError>;
     fn delete_provider_key(&self, provider_id: &str) -> Result<(), VaultError>;
     fn has_provider_key(&self, provider_id: &str) -> Result<bool, VaultError> {
@@ -122,6 +132,15 @@ impl StrongholdVault {
             inner: Mutex::new(stronghold),
         };
         vault.ensure_client()?;
+        #[cfg(debug_assertions)]
+        if fast_dev_kdf_active() {
+            // One cheap save re-encrypts with the fast work factor, so a
+            // vault.hold written with full strength migrates itself on first
+            // open instead of paying full decrypt cost on every startup.
+            let inner =
+                vault.inner.lock().map_err(|_| VaultError::Backend("lock poisoned".to_string()))?;
+            Self::persist(&inner)?;
+        }
         Ok(vault)
     }
 
@@ -153,6 +172,13 @@ impl StrongholdVault {
 
 impl SecretVault for StrongholdVault {
     fn save_provider_key(&self, provider_id: &str, key: &str) -> Result<(), VaultError> {
+        self.save_provider_keys(&[(provider_id.to_string(), key.to_string())])
+    }
+
+    fn save_provider_keys(&self, keys: &[(String, String)]) -> Result<(), VaultError> {
+        if keys.is_empty() {
+            return Ok(());
+        }
         let inner = self
             .inner
             .lock()
@@ -160,14 +186,16 @@ impl SecretVault for StrongholdVault {
         let client = inner
             .get_client(STRONGHOLD_CLIENT)
             .map_err(|e| VaultError::Backend(format!("get client: {e}")))?;
-        client
-            .store()
-            .insert(
-                storage_key(provider_id).into_bytes(),
-                key.as_bytes().to_vec(),
-                None,
-            )
-            .map_err(|e| VaultError::Backend(format!("insert record: {e}")))?;
+        for (provider_id, key) in keys {
+            client
+                .store()
+                .insert(
+                    storage_key(provider_id).into_bytes(),
+                    key.as_bytes().to_vec(),
+                    None,
+                )
+                .map_err(|e| VaultError::Backend(format!("insert record: {e}")))?;
+        }
         Self::persist(&inner)
     }
 
@@ -207,8 +235,40 @@ impl SecretVault for StrongholdVault {
     }
 }
 
+/// Debug builds only: Stronghold's default snapshot KDF costs minutes per
+/// open/save without optimizations (measured ~155s fresh open in debug vs
+/// ~1s in release), freezing the window past the OS "not responding"
+/// threshold. Use the test-grade work factor so dev stays usable; release
+/// builds always use full strength. Set `LEARNKIT_STRONG_VAULT=1` to opt back
+/// into production-strength encryption in dev (slow startup). A snapshot
+/// written with full strength pays full cost to *decrypt* once, then
+/// `StrongholdVault::open` re-persists it with the fast factor, so the very
+/// first post-change startup may still be slow — after that it stays fast.
+#[cfg(debug_assertions)]
+fn maybe_use_fast_dev_kdf() {
+    if std::env::var("LEARNKIT_STRONG_VAULT").as_deref() == Ok("1") {
+        return;
+    }
+    if iota_stronghold::engine::snapshot::try_set_encrypt_work_factor(5).is_ok() {
+        tracing::warn!(
+            "fast dev vault: reduced snapshot KDF work factor (debug only). \
+             Set LEARNKIT_STRONG_VAULT=1 for production-strength encryption in dev."
+        );
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn maybe_use_fast_dev_kdf() {}
+
+/// Whether the debug-only reduced snapshot KDF is in effect.
+#[cfg(debug_assertions)]
+fn fast_dev_kdf_active() -> bool {
+    std::env::var("LEARNKIT_STRONG_VAULT").as_deref() != Ok("1")
+}
+
 /// Convenience: create a vault, falling back to memory if Stronghold cannot open.
 pub fn open_vault_or_memory(data_dir: &Path) -> (Box<dyn SecretVault>, bool) {
+    maybe_use_fast_dev_kdf();
     let password = resolve_vault_password();
     match StrongholdVault::open(data_dir, &password) {
         Ok(v) => (Box::new(v), true),

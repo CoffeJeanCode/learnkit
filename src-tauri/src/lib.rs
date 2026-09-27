@@ -3,6 +3,7 @@ pub mod application;
 pub mod commands;
 pub mod domain;
 pub mod error;
+pub mod notebook_store;
 pub mod orchestration;
 pub mod persistence;
 pub mod providers;
@@ -29,18 +30,18 @@ pub fn run() {
                 .path()
                 .app_local_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
+            // NOTE: the Stronghold JS plugin is intentionally NOT registered:
+            // keys are handled in Rust commands only, and the plugin's own
+            // Argon2 init on this thread would add seconds (much more in
+            // debug builds) to startup before first paint for zero benefit.
+            let started = std::time::Instant::now();
             let state = AppState::new(data_dir).expect("failed to initialize app state");
+            tracing::info!(elapsed_ms = started.elapsed().as_millis(), "app state ready");
             app.manage(state);
-
-            // Stronghold engine for API-key storage (keys are handled in Rust
-            // commands only; the JS bindings are available for future non-secret use).
-            let salt_path = app
-                .path()
-                .app_local_data_dir()
-                .map(|p| p.join("salt.txt"))
-                .unwrap_or_else(|_| std::path::PathBuf::from("salt.txt"));
-            app.handle()
-                .plugin(tauri_plugin_stronghold::Builder::with_argon2(&salt_path).build())?;
+            // Tool calls emit `agent://tool` through this handle (see
+            // `tools::emit_tool_event`) so the UI can animate tool-running
+            // turns differently from plain thinking ones.
+            tools::set_tool_event_emitter(app.handle().clone());
 
             Ok(())
         })
@@ -65,7 +66,26 @@ pub fn run() {
             commands::chat::run_research_to_draft,
             commands::roadmap::start_roadmap_session,
             commands::roadmap::send_roadmap_message,
+            commands::roadmap::retry_roadmap_turn,
             commands::roadmap::get_roadmap_session,
+            commands::roadmap::list_roadmap_sessions,
+            commands::roadmap::rename_roadmap_session,
+            commands::roadmap::delete_roadmap_session,
+            commands::roadmap::ensure_course_imported,
+            commands::roadmap::answer_diagnostic_question,
+            commands::roadmap::skip_diagnostic_battery,
+            commands::notebook::import_course_from_roadmap,
+            commands::notebook::list_courses,
+            commands::notebook::list_course_classes,
+            commands::notebook::start_class_notebook,
+            commands::notebook::get_class_notebook_progress,
+            commands::notebook::submit_gate_response,
+            commands::notebook::grade_closure_reflection,
+            commands::notebook::retry_pending_block,
+            commands::notebook::save_notebook_state,
+            commands::notebook::get_course_diagnostic_battery,
+            commands::notebook::save_diagnostic_battery_answers,
+            commands::lexical_assistant::ask_lexical_assistant,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
