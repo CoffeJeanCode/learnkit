@@ -27,7 +27,12 @@ export default function App() {
         if (cancelled || courses.length === 0) return;
         const classes = await listCourseClasses(courses[0].id);
         if (cancelled || classes.length === 0) return;
-        openNotebooks(classes, classes[0].id, courses[0].id);
+        // Resume the last class the student was reading (persisted by the
+        // notebook store), falling back to the first class when it's stale —
+        // the class may belong to a course that's no longer the first one.
+        const restored = useNotebookNav.getState().activeClassId;
+        const target = classes.some((c) => c.id === restored) ? restored! : classes[0].id;
+        openNotebooks(classes, target, courses[0].id);
         setView("notebook");
       } catch {
         // Backend warming up or store empty — roadmap stays the landing.

@@ -239,6 +239,32 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .btn-skip:hover:not(:disabled) { background: var(--chalk); border-color: var(--chalk); }
 .btn-danger-quiet { border-color: var(--red-chalk); color: var(--red-chalk); }
 .btn-danger-quiet:hover:not(:disabled) { background: var(--red-wash); border-color: var(--red-chalk); color: var(--red-chalk); }
+
+/* --- Section tabs (Conversación | Clases en el topbar, Clase | Plan en
+       la página de sesión): chips dibujados a mano que eco el phase
+       tracker — el activo va relleno con tiza, los inactivos punteados. --- */
+.topbar-tabs, .notebook-tabs { display: flex; gap: 8px; align-items: center; }
+.notebook-tabs { margin-bottom: 14px; }
+.tab {
+  font-family: var(--font-hand);
+  font-size: 19px;
+  font-weight: 600;
+  padding: 3px 16px;
+  border: 2px dashed var(--chalk-faint);
+  border-radius: 50% 46% 52% 48% / 48% 52% 46% 54%;
+  color: var(--chalk-soft);
+  transform: rotate(-0.6deg);
+}
+.tab:nth-child(even) { transform: rotate(0.6deg); }
+.tab:hover:not(:disabled) { border-color: var(--chalk); color: var(--chalk); background: transparent; }
+.tab.active {
+  border-style: solid;
+  border-color: var(--chalk);
+  background: var(--chalk);
+  color: var(--paper-deep);
+}
+.tab.active:hover:not(:disabled) { background: var(--chalk); color: var(--paper-deep); }
+
 .row { display: flex; gap: 10px; margin-top: 10px; align-items: end; flex-wrap: wrap; }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .check { display: flex; gap: 6px; align-items: center; }
@@ -575,6 +601,12 @@ pre.output, .quickrun pre {
   .notebook-sidebar { position: static; order: -1; }
 }
 .notebook-header { justify-content: space-between; align-items: flex-start; }
+
+/* Plan tab (session page): the sealed roadmap seen from inside the
+   notebook — meta + diagnóstico + plan + cómo va la ruta. */
+.plan-tab { display: flex; flex-direction: column; gap: 14px; }
+.plan-tab-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.plan-tab-head .row { margin-top: 0; align-items: center; }
 
 .notebook-blocks { display: flex; flex-direction: column; gap: 18px; }
 

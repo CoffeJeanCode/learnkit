@@ -56,8 +56,9 @@ export function SessionsDrawer({ open, onClose }: { open: boolean; onClose: () =
   const choose = async (id: string) => {
     await openSession(id);
     onClose();
-    // Opening a plan always lands on the plan — the drawer is reachable
-    // from the notebook view too.
+    // Opening a plan always lands on its conversation — the drawer only
+    // exists in the conversation section (flow decision), so there's no
+    // other section to return to.
     setView("roadmap");
   };
 

@@ -1,13 +1,22 @@
 import { useEffect, useState } from "react";
 import { DynamicSectionBlockSchema } from "../../lib/schemas";
-import type { DynamicBlockType, NotebookBlock } from "../../lib/schemas";
-import { gradeClosureReflection, listCourseClasses, saveNotebookState, startClassNotebook, tauriError } from "../../lib/tauri";
+import type { DynamicBlockType, NotebookBlock, RoadmapSession } from "../../lib/schemas";
+import {
+  getRoadmapSession,
+  gradeClosureReflection,
+  listCourseClasses,
+  listRoadmapSessions,
+  saveNotebookState,
+  startClassNotebook,
+  tauriError,
+} from "../../lib/tauri";
 import { useNotebookNav } from "../../stores/notebook";
 import { useRoadmap } from "../../stores/roadmap";
 import { useUi } from "../../stores/ui";
 import { ClassGenerationLoader, ThinkingSketch } from "../../components/AgentLoader";
 import { ClassPath } from "../../components/ClassPath";
 import { DynamicNotebookBlock } from "./blocks";
+import { SessionPlanTab } from "./SessionPlanTab";
 import { useClassNotebookSession } from "./useClassNotebookSession";
 
 // One-class-ahead buffer: while the student reads class N, class N+1's
@@ -59,16 +68,15 @@ function deriveKeyConcepts(blocks: NotebookBlock[]): string[] {
   return [...labels].slice(0, 8);
 }
 
-/** One class's notebook: an iterative, mastery-gated sequence of pedagogical
- *  blocks — one visible at a time, the next buffered in the background while
- *  the student reads/works the current one. No block past an unresolved gate
- *  is ever shown; passing (or exhausting) a gate is what reveals the next
- *  one, never a self-reported checkbox.
+/** The session page: two tabs — the class notebook itself (a mastery-gated
+ *  sequence of pedagogical blocks, one visible at a time, the next buffered
+ *  in the background while the student reads/works the current one; no block
+ *  past an unresolved gate is ever shown) and the Plan tab (the sealed
+ *  roadmap that produced this course — see `SessionPlanTab`).
  *
- *  The session's sealed roadmap rides along as a compact side note, and the
- *  course's classes render as a Duolingo-style sequential path instead of a
- *  plain dropdown — so the plan stays visible and navigable while reading a
- *  class, instead of requiring a trip back to the chat view. */
+ *  While reading a class, the sealed roadmap rides along as a compact side
+ *  note and the course's classes render as a Duolingo-style sequential path
+ *  — so the plan stays visible and navigable without leaving the notebook. */
 export function ClassNotebookView() {
   const { classes, activeClassId, courseId } = useNotebookNav();
   const setActiveClass = useNotebookNav((s) => s.setActiveClass);
@@ -77,6 +85,44 @@ export function ClassNotebookView() {
   const roadmapSession = useRoadmap((s) => s.session);
   const [reloadToken, setReloadToken] = useState(0);
   const [visibleCount, setVisibleCount] = useState(1);
+  // The session page's two sections: the class itself, or the Plan tab
+  // (the roadmap that produced this course + how the path is going).
+  const [section, setSection] = useState<"class" | "plan">("class");
+
+  // --- Plan tab data --------------------------------------------------
+  // Prefer the session already open in the roadmap store (zero I/O — the
+  // common path right after sealing or reopening it from the drawer). On a
+  // cold start that lands straight in the notebook the store is empty, so
+  // resolve the owning session from the saved sessions once — WITHOUT
+  // writing it into the store, so an unrelated conversation open in the
+  // other section is never hijacked.
+  const storeMatchesCourse = roadmapSession !== null && roadmapSession.imported_course_id === courseId;
+  const [resolved, setResolved] = useState<{ courseId: string; session: RoadmapSession | null } | null>(null);
+  const planLoading = !!courseId && !storeMatchesCourse && resolved?.courseId !== courseId;
+  const planSession = storeMatchesCourse
+    ? roadmapSession
+    : resolved?.courseId === courseId
+      ? resolved.session
+      : null;
+
+  useEffect(() => {
+    if (!courseId || storeMatchesCourse || resolved?.courseId === courseId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const summaries = await listRoadmapSessions();
+        const sessions = await Promise.all(summaries.map((s) => getRoadmapSession(s.session_id)));
+        if (cancelled) return;
+        setResolved({ courseId, session: sessions.find((s) => s.imported_course_id === courseId) ?? null });
+      } catch (e) {
+        console.warn("no se pudo cargar el plan del curso", tauriError(e).message);
+        if (!cancelled) setResolved({ courseId, session: null });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [courseId, storeMatchesCourse, resolved]);
 
   const classId = activeClassId;
   const { document, blocks, bufferState, bufferError, loading, error, stage, submitGate, retryPendingBlock } = useClassNotebookSession(
@@ -84,7 +130,7 @@ export function ClassNotebookView() {
     reloadToken,
   );
   const activeClass = classes.find((c) => c.id === classId);
-  const pkg = roadmapSession?.roadmap_package?.syllabus ?? null;
+  const pkg = planSession?.roadmap_package?.syllabus ?? null;
 
   // Re-syncs the sibling classes after a change that can flip this class to
   // `complete` (last gate resolved, reflection written) — the sidebar path
@@ -200,80 +246,117 @@ export function ClassNotebookView() {
 
   return (
     <div className="view notebook">
-      <div className="notebook-shell">
-        <div className="notebook-main">
-          <div className="row notebook-header">
-            <h2>{activeClass?.title ?? "Clase"}</h2>
-            <button onClick={() => setView("roadmap")}>← Ver conversación</button>
+      <div className="notebook-tabs" role="tablist" aria-label="Secciones de la sesión">
+        <button
+          role="tab"
+          aria-selected={section === "class"}
+          className={"tab" + (section === "class" ? " active" : "")}
+          onClick={() => setSection("class")}
+        >
+          Clase
+        </button>
+        <button
+          role="tab"
+          aria-selected={section === "plan"}
+          className={"tab" + (section === "plan" ? " active" : "")}
+          onClick={() => setSection("plan")}
+        >
+          Plan
+        </button>
+      </div>
+
+      {section === "plan" ? (
+        <SessionPlanTab
+          session={planSession}
+          loading={planLoading}
+          classes={classes}
+          activeClassId={classId}
+          onSelectClass={(id) => {
+            setActiveClass(id);
+            setSection("class");
+          }}
+          onOpenConversation={() => setView("roadmap")}
+        />
+      ) : (
+        <div className="notebook-shell">
+          <div className="notebook-main">
+            <div className="row notebook-header">
+              <h2>{activeClass?.title ?? "Clase"}</h2>
+            </div>
+
+            {loading && <ClassGenerationLoader stage={stage} />}
+            {error && (
+              <div className="alert error">
+                <span className="alert-text">{error}</span>
+                <button className="btn-quiet btn-retry" onClick={() => setReloadToken((n) => n + 1)} disabled={loading}>
+                  Reintentar
+                </button>
+              </div>
+            )}
+
+            {!loading && !error && (
+              <div className="notebook-blocks">
+                {visibleBlocks.map((block) => (
+                  <DynamicNotebookBlock
+                    key={block.id}
+                    block={block}
+                    isActive={block.id === lastVisible?.id}
+                    lessonKeyConcepts={lessonKeyConcepts}
+                    onSubmitGate={handleSubmitGate}
+                    onSave={handleSaveReflection}
+                    onRequestClosureFeedback={handleRequestClosureFeedback}
+                    onContinueModule={handleContinueModule}
+                    continueLabel={continueLabel}
+                  />
+                ))}
+
+                {!awaitingGate &&
+                  !nextBufferedBlock &&
+                  (bufferState === "error" ? (
+                    <div className="alert error">
+                      <span className="alert-text">{bufferError ?? "No se pudo generar el siguiente bloque."}</span>
+                      <button className="btn-quiet btn-retry" onClick={() => void retryPendingBlock()}>
+                        Reintentar
+                      </button>
+                    </div>
+                  ) : lastVisible && lastVisible.block_type !== "metacognitive_closure" ? (
+                    <ThinkingSketch label="Preparando el siguiente paso…" />
+                  ) : null)}
+              </div>
+            )}
           </div>
 
-          {loading && <ClassGenerationLoader stage={stage} />}
-          {error && (
-            <div className="alert error">
-              <span className="alert-text">{error}</span>
-              <button className="btn-quiet btn-retry" onClick={() => setReloadToken((n) => n + 1)} disabled={loading}>
-                Reintentar
-              </button>
-            </div>
-          )}
-
-          {!loading && !error && (
-            <div className="notebook-blocks">
-              {visibleBlocks.map((block) => (
-                <DynamicNotebookBlock
-                  key={block.id}
-                  block={block}
-                  isActive={block.id === lastVisible?.id}
-                  lessonKeyConcepts={lessonKeyConcepts}
-                  onSubmitGate={handleSubmitGate}
-                  onSave={handleSaveReflection}
-                  onRequestClosureFeedback={handleRequestClosureFeedback}
-                  onContinueModule={handleContinueModule}
-                  continueLabel={continueLabel}
-                />
-              ))}
-
-              {!awaitingGate &&
-                !nextBufferedBlock &&
-                (bufferState === "error" ? (
-                  <div className="alert error">
-                    <span className="alert-text">{bufferError ?? "No se pudo generar el siguiente bloque."}</span>
-                    <button className="btn-quiet btn-retry" onClick={() => void retryPendingBlock()}>
-                      Reintentar
+          {(pkg || classes.length > 0) && (
+            <aside className="notebook-sidebar">
+              {pkg && (
+                <div className="card side-note">
+                  <div className="card-head">
+                    <h3>{pkg.courseTitle}</h3>
+                    <span className="badge ok">tu plan</span>
+                  </div>
+                  <p className="hint">
+                    {pkg.totalWeeks} semanas · {pkg.paceHoursPerWeek} h/semana
+                  </p>
+                  <div className="row">
+                    <button className="btn-quiet" onClick={() => setSection("plan")}>
+                      Ver tu plan →
                     </button>
                   </div>
-                ) : lastVisible && lastVisible.block_type !== "metacognitive_closure" ? (
-                  <ThinkingSketch label="Preparando el siguiente paso…" />
-                ) : null)}
-            </div>
+                </div>
+              )}
+
+              {classes.length > 0 && (
+                <div className="card class-path-card">
+                  <div className="card-head">
+                    <h3>Tu ruta</h3>
+                  </div>
+                  <ClassPath classes={classes} activeClassId={classId} onSelect={setActiveClass} />
+                </div>
+              )}
+            </aside>
           )}
         </div>
-
-        {(pkg || classes.length > 0) && (
-          <aside className="notebook-sidebar">
-            {pkg && (
-              <div className="card side-note">
-                <div className="card-head">
-                  <h3>{pkg.courseTitle}</h3>
-                  <span className="badge ok">tu plan</span>
-                </div>
-                <p className="hint">
-                  {pkg.totalWeeks} semanas · {pkg.paceHoursPerWeek} h/semana
-                </p>
-              </div>
-            )}
-
-            {classes.length > 0 && (
-              <div className="card class-path-card">
-                <div className="card-head">
-                  <h3>Tu ruta</h3>
-                </div>
-                <ClassPath classes={classes} activeClassId={classId} onSelect={setActiveClass} />
-              </div>
-            )}
-          </aside>
-        )}
-      </div>
+      )}
     </div>
   );
 }
