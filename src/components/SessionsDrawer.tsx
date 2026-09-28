@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { RoadmapPhase } from "../lib/schemas";
+import { getRoadmapSession, listCourseClasses } from "../lib/tauri";
 import { useRoadmap } from "../stores/roadmap";
 import { useUi } from "../stores/ui";
 
@@ -41,6 +42,9 @@ export function SessionsDrawer({ open, onClose }: { open: boolean; onClose: () =
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // Class count per session being confirmed for deletion — `null` = still
+  // loading or the session owns no course (nothing to cascade).
+  const [deleteCounts, setDeleteCounts] = useState<Record<string, number | null>>({});
 
   useEffect(() => {
     if (open) {
@@ -56,10 +60,31 @@ export function SessionsDrawer({ open, onClose }: { open: boolean; onClose: () =
   const choose = async (id: string) => {
     await openSession(id);
     onClose();
-    // Opening a plan always lands on its conversation — the drawer only
-    // exists in the conversation section (flow decision), so there's no
-    // other section to return to.
-    setView("roadmap");
+    // Land by state, not by habit: a sealed session has real content waiting
+    // in Plan/Clases, so the drawer (which is where you go to pick a course)
+    // drops you on the plan; a session still being built goes to its
+    // conversation. Either way the header chip now names what you opened.
+    const opened = useRoadmap.getState().session;
+    setView(opened?.status === "sealed" ? "plan" : "roadmap");
+  };
+
+  const beginDelete = async (summary: { session_id: string; status: string; imported_course_id?: string | null }) => {
+    setConfirmDeleteId(summary.session_id);
+    setDeleteCounts((c) => ({ ...c, [summary.session_id]: null }));
+    // The summary doesn't carry the course id — ask the full session, then
+    // count its classes so the confirmation can say what's actually lost.
+    try {
+      const full = await getRoadmapSession(summary.session_id);
+      if (!full.imported_course_id) {
+        setDeleteCounts((c) => ({ ...c, [summary.session_id]: 0 }));
+        return;
+      }
+      const classes = await listCourseClasses(full.imported_course_id);
+      setDeleteCounts((c) => ({ ...c, [summary.session_id]: classes.length }));
+    } catch {
+      // Unknown count — the confirmation degrades to a plain session delete.
+      setDeleteCounts((c) => ({ ...c, [summary.session_id]: null }));
+    }
   };
 
   const commitRename = async (id: string) => {
@@ -69,8 +94,13 @@ export function SessionsDrawer({ open, onClose }: { open: boolean; onClose: () =
   };
 
   const confirmDelete = async (id: string) => {
+    const wasActive = useRoadmap.getState().session?.session_id === id;
     await deleteSession(id);
     setConfirmDeleteId(null);
+    // The deleted session WAS this one's container (its course and classes
+    // just cascaded away with it) — a Plan/Clases section would have nothing
+    // left to show, so fall back to the conversation prompt.
+    if (wasActive) setView("roadmap");
   };
 
   return (
@@ -147,12 +177,19 @@ export function SessionsDrawer({ open, onClose }: { open: boolean; onClose: () =
                     >
                       ✎
                     </button>
-                    <button title="Borrar" onClick={() => setConfirmDeleteId(s.session_id)}>
+                    <button title="Borrar" onClick={() => void beginDelete(s)}>
                       🗑
                     </button>
                   </>
                 )}
               </div>
+              {confirmDeleteId === s.session_id && (
+                <p className="drawer-danger-text">
+                  {deleteCounts[s.session_id] != null && deleteCounts[s.session_id]! > 0
+                    ? `Se borrarán la sesión y sus ${deleteCounts[s.session_id]} clases.`
+                    : "Se borrará la sesión."}
+                </p>
+              )}
             </div>
           ))}
         </div>

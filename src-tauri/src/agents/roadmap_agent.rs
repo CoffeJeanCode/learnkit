@@ -139,6 +139,11 @@ sola descripción). Cada milestone lleva:
   vago ("comprender la teoría", "leer sobre el tema"). Ejemplos reales: un guion de analogías
   validado, un circuito simulado de 2 qubits con histograma analizado, una función depurada con
   sus tests pasando, un diagrama de balance energético con los flujos etiquetados.
+- Cada módulo lleva además su `objective`: qué sabrá HACER el estudiante al terminarlo — UNA sola
+  frase observable en infinitivo ("Explicar por qué el ciclo se reinicia con oxalacetato",
+  "Depurar una función y dejar sus tests en verde"), distinta del `deliverable` (el artefacto que
+  entrega) y nunca vaga ("comprender la teoría" también se rechaza aquí). El estudiante la verá en
+  su plan y en la cabecera de la clase, así que debe responder de verdad a "¿qué me llevo?".
 - Cada módulo lleva `interactiveBlocks`: 3 a 4 bloques, elegidos de este catálogo cerrado según
   la naturaleza epistemológica del contenido de ESE módulo — no repitas siempre los mismos:
   - `interactive_visual_anchor`: SVG o esquema con rigor espacial/geométrico.

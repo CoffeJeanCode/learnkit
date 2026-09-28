@@ -274,7 +274,7 @@ fn visual_aid_json_schema() -> serde_json::Value {
                             "properties": {
                                 "tag": {"type": "string", "enum": ["rect", "circle", "line", "path", "text"]},
                                 "props": {"type": "object"},
-                                "label": {"type": "string"}
+                                "label": {"type": ["string", "null"], "description": "Solo en `text`. En formas geométricas usa null u omite la clave."}
                             },
                             "required": ["tag", "props"]
                         }
@@ -294,7 +294,7 @@ fn visual_aid_json_schema() -> serde_json::Value {
                                         "properties": {
                                             "tag": {"type": "string", "enum": ["rect", "circle", "line", "path", "text"]},
                                             "props": {"type": "object"},
-                                            "label": {"type": "string"}
+                                            "label": {"type": ["string", "null"], "description": "Solo en `text`. En formas geométricas usa null u omite la clave."}
                                         },
                                         "required": ["tag", "props"]
                                     }

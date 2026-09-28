@@ -182,6 +182,10 @@ fn syllabus_json_schema() -> serde_json::Value {
                                         "type": "string",
                                         "description": "Artefacto concreto y verificable de ESTE módulo (nunca \"comprender la teoría\" o \"leer sobre el tema\")."
                                     },
+                                    "objective": {
+                                        "type": "string",
+                                        "description": "Qué sabrá HACER el estudiante al terminar este módulo: una capacidad observable, una sola frase en infinitivo (p. ej. \"Explicar por qué el ciclo se reinicia con oxalacetato\"). NO es el entregable (el artefacto) ni una intención vaga (\"comprender la teoría\")."
+                                    },
                                     "interactiveBlocks": {
                                         "type": "array",
                                         "minItems": 3,
@@ -198,7 +202,7 @@ fn syllabus_json_schema() -> serde_json::Value {
                                         }
                                     }
                                 },
-                                "required": ["label", "hours", "deliverable", "interactiveBlocks"]
+                                "required": ["label", "hours", "deliverable", "objective", "interactiveBlocks"]
                             }
                         }
                     },
@@ -338,6 +342,7 @@ mod tests {
                         label: "Módulo 1".to_string(),
                         hours: 3.0,
                         deliverable: "Artefacto verificable".to_string(),
+                        objective: Some("Explicar el flujo completo del módulo con sus propias palabras".to_string()),
                         interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
                     }],
                 }],

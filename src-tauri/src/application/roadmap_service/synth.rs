@@ -50,6 +50,7 @@ pub(super) fn synth_micromodules(total_hours: f32) -> Vec<Micromodule> {
             label: format!("Módulo {i}"),
             hours: per_module,
             deliverable: format!("Entregable verificable del módulo {i}"),
+            objective: Some(format!("Aplicar los conceptos clave del módulo {i} a un caso concreto del curso")),
             interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
         })
         .collect()

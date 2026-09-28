@@ -294,3 +294,150 @@
         let edited = reloaded.blocks.iter().find(|b| b.id == block_id).expect("block still there");
         assert_eq!(edited.content_json, serde_json::json!({"markdown": "# Editado"}));
     }
+
+    /// The cascade half of the "borré la sesión y las clases seguían ahí"
+    /// fix: deleting the course must take milestones, classes, documents and
+    /// blocks with it (FK `ON DELETE CASCADE` + `foreign_keys=ON`), leaving
+    /// `list_courses`/`list_classes_for_course` clean.
+    #[test]
+    fn delete_course_cascades_to_milestones_classes_documents_and_blocks() {
+        let store = NotebookStore::open_in_memory().expect("open");
+        let course = store.create_course("Tema", "Meta", 4).expect("course");
+        let m = store.create_milestone(&course.id, 1, "Semana 1", "Entrega 1").expect("m");
+        let c = store.create_class(&m.id, 1, "Clase 1", 0, 3.0).expect("class");
+        let doc = store.ensure_document_shell(&c.id, "Clase 1").expect("shell");
+        let blocks = insert_sample_blocks(&store, &doc.id);
+        assert_eq!(blocks.len(), 2);
+
+        store.delete_course(&course.id).expect("delete");
+
+        assert!(store.list_courses().expect("list").is_empty(), "course gone");
+        assert!(store.list_classes_for_course(&course.id).expect("classes").is_empty());
+        assert!(store.load_notebook_by_class(&c.id).expect("query").is_none(), "document cascaded away");
+        assert!(store.get_document(&doc.id).expect("get").is_none());
+        // The sibling-free store still accepts new writes afterwards (no
+        // dangling FK state left behind).
+        let fresh = store.create_course("Otro", "Meta", 1).expect("fresh course");
+        assert_eq!(store.list_courses().expect("list").len(), 1);
+        assert_eq!(fresh.title, "Otro");
+    }
+
+    /// The startup sweep: only courses NO session references get removed.
+    #[test]
+    fn delete_courses_except_keeps_owned_courses_and_removes_orphans() {
+        let store = NotebookStore::open_in_memory().expect("open");
+        let owned = store.create_course("Con sesión", "Meta", 2).expect("course");
+        let orphan = store.create_course("Huérfano", "Meta", 2).expect("course");
+        let orphan2 = store.create_course("Huérfano 2", "Meta", 2).expect("course");
+
+        let removed = store.delete_courses_except(&[owned.id.clone()]).expect("sweep");
+
+        assert_eq!(removed, 2, "both orphans removed");
+        let listed = store.list_courses().expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, owned.id);
+        assert!(store.list_classes_for_course(&orphan.id).expect("classes").is_empty());
+        // Idempotent: a second sweep has nothing left to do.
+        assert_eq!(store.delete_courses_except(&[owned.id.clone()]).expect("re-sweep"), 0);
+        let _ = orphan2;
+    }
+
+    /// The "regenerar este bloque" persistence primitive: the replacement
+    /// must land on the SAME row (id, position, document) — blocks are
+    /// append-only, so re-inserting would push the repair past every gate
+    /// behind it — and an ungraded block comes back clean while a graded
+    /// one keeps its grade.
+    #[test]
+    fn replace_block_payload_swaps_the_content_in_place_and_only_resets_ungraded_blocks() {
+        let store = NotebookStore::open_in_memory().expect("open");
+        let course = store.create_course("Tema", "Meta", 1).expect("course");
+        let m = store.create_milestone(&course.id, 1, "Semana 1", "Entrega 1").expect("m");
+        let c = store.create_class(&m.id, 1, "Clase 1", 0, 3.0).expect("class");
+        let doc = store.ensure_document_shell(&c.id, "Clase 1").expect("shell");
+        let sample = sample_blocks();
+        let first = store
+            .insert_block(
+                &doc.id,
+                sample[0].block_type(),
+                &serde_json::to_value(&sample[0]).expect("serializes"),
+                BlockStatus::Ready,
+            )
+            .expect("first");
+        let second = store
+            .insert_block(
+                &doc.id,
+                sample[1].block_type(),
+                &serde_json::to_value(&sample[1]).expect("serializes"),
+                BlockStatus::Passed,
+            )
+            .expect("second");
+        store.update_block_status(&first.id, BlockStatus::Failed, Some("intento fallido"), true).expect("grade it");
+
+        let repaired = store
+            .replace_block_payload(&first.id, first.block_type, &serde_json::json!({"blockType": "anchored_micro_theory", "title": "Reparado"}))
+            .expect("replace");
+
+        assert_eq!(repaired.id, first.id, "same row, not a new one");
+        assert_eq!(repaired.order_index, first.order_index, "position untouched");
+        assert_eq!(repaired.document_id, first.document_id);
+        assert_eq!(repaired.block_type, first.block_type);
+        assert_eq!(repaired.content_json, serde_json::json!({"blockType": "anchored_micro_theory", "title": "Reparado"}));
+        assert_eq!(repaired.status, BlockStatus::Ready, "an ungraded block comes back clean");
+        assert_eq!(repaired.attempt_count, 0, "stale attempts are cleared");
+        assert_eq!(repaired.last_feedback, None, "stale feedback is cleared");
+
+        let all = store.load_notebook_by_class(&c.id).expect("load").expect("payload");
+        assert_eq!(all.blocks.len(), 2, "no block was appended");
+        assert_eq!(all.blocks[1].id, second.id, "the block behind it keeps its position");
+
+        // A graded block keeps the grade the student earned.
+        let kept = store
+            .replace_block_payload(&second.id, second.block_type, &serde_json::json!({"blockType": "metacognitive_closure", "x": 1}))
+            .expect("replace graded");
+        assert_eq!(kept.status, BlockStatus::Passed);
+        assert_eq!(kept.attempt_count, second.attempt_count);
+
+        let err = store
+            .replace_block_payload("does-not-exist", first.block_type, &serde_json::json!({}))
+            .expect_err("unknown block id must fail");
+        assert!(matches!(err, crate::error::AppError::InvalidInput(_)), "{err:?}");
+    }
+
+    /// One class per micromodule: each one carries ITS OWN learning
+    /// objective so the plan and the class notebook header can show what
+    /// finishing that class will let you do. Classes created without one
+    /// (the pre-`Micromodule::objective` shape, or plain `create_class`)
+    /// stay NULL rather than borrowing a sibling's.
+    #[test]
+    fn import_stamps_each_class_with_its_micromodule_objective() {
+        use crate::domain::roadmap::{Milestone, Micromodule, RoadmapSyllabusPackage};
+        let store = NotebookStore::open_in_memory().expect("open");
+        let module = |label: &str, objective: Option<&str>| Micromodule {
+            label: label.to_string(),
+            hours: 3.0,
+            deliverable: "Artefacto verificable".to_string(),
+            objective: objective.map(str::to_string),
+            interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
+        };
+        let syllabus = RoadmapSyllabusPackage {
+            course_title: "Tema".to_string(),
+            total_weeks: 1,
+            pace_hours_per_week: 6.0,
+            milestones: vec![Milestone {
+                week: 1,
+                title: "Semana 1".to_string(),
+                deliverable: "Entregable".to_string(),
+                micromodules: vec![module("Módulo 1", Some("Explicar el flujo con un ejemplo")), module("Módulo 2", None)],
+            }],
+        };
+
+        let (course_id, _, _) = import_syllabus_into_store(&store, &syllabus, "Meta").expect("import");
+
+        let classes = store.list_classes_for_course(&course_id).expect("classes");
+        assert_eq!(classes.len(), 2);
+        assert_eq!(classes[0].objective.as_deref(), Some("Explicar el flujo con un ejemplo"));
+        assert_eq!(classes[1].objective, None, "a syllabus without one leaves the column NULL");
+        // And the generation context sees it too (same row, joined query).
+        let ctx = store.class_generation_context(&classes[0].id).expect("ctx").expect("present");
+        assert_eq!(ctx.class.objective.as_deref(), Some("Explicar el flujo con un ejemplo"));
+    }

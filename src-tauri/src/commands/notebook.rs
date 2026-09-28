@@ -9,10 +9,21 @@ use crate::state::AppState;
 /// Seeds `courses`/`syllabus_milestones`/`classes` in the SQLite store from
 /// an already-sealed Roadmap & Syllabus Diagnostic session, returning the
 /// classes the frontend can now request notebooks for (one per week).
+///
+/// Idempotent by construction: it delegates to
+/// [`RoadmapService::ensure_course_imported`], which no-ops (and returns the
+/// existing ids) when the session already has its course. The old
+/// implementation imported unconditionally, so every call minted a NEW
+/// duplicate course — the source of the "20 cursos, 8 con sesión" mess.
+/// After the import it just lists the classes, so callers still get the
+/// same `Vec<ClassRecord>` shape.
 #[tauri::command]
 pub fn import_course_from_roadmap(state: State<'_, AppState>, session_id: String) -> AppResult<Vec<ClassRecord>> {
-    let session = state.roadmap_service.get_session(&session_id)?;
-    state.notebook_service.import_course_from_roadmap(&session)
+    let session = state.roadmap_service.ensure_course_imported(&session_id)?;
+    let course_id = session
+        .imported_course_id
+        .ok_or_else(|| crate::error::AppError::InvalidInput("session has no imported course".to_string()))?;
+    state.notebook_service.list_course_classes(&course_id)
 }
 
 #[tauri::command]
@@ -75,6 +86,20 @@ pub async fn grade_closure_reflection(
 #[tauri::command]
 pub async fn retry_pending_block(app: tauri::AppHandle, state: State<'_, AppState>, document_id: String) -> AppResult<()> {
     state.notebook_service.retry_pending_block(Some(&app), &document_id).await
+}
+
+/// Regenerates ONE already-persisted block whose stored content the renderer
+/// can't display anymore ("formato inesperado"), replacing it in place at the
+/// same position and with the same block type. Returns the refreshed class so
+/// the caller re-renders from fresh state. See
+/// `NotebookService::regenerate_block`.
+#[tauri::command]
+pub async fn regenerate_notebook_block(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    block_id: String,
+) -> AppResult<NotebookPayload> {
+    state.notebook_service.regenerate_block(Some(&app), &block_id).await
 }
 
 #[tauri::command]

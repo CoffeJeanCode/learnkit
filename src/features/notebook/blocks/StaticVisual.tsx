@@ -156,7 +156,7 @@ export function StaticVisual({ visual }: { visual: StaticVisualSpec }) {
           viewBox={visual.viewBox}
           elements={visual.elements}
           groups={visual.groups}
-          pedagogicalFocus={visual.pedagogicalFocus}
+          pedagogicalFocus={visual.pedagogicalFocus ?? undefined}
           caption={visual.caption}
         />
       );

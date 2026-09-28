@@ -63,8 +63,25 @@ body {
 }
 .brand::before { content: "✎ "; }
 .topbar-actions { display: flex; gap: 10px; flex-wrap: wrap; }
-.topbar-left { display: flex; align-items: center; gap: 12px; }
+.topbar-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .drawer-toggle { padding: 5px 14px; }
+
+/* The container: names which session the header's sections (Conversación |
+ * Plan | Clases) currently belong to. Truncates instead of pushing the tabs
+ * off the bar on a long course title. */
+.session-chip {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 12px;
+  font-family: var(--font-hand);
+  font-size: 17px;
+  border: 2px dashed var(--chalk);
+  border-radius: 999px;
+  background: var(--paper);
+  transform: rotate(-0.8deg);
+}
 
 /* --- Sessions drawer: slide-over journal index --- */
 .drawer-overlay {
@@ -126,6 +143,11 @@ body {
 }
 .drawer-item-open:hover:not(:disabled) { background: transparent; }
 .drawer-item-actions { display: flex; gap: 8px; margin-top: 6px; }
+.drawer-item-actions .drawer-danger { border-color: var(--red-chalk); color: var(--red-chalk); }
+.drawer-item-actions .drawer-danger:hover:not(:disabled) { background: var(--red-wash); border-color: var(--red-chalk); }
+/* What a delete actually costs: the cascade removes the session AND its
+ * classes, so the confirmation says so instead of implying a single row. */
+.drawer-danger-text { margin: 4px 0 0; font-size: 13px; color: var(--red-chalk); }
 .drawer-edit { display: flex; gap: 6px; }
 .drawer-edit input { flex: 1; font-size: 14px; padding: 5px 10px; }
 .history-filter { margin: 0 0 4px; cursor: pointer; }
@@ -143,6 +165,13 @@ body {
 }
 .muted { color: var(--chalk-soft); font-size: 14px; }
 .hint { color: var(--chalk-soft); font-size: 13px; margin: 4px 0; }
+
+/* Learning objective: "qué sabrás hacer al terminar" — under each module of
+   the plan (proposal, saved plan, Plan tab) and under the class title in the
+   notebook. Its own line so it never runs into the deliverable/blocks list;
+   absent for syllabi sealed before `Micromodule::objective` existed. */
+.mod-objective { display: block; margin-top: 4px; color: var(--chalk-soft); font-size: 13px; font-style: italic; }
+.class-objective { margin-top: -2px; font-style: italic; }
 
 /* --- Cards: dark notes, flat surface (texture lives on the page) --- */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 18px; margin: 14px 0; }

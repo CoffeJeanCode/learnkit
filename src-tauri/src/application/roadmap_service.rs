@@ -172,11 +172,40 @@ impl RoadmapService {
         Ok(session.summary())
     }
 
-    /// Delete a saved session. Existence is checked first so a missing id
-    /// fails typed instead of silently succeeding.
+    /// Delete a saved session — AND the course it owns. Existence is checked
+    /// first so a missing id fails typed instead of silently succeeding.
+    ///
+    /// A sealed session is the owner of exactly one course (see
+    /// `RoadmapSession::imported_course_id`), which in turn owns its
+    /// milestones/classes/notebooks by FK cascade. Deleting only the session
+    /// JSON (the old behavior) left those courses orphaned in SQLite — they
+    /// kept showing up under the "Clases" section with no session behind
+    /// them. The session JSON goes first: if the course delete somehow fails
+    /// afterwards, the session is already gone, so there's no half-state
+    /// where reopening the session resurrects a course the student meant to
+    /// destroy (and the startup sweep would remove it on the next launch).
     pub fn delete_session(&self, session_id: &str) -> AppResult<()> {
-        self.get_session(session_id)?;
-        self.store.delete_roadmap_session(session_id)
+        let session = self.get_session(session_id)?;
+        self.store.delete_roadmap_session(session_id)?;
+        if let Some(course_id) = session.imported_course_id {
+            self.notebook_store.delete_course(&course_id)?;
+        }
+        Ok(())
+    }
+
+    /// Startup sweep: removes every course no saved session references —
+    /// the cleanup for courses orphaned by sessions deleted BEFORE
+    /// [`Self::delete_session`] cascaded (and for any future leak). Idempotent
+    /// and cheap (a handful of rows), so it runs on every launch. Returns
+    /// the number of courses removed so the caller can log it.
+    pub fn sweep_orphan_courses(&self) -> AppResult<usize> {
+        let owned: Vec<String> = self
+            .store
+            .list_roadmap_sessions()?
+            .into_iter()
+            .filter_map(|s| s.imported_course_id)
+            .collect();
+        self.notebook_store.delete_courses_except(&owned)
     }
 
     pub async fn start_session(&self, _app: Option<&tauri::AppHandle>) -> AppResult<RoadmapTurnResult> {

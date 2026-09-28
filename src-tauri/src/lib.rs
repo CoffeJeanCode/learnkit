@@ -82,6 +82,7 @@ pub fn run() {
             commands::notebook::submit_gate_response,
             commands::notebook::grade_closure_reflection,
             commands::notebook::retry_pending_block,
+            commands::notebook::regenerate_notebook_block,
             commands::notebook::save_notebook_state,
             commands::notebook::get_course_diagnostic_battery,
             commands::notebook::save_diagnostic_battery_answers,

@@ -71,6 +71,9 @@ export function DynamicNotebookBlock({
   onRequestClosureFeedback,
   onContinueModule,
   continueLabel,
+  onRegenerate,
+  regenerating,
+  regenerateError,
 }: {
   block: NotebookBlock;
   isActive: boolean;
@@ -80,12 +83,28 @@ export function DynamicNotebookBlock({
   onRequestClosureFeedback: (blockId: string, reflection: string) => Promise<{ passed: boolean; feedback: string }>;
   onContinueModule: () => void;
   continueLabel: string;
+  /** Repairs a block whose stored content doesn't parse anymore: the backend
+   *  regenerates it IN PLACE (same id, position and type) and the whole class
+   *  is re-rendered from the returned payload. */
+  onRegenerate?: (blockId: string) => void;
+  regenerating?: boolean;
+  regenerateError?: string | null;
 }) {
   const parsed = DynamicSectionBlockSchema.safeParse(block.content_json);
   if (!parsed.success) {
     return (
       <section className="notebook-block-wrapper unsupported">
         <p className="hint">Este bloque no se pudo mostrar (formato inesperado).</p>
+        {regenerating ? (
+          <p className="hint">Regenerando este bloque…</p>
+        ) : (
+          <div className="row">
+            <button className="btn-quiet btn-retry" onClick={() => onRegenerate?.(block.id)} disabled={!onRegenerate}>
+              Regenerar este bloque
+            </button>
+          </div>
+        )}
+        {regenerateError && <p className="hint hint-warn">{regenerateError}</p>}
       </section>
     );
   }

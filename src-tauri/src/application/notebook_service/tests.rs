@@ -45,6 +45,7 @@
                         label: "Módulo 1".to_string(),
                         hours: 3.0,
                         deliverable: "Mapa visual anotado".to_string(),
+                        objective: Some("Explicar el ciclo de Krebs con un mapa propio".to_string()),
                         interactive_blocks: vec!["interactive_visual_anchor".to_string(), "metacognitive_closure".to_string()],
                     }],
                 }],
@@ -618,6 +619,96 @@
         assert_eq!(payload.blocks[0].block_type, DynamicBlockType::AnchoredMicroTheory);
         assert_eq!(*runner.block_calls.lock().unwrap(), 3, "burned the full attempt budget before the backstop");
         assert_eq!(*runner.audit_calls.lock().unwrap(), 3, "every attempt reached the semantic critic");
+    }
+
+    /// The repair path behind the notebook's "Este bloque no se pudo mostrar
+    /// (formato inesperado) → Regenerar este bloque" affordance: the broken
+    /// block is regenerated ON ITS OWN row — same id, same position, same
+    /// type — and the whole class comes back so the UI re-renders in place.
+    /// The scripted first block is a GATE so `should_auto_chain` never spawns
+    /// a background chain that would eat the replacement scripted below.
+    #[tokio::test]
+    async fn regenerating_a_broken_block_repairs_it_in_place_without_moving_the_sequence() {
+        let store = NotebookStore::open_in_memory().expect("store");
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(vec![Some(prediction_gate("B")), Some(prediction_gate("A"))].into()),
+            ..Default::default()
+        });
+        let service = service_with_store(store.clone(), runner.clone());
+        let class_id = first_class_id(&service);
+
+        let started = service.start_class_notebook(None, &class_id).await.expect("first block");
+        assert_eq!(started.blocks.len(), 1);
+        let broken = started.blocks[0].clone();
+        assert_eq!(broken.block_type, DynamicBlockType::InteractivePredictionGate);
+        let broken_json = serde_json::json!({"blockType": "interactive_prediction_gate", "broken": true});
+        store.replace_block_payload(&broken.id, broken.block_type, &broken_json).expect("corrupt it");
+
+        let payload = service.regenerate_block(None, &broken.id).await.expect("regenerated");
+
+        assert_eq!(payload.blocks.len(), 1, "nothing was appended");
+        let repaired = &payload.blocks[0];
+        assert_eq!(repaired.id, broken.id, "same row");
+        assert_eq!(repaired.order_index, broken.order_index, "same position");
+        assert_eq!(repaired.block_type, broken.block_type, "same type");
+        assert_eq!(repaired.status, BlockStatus::Ready);
+        assert!(repaired.content_json.get("broken").is_none(), "the malformed payload is gone");
+        assert!(repaired.content_json.get("question").is_some(), "a renderable payload took its place");
+        assert_eq!(
+            payload.document.current_block_index, started.document.current_block_index,
+            "the gate cursor never moved"
+        );
+        assert_eq!(*runner.block_calls.lock().unwrap(), 2, "one initial generation + one repair");
+    }
+
+    /// `required_block_type` is what keeps a repair from silently swapping a
+    /// gate for a content block: a candidate of any other type is rejected
+    /// deterministically (no critic turn spent) until the right one arrives.
+    #[tokio::test]
+    async fn regenerating_rejects_a_wrong_block_type_until_the_required_one_arrives() {
+        let store = NotebookStore::open_in_memory().expect("store");
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(vec![Some(prediction_gate("B")), Some(micro_theory()), Some(prediction_gate("A"))].into()),
+            ..Default::default()
+        });
+        let service = service_with_store(store.clone(), runner.clone());
+        let class_id = first_class_id(&service);
+
+        let started = service.start_class_notebook(None, &class_id).await.expect("first block");
+        let broken = started.blocks[0].clone();
+        store.replace_block_payload(&broken.id, broken.block_type, &serde_json::json!({"broken": true})).expect("corrupt it");
+
+        let payload = service.regenerate_block(None, &broken.id).await.expect("recovers on the required type");
+
+        assert_eq!(payload.blocks[0].block_type, DynamicBlockType::InteractivePredictionGate, "type pinned to the broken one");
+        assert_eq!(*runner.block_calls.lock().unwrap(), 3, "initial + rejected wrong type + accepted replacement");
+    }
+
+    /// Never producing a valid candidate must NOT leave a half-written block
+    /// behind: the broken content stays exactly as it was and the caller gets
+    /// an error it can show next to the button.
+    #[tokio::test]
+    async fn a_regeneration_that_never_produces_a_valid_block_fails_leaving_the_broken_content_untouched() {
+        let store = NotebookStore::open_in_memory().expect("store");
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(vec![Some(prediction_gate("B"))].into()),
+            ..Default::default()
+        });
+        let service = service_with_store(store.clone(), runner.clone());
+        let class_id = first_class_id(&service);
+
+        let started = service.start_class_notebook(None, &class_id).await.expect("first block");
+        let broken = started.blocks[0].clone();
+        let broken_json = serde_json::json!({"blockType": "interactive_prediction_gate", "broken": true});
+        store.replace_block_payload(&broken.id, broken.block_type, &broken_json).expect("corrupt it");
+
+        let err = service.regenerate_block(None, &broken.id).await.expect_err("must surface, not fabricate");
+        assert!(matches!(err, AppError::AgentExecutionFailed(_)), "{err:?}");
+        assert_eq!(*runner.block_calls.lock().unwrap(), 4, "initial + the full repair retry budget");
+
+        let progress = service.get_class_notebook_progress(&class_id).expect("progress");
+        assert_eq!(progress.blocks.len(), 1, "no block was appended or dropped");
+        assert_eq!(progress.blocks[0].content_json, broken_json, "the broken payload is untouched until a valid one lands");
     }
 
     #[tokio::test]

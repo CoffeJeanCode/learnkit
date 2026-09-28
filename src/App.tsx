@@ -1,47 +1,42 @@
 import { useEffect } from "react";
 import { Header } from "./components/Header";
 import { ClassNotebookView } from "./features/notebook/ClassNotebookView";
+import { SessionPlanView } from "./features/notebook/SessionPlanView";
 import { ProvidersView } from "./features/providers/ProvidersView";
 import { RoadmapView } from "./features/roadmap/RoadmapView";
-import { listCourseClasses, listCourses } from "./lib/tauri";
-import { useNotebookNav } from "./stores/notebook";
+import { readActiveSessionId, useRoadmap } from "./stores/roadmap";
 import { useUi } from "./stores/ui";
 import "./styles.css";
 
-// Single-column layout: top bar (brand + session/settings actions) over the
-// active view. No sidebar — the product is one onboarding flow.
+// Single-column layout: top bar (brand + the active session's section tabs)
+// over the active view. No sidebar — the product is one onboarding flow.
 //
-// Landing rule: if the notebook store already has classes (a previous plan
-// was sealed and imported), land on the classes view — not on an empty
-// roadmap prompt. Otherwise the roadmap is the landing.
+// Landing rule: reopen the session the student was last inside (persisted as
+// `learnkit-active-session`) and land on its Conversación. The guess this
+// replaces — "whichever course is newest in SQLite" — is what left a dead
+// Clases tab standing after its session was deleted. With no persisted
+// session (fresh install, or it was deleted) the roadmap prompt is the
+// landing, and no session-scoped tab exists at all.
 export default function App() {
   const view = useUi((s) => s.view);
   const setView = useUi((s) => s.setView);
-  const openNotebooks = useNotebookNav((s) => s.open);
+  const openSession = useRoadmap((s) => s.openSession);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        const courses = await listCourses();
-        if (cancelled || courses.length === 0) return;
-        const classes = await listCourseClasses(courses[0].id);
-        if (cancelled || classes.length === 0) return;
-        // Resume the last class the student was reading (persisted by the
-        // notebook store), falling back to the first class when it's stale —
-        // the class may belong to a course that's no longer the first one.
-        const restored = useNotebookNav.getState().activeClassId;
-        const target = classes.some((c) => c.id === restored) ? restored! : classes[0].id;
-        openNotebooks(classes, target, courses[0].id);
-        setView("notebook");
-      } catch {
-        // Backend warming up or store empty — roadmap stays the landing.
-      }
+      const activeId = readActiveSessionId();
+      if (!activeId) return;
+      // `openSession` restores the conversation AND loads that session's
+      // classes (see the roadmap store) — it swallows its own errors, so a
+      // vanished session just leaves us on the roadmap landing.
+      await openSession(activeId);
+      if (!cancelled) setView("roadmap");
     })();
     return () => {
       cancelled = true;
     };
-  }, [openNotebooks, setView]);
+  }, [openSession, setView]);
 
   return (
     <div className="app">
@@ -51,6 +46,8 @@ export default function App() {
           <ProvidersView />
         ) : view === "notebook" ? (
           <ClassNotebookView />
+        ) : view === "plan" ? (
+          <SessionPlanView />
         ) : (
           <RoadmapView />
         )}

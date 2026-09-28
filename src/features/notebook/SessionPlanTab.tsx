@@ -1,4 +1,5 @@
 import { ClassPath } from "../../components/ClassPath";
+import { MicromoduleItem } from "../../components/MicromoduleItem";
 import { ENTRY_LEVEL_LABEL } from "../../lib/schemas";
 import type { ClassRecord, RoadmapSession } from "../../lib/schemas";
 
@@ -22,6 +23,7 @@ export function SessionPlanTab({
   activeClassId,
   onSelectClass,
   onOpenConversation,
+  error,
 }: {
   session: RoadmapSession | null;
   loading: boolean;
@@ -29,6 +31,9 @@ export function SessionPlanTab({
   activeClassId: string | null;
   onSelectClass: (classId: string) => void;
   onOpenConversation: () => void;
+  /** Load failure for the session's classes (surfaced by the container view
+   *  — this component owns no data, so it can't retry on its own). */
+  error?: string | null;
 }) {
   const activeClass = activeClassId ? classes.find((c) => c.id === activeClassId) : undefined;
   const resumeButton = activeClassId ? (
@@ -36,6 +41,7 @@ export function SessionPlanTab({
       Retomar “{activeClass?.title ?? "la clase"}”
     </button>
   ) : null;
+  const errorBanner = error ? <div className="alert error">{error}</div> : null;
 
   if (loading) {
     return (
@@ -61,6 +67,7 @@ export function SessionPlanTab({
             {resumeButton}
           </div>
         </div>
+        {errorBanner}
         {classes.length > 0 && (
           <div className="card class-path-card">
             <div className="card-head">
@@ -92,6 +99,8 @@ export function SessionPlanTab({
           {resumeButton}
         </div>
       </div>
+
+      {errorBanner}
 
       {/* How you got here: the three steps of the journey, each one backed
           by the card it produced. */}
@@ -158,13 +167,7 @@ export function SessionPlanTab({
               — {m.deliverable}
               <ul className="dod-list">
                 {m.micromodules.map((mod, i) => (
-                  <li key={i} className="done">
-                    <strong>
-                      {mod.label} ({mod.hours} h)
-                    </strong>{" "}
-                    — {mod.deliverable}.{" "}
-                    {mod.interactiveBlocks.map((b) => b.replace(/_/g, " ")).join(" · ")}
-                  </li>
+                  <MicromoduleItem key={i} mod={mod} className="done" />
                 ))}
               </ul>
             </li>

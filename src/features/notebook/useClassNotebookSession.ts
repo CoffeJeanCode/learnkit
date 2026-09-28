@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { GenerationStage } from "../../components/AgentLoader";
 import type { GateResult, GateSubmission, NotebookBlock, NotebookBlockEvent, NotebookDocument } from "../../lib/schemas";
-import { onAgentEvent, onNotebookBlockEvent, retryPendingBlock as retryPendingBlockCommand, startClassNotebook, submitGateResponse, tauriError } from "../../lib/tauri";
+import { onAgentEvent, onNotebookBlockEvent, regenerateNotebookBlock, retryPendingBlock as retryPendingBlockCommand, startClassNotebook, submitGateResponse, tauriError } from "../../lib/tauri";
 
 export type BufferState = "idle" | "generating" | "error";
 
@@ -34,6 +34,7 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
   // generator run without a block boundary → reintentando) so the loader
   // narrates what the model is actually doing instead of looping one line.
   const [stage, setStage] = useState<GenerationStage>("preparando");
+  const [regeneratingBlockId, setRegeneratingBlockId] = useState<string | null>(null);
   const documentIdRef = useRef<string | null>(null);
   const generatorStartsRef = useRef(0);
   const blockBoundaryRef = useRef(false);
@@ -152,6 +153,25 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
     return result;
   };
 
+  /** Repairs a block whose stored JSON the renderer can't display anymore:
+   *  the backend regenerates it IN PLACE (same id, position and block type)
+   *  and returns the whole class, which replaces local state wholesale —
+   *  the only reliable refresh, since the block's id never changes. Throws
+   *  the backend's message on failure so the caller can show it on the card.
+   */
+  const regenerateBlock = async (blockId: string) => {
+    setRegeneratingBlockId(blockId);
+    try {
+      const payload = await regenerateNotebookBlock(blockId);
+      setDocument(payload.document);
+      setBlocks(sortByOrder(payload.blocks));
+    } catch (e) {
+      throw new Error(tauriError(e).message);
+    } finally {
+      setRegeneratingBlockId(null);
+    }
+  };
+
   const retryPendingBlock = async () => {
     const documentId = documentIdRef.current;
     if (!documentId) return;
@@ -165,5 +185,17 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
     }
   };
 
-  return { document, blocks, bufferState, bufferError, loading, error, stage, submitGate, retryPendingBlock };
+  return {
+    document,
+    blocks,
+    bufferState,
+    bufferError,
+    loading,
+    error,
+    stage,
+    submitGate,
+    retryPendingBlock,
+    regenerateBlock,
+    regeneratingBlockId,
+  };
 }

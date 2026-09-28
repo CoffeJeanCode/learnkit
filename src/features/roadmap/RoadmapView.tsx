@@ -4,6 +4,7 @@ import { ThinkingSketch, ToolSketch } from "../../components/AgentLoader";
 import { ClassPath } from "../../components/ClassPath";
 import { DiagnosticBatteryCard } from "../../components/DiagnosticBatteryCard";
 import { DiagnosticBatteryStage } from "../../components/DiagnosticBatteryStage";
+import { MicromoduleItem } from "../../components/MicromoduleItem";
 import { ENTRY_LEVEL_LABEL } from "../../lib/schemas";
 import type { ClassRecord, RoadmapPhase } from "../../lib/schemas";
 import { ensureCourseImported, listCourseClasses, onAgentEvent, tauriError } from "../../lib/tauri";
@@ -143,57 +144,45 @@ export function RoadmapView() {
     setInput("");
   }, [sessionId]);
 
-  // The agent is autonomous: the instant a session is sealed — whether it
-  // just sealed this turn, or it's an old plan reopened from the drawer —
-  // the course + first class's notebook already exist in SQLite (see
-  // `RoadmapService::seal_session`). Land directly in that roadmap/notebook
-  // view (which carries the plan as a side note plus the full class path,
-  // see `ClassNotebookView`) rather than stopping on this chat/plan screen:
-  // the plan screen is for the live conversation, not a second landing page
-  // for a plan that already exists.
   const courseId = session?.imported_course_id;
   const firstClassId = session?.first_class_id;
+
+  // Landing on the seal itself: when THIS turn is what sealed the session,
+  // the plan just became real, so the student is taken to the Plan section —
+  // the header owns that section now (`SessionPlanView`), which is also what
+  // makes this jump safe: it fires on the one-shot `justSealed` transition
+  // flag, never on a re-mount. The old code keyed on `status === "sealed"`,
+  // so coming BACK here (e.g. "← Ver conversación" from Plan) re-fired it and
+  // bounced the student straight out of the screen they'd just asked for.
+  const justSealed = useRoadmap((s) => s.justSealed);
+  const consumeJustSealed = useRoadmap((s) => s.consumeJustSealed);
   useEffect(() => {
-    if (session?.status !== "sealed") return;
+    if (!justSealed || !session) return;
+    if (!consumeJustSealed()) return;
     let cancelled = false;
-
-    const openClass = (cId: string, clsId: string) => {
-      setOpeningNotebook(true);
-      listCourseClasses(cId)
-        .then((classes) => {
-          if (cancelled) return;
-          openNotebooks(classes, clsId, cId);
-          setView("notebook");
-        })
-        .catch((e) => {
-          if (!cancelled) setNotebookError(tauriError(e).message);
-        })
-        .finally(() => {
-          if (!cancelled) setOpeningNotebook(false);
-        });
+    const land = () => {
+      if (!cancelled) setView("plan");
     };
-
-    if (courseId && firstClassId) {
-      openClass(courseId, firstClassId);
-    } else {
-      ensureCourseImported(session.session_id)
-        .then((recovered) => {
-          if (cancelled) return;
-          setSession(recovered);
-          if (recovered.imported_course_id && recovered.first_class_id) {
-            openClass(recovered.imported_course_id, recovered.first_class_id);
-          }
-        })
-        .catch((e) => {
-          if (!cancelled) setNotebookError(tauriError(e).message);
-        });
+    // Guaranteed at seal time for anything sealed through the gates; the
+    // recovery only matters for sessions sealed before the import existed.
+    if (courseId) {
+      land();
+      return;
     }
-
+    ensureCourseImported(session.session_id)
+      .then((recovered) => {
+        if (cancelled) return;
+        setSession(recovered);
+        land();
+      })
+      .catch((e) => {
+        if (!cancelled) setNotebookError(tauriError(e).message);
+      });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session?.status, courseId, firstClassId]);
+  }, [justSealed, session?.session_id, courseId]);
 
   // Fallback only: if the auto-navigate above fails (surfaced via
   // `notebookError`), this still lists the classes so the "Ver tu primera
@@ -470,13 +459,7 @@ export function RoadmapView() {
                     — {m.deliverable}
                     <ul className="dod-list">
                       {m.micromodules.map((mod, i) => (
-                        <li key={i}>
-                          <strong>
-                            {mod.label} ({mod.hours} h)
-                          </strong>{" "}
-                          — {mod.deliverable}.{" "}
-                          {mod.interactiveBlocks.map((b) => b.replace(/_/g, " ")).join(" · ")}
-                        </li>
+                        <MicromoduleItem key={i} mod={mod} />
                       ))}
                     </ul>
                   </li>
@@ -515,13 +498,7 @@ export function RoadmapView() {
                     — {m.deliverable}
                     <ul className="dod-list">
                       {m.micromodules.map((mod, i) => (
-                        <li key={i} className="done">
-                          <strong>
-                            {mod.label} ({mod.hours} h)
-                          </strong>{" "}
-                          — {mod.deliverable}.{" "}
-                          {mod.interactiveBlocks.map((b) => b.replace(/_/g, " ")).join(" · ")}
-                        </li>
+                        <MicromoduleItem key={i} mod={mod} className="done" />
                       ))}
                     </ul>
                   </li>

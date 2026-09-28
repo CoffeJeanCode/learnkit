@@ -126,6 +126,84 @@ use super::*;
         let _ = std::fs::remove_dir_all(&harness.dir);
     }
 
+    /// The heart of the "borré la sesión y las clases seguían ahí" fix:
+    /// deleting a SEALED session must also delete the course it imported,
+    /// with its classes/notebooks — not just the session JSON.
+    #[tokio::test]
+    async fn delete_session_cascades_to_the_course_it_imported() {
+        let (harness, sid) = seal_one_session().await;
+        let service = &harness.service;
+        let course_id = service
+            .get_session(&sid)
+            .expect("session")
+            .imported_course_id
+            .expect("sealed session owns a course");
+
+        assert_eq!(service.notebook_store.list_courses().expect("courses").len(), 1);
+        assert!(!service.notebook_store.list_classes_for_course(&course_id).expect("classes").is_empty());
+
+        service.delete_session(&sid).expect("delete");
+
+        assert!(service.store.load_roadmap_session(&sid).expect("load").is_none(), "session gone");
+        assert!(service.notebook_store.list_courses().expect("courses").is_empty(), "course cascaded away");
+        assert!(service.notebook_store.list_classes_for_course(&course_id).expect("classes").is_empty());
+        let _ = std::fs::remove_dir_all(&harness.dir);
+    }
+
+    /// Startup sweep: courses no surviving session references (deleted
+    /// before the cascade existed) are removed; the owned one survives.
+    #[tokio::test]
+    async fn sweep_orphan_courses_removes_unreferenced_courses_only() {
+        let (harness, sid) = seal_one_session().await;
+        let service = &harness.service;
+        let owned_id = service
+            .get_session(&sid)
+            .expect("session")
+            .imported_course_id
+            .expect("sealed session owns a course");
+        // Two orphans: seeded directly in the notebook store, exactly the
+        // shape a pre-cascade deletion left behind.
+        service.notebook_store.create_course("Huérfano A", "Meta", 2).expect("orphan a");
+        service.notebook_store.create_course("Huérfano B", "Meta", 2).expect("orphan b");
+
+        let removed = service.sweep_orphan_courses().expect("sweep");
+
+        assert_eq!(removed, 2, "only the two orphans");
+        let listed = service.notebook_store.list_courses().expect("courses");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, owned_id, "the session's own course survives");
+        // Idempotent on a second launch.
+        assert_eq!(service.sweep_orphan_courses().expect("re-sweep"), 0);
+        let _ = std::fs::remove_dir_all(&harness.dir);
+    }
+
+    /// Seals one session through the real gates (absolute_zero skip path),
+    /// returning the harness and the session id. Shared by the cascade/sweep
+    /// tests so both exercise the ACTUAL import, not a seeded fake.
+    async fn seal_one_session() -> (RoadmapServiceHarness, String) {
+        let step1 = ScriptedStep {
+            text: "listo".to_string(),
+            assessment: Some(full_assessment("Ciclo de Krebs", 4, 3.0, EntryLevel::AbsoluteZero)),
+            diagnostic_battery: None,
+            propose_syllabus_plan: Some(ProposeSyllabusPlanArgs {
+                core_focus: "Lo esencial".to_string(),
+                identified_needs: vec!["Entender el flujo".to_string()],
+                learning_strategy: "Guiado".to_string(),
+                syllabus: full_syllabus(4, 3.0, "Ciclo de Krebs"),
+                closing_question: "¿Arrancamos así?".to_string(),
+            }),
+            confirm_syllabus_plan: None,
+        };
+        let step2 = full_confirm_step("listo");
+        let harness = service_with_runner(Arc::new(ScriptedRunner::new(vec![step1, step2])));
+        let r0 = harness.service.start_session(None).await.expect("start ok");
+        let sid = r0.session.session_id.clone();
+        harness.service.send_message(None, &sid, "Ciclo de Krebs, 4 semanas, 3h, no sé nada").await.expect("turn ok");
+        let sealed = harness.service.send_message(None, &sid, "Sí").await.expect("confirm turn ok").session;
+        assert_eq!(sealed.status, SessionStatus::Sealed);
+        (harness, sid)
+    }
+
     #[tokio::test]
     async fn conversation_log_persists_user_and_assistant_turns() {
         let step = ScriptedStep { text: "Respuesta del mentor".to_string(), ..Default::default() };

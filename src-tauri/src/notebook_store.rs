@@ -48,7 +48,8 @@ CREATE TABLE IF NOT EXISTS classes (
     class_number INTEGER NOT NULL,
     title TEXT NOT NULL,
     order_index INTEGER NOT NULL,
-    hours REAL NOT NULL DEFAULT 0
+    hours REAL NOT NULL DEFAULT 0,
+    objective TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_classes_milestone ON classes(milestone_id);
 
@@ -165,6 +166,12 @@ fn migrate_add_class_micromodule_columns(conn: &Connection) -> AppResult<()> {
 
     if has_table("classes")? && !has_column("classes", "hours")? {
         conn.execute("ALTER TABLE classes ADD COLUMN hours REAL NOT NULL DEFAULT 0", [])?;
+    }
+    // The per-micromodule learning objective shown in the plan and in the
+    // class notebook's header — nullable on purpose: classes imported before
+    // `Micromodule::objective` existed simply render no objective line.
+    if has_table("classes")? && !has_column("classes", "objective")? {
+        conn.execute("ALTER TABLE classes ADD COLUMN objective TEXT", [])?;
     }
     if has_table("notebook_documents")? && !has_column("notebook_documents", "pedagogical_rationale")? {
         conn.execute("ALTER TABLE notebook_documents ADD COLUMN pedagogical_rationale TEXT", [])?;
@@ -315,6 +322,7 @@ impl NotebookStore {
             title: title.to_string(),
             order_index,
             hours,
+            objective: None,
             complete: false,
         };
         self.lock().execute(
@@ -322,6 +330,18 @@ impl NotebookStore {
             params![c.id, c.milestone_id, c.class_number, c.title, c.order_index, c.hours],
         )?;
         Ok(c)
+    }
+
+    /// Stamps a class with its micromodule's learning objective right after
+    /// [`create_class`] — a separate call rather than a 6th parameter so the
+    /// (many) tests that don't care about objectives keep their call sites.
+    /// `objective` is `None`-tolerant: a syllabus sealed before
+    /// `Micromodule::objective` existed just leaves the column NULL, which
+    /// the UI renders as "no objective line".
+    pub fn set_class_objective(&self, class_id: &str, objective: Option<&str>) -> AppResult<()> {
+        self.lock()
+            .execute("UPDATE classes SET objective = ?1 WHERE id = ?2", params![objective, class_id])?;
+        Ok(())
     }
 
     /// Every course, newest first — what the frontend uses on startup to
@@ -346,6 +366,40 @@ impl NotebookStore {
         Ok(rows)
     }
 
+    /// Deletes a course AND everything hanging off it (milestones, classes,
+    /// documents, blocks) — the FK chain is `ON DELETE CASCADE` with
+    /// `foreign_keys=ON` (see [`Self::init`]), so removing the root row is
+    /// the whole operation. The ownership side of that cascade lives in
+    /// `RoadmapService::delete_session`: a session owns its course, so
+    /// deleting the session deletes this too.
+    pub fn delete_course(&self, course_id: &str) -> AppResult<()> {
+        self.lock().execute("DELETE FROM courses WHERE id = ?1", params![course_id])?;
+        Ok(())
+    }
+
+    /// Removes every course that no session references anymore — the
+    /// startup sweep for the "borré la sesión y las clases quedaron" bug.
+    /// `owned_course_ids` is what the surviving roadmap sessions point at
+    /// (`RoadmapSession::imported_course_id`); anything else in `courses`
+    /// is an orphan from a session deleted before the cascade existed.
+    /// Returns how many courses were removed (for logging/auditing).
+    pub fn delete_courses_except(&self, owned_course_ids: &[String]) -> AppResult<usize> {
+        let conn = self.lock();
+        let mut removed = 0usize;
+        {
+            let mut stmt = conn.prepare("SELECT id FROM courses")?;
+            let ids: Vec<String> = stmt.query_map([], |row| row.get(0))?.collect::<Result<_, _>>()?;
+            drop(stmt);
+            for id in ids {
+                if owned_course_ids.iter().any(|owned| owned == &id) {
+                    continue;
+                }
+                removed += conn.execute("DELETE FROM courses WHERE id = ?1", params![id])?;
+            }
+        }
+        Ok(removed)
+    }
+
     /// Every class for a course, ordered by `order_index` — what the
     /// frontend uses to link "open notebook" per week right after import.
     pub fn list_classes_for_course(&self, course_id: &str) -> AppResult<Vec<ClassRecord>> {
@@ -355,7 +409,7 @@ impl NotebookStore {
         let rows = {
             let conn = self.lock();
             let mut stmt = conn.prepare(
-                "SELECT c.id, c.milestone_id, c.class_number, c.title, c.order_index, c.hours
+                "SELECT c.id, c.milestone_id, c.class_number, c.title, c.order_index, c.hours, c.objective
                  FROM classes c JOIN syllabus_milestones m ON m.id = c.milestone_id
                  WHERE m.course_id = ?1 ORDER BY c.order_index ASC",
             )?;
@@ -367,6 +421,7 @@ impl NotebookStore {
                     title: row.get(3)?,
                     order_index: row.get(4)?,
                     hours: row.get(5)?,
+                    objective: row.get(6)?,
                     complete: false,
                 })
             })?;
@@ -398,7 +453,7 @@ impl NotebookStore {
             "SELECT
                 co.id, co.title, co.target_goal, co.total_weeks, co.created_at_ms,
                 m.id, m.course_id, m.week_number, m.title, m.deliverable_goal,
-                cl.id, cl.milestone_id, cl.class_number, cl.title, cl.order_index, cl.hours
+                cl.id, cl.milestone_id, cl.class_number, cl.title, cl.order_index, cl.hours, cl.objective
              FROM classes cl
              JOIN syllabus_milestones m ON m.id = cl.milestone_id
              JOIN courses co ON co.id = m.course_id
@@ -427,6 +482,7 @@ impl NotebookStore {
                         title: row.get(13)?,
                         order_index: row.get(14)?,
                         hours: row.get(15)?,
+                        objective: row.get(16)?,
                         complete: false,
                     },
                 })
@@ -758,6 +814,65 @@ impl NotebookStore {
         tx.commit()?;
         Ok(())
     }
+
+    /// Replaces ONE block's payload in place — the "regenerate this broken
+    /// block" path. Keeps `id`, `order_index` and `document_id`, so the gate
+    /// cursor, the pacing and the student's position in the class are all
+    /// untouched (blocks only ever get appended, so re-inserting the
+    /// replacement would push it past every gate behind it). A block that had
+    /// already been graded `Passed`/`Escalated` keeps that status — the grade
+    /// stands regardless of the new content — while anything else resets to
+    /// `Ready` with a clean attempt counter and no stale feedback, so the
+    /// student meets a fresh, gradeable block. Errors with `InvalidInput`
+    /// when `block_id` doesn't exist.
+    pub fn replace_block_payload(
+        &self,
+        block_id: &str,
+        block_type: DynamicBlockType,
+        content_json: &serde_json::Value,
+    ) -> AppResult<NotebookBlock> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let (document_id, previous_status): (String, String) = tx
+            .query_row(
+                "SELECT document_id, status FROM notebook_blocks WHERE id = ?1",
+                params![block_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|_| AppError::InvalidInput(format!("no existe el bloque {block_id}")))?;
+        let graded = matches!(
+            BlockStatus::parse(&previous_status),
+            Some(BlockStatus::Passed) | Some(BlockStatus::Escalated)
+        );
+        let (status, attempts, feedback) = if graded {
+            (
+                BlockStatus::parse(&previous_status).unwrap_or(BlockStatus::Passed),
+                None::<i64>,
+                None::<&str>,
+            )
+        } else {
+            (BlockStatus::Ready, Some(0i64), None)
+        };
+        let content_text = serde_json::to_string(content_json).map_err(|e| AppError::Persistence(e.to_string()))?;
+        tx.execute(
+            "UPDATE notebook_blocks SET block_type = ?1, content_json = ?2, status = ?3,
+                                        attempt_count = COALESCE(?4, attempt_count), last_feedback = ?5
+             WHERE id = ?6",
+            params![block_type.as_str(), content_text, status.as_str(), attempts, feedback, block_id],
+        )?;
+        tx.execute(
+            "UPDATE notebook_documents SET updated_at_ms = ?1 WHERE id = ?2",
+            params![now_ms(), document_id],
+        )?;
+        let block = tx.query_row(
+            "SELECT id, document_id, block_type, content_json, order_index, status, attempt_count, last_feedback
+             FROM notebook_blocks WHERE id = ?1",
+            params![block_id],
+            row_to_block,
+        )?;
+        tx.commit()?;
+        Ok(block)
+    }
 }
 
 fn row_to_document(row: &rusqlite::Row) -> rusqlite::Result<NotebookDocument> {
@@ -816,6 +931,7 @@ pub fn import_syllabus_into_store(
         for (i, module) in m.micromodules.iter().enumerate() {
             let class_title = format!("Semana {}: {}", m.week, module.label);
             let class = store.create_class(&milestone.id, (i + 1) as u16, &class_title, order_index, module.hours)?;
+            store.set_class_objective(&class.id, module.objective.as_deref())?;
             order_index += 1;
             if first_class_id.is_none() {
                 first_class_id = Some(class.id.clone());

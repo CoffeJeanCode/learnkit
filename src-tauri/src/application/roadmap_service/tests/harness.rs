@@ -101,6 +101,7 @@ use super::*;
                         label: "Módulo 1".to_string(),
                         hours,
                         deliverable: "Artefacto verificable".to_string(),
+                        objective: Some("Explicar el concepto central del módulo con un ejemplo propio".to_string()),
                         interactive_blocks: vec![
                             "socratic_prediction".to_string(),
                             "hands_on_mission".to_string(),

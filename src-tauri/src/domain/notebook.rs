@@ -527,6 +527,12 @@ pub struct ClassRecord {
     pub title: String,
     pub order_index: u32,
     pub hours: f32,
+    /// The micromodule's learning objective this class was seeded from
+    /// (`Micromodule::objective`) — "qué sabrás hacer al terminar esta
+    /// clase". `None` for classes imported before that field existed; the
+    /// notebook header hides the line instead of showing an empty one.
+    #[serde(default)]
+    pub objective: Option<String>,
     /// DERIVED, never stored: whether this class is already "understood and
     /// practiced" (see [`class_is_complete`]) — recomputed on every
     /// `list_classes_for_course` so the path UI can lock the next class

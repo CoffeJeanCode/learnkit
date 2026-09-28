@@ -87,6 +87,23 @@ pub(super) fn micromodule_violations(week: u16, pace_hours_per_week: f32, module
                 m.deliverable, m.label
             ));
         }
+        match m.objective.as_deref().map(str::trim) {
+            None | Some("") => {
+                v.push(format!(
+                    "el micromodule \"{}\" de la semana {week} no tiene objective — es la frase que dice qué sabrá \
+                     hacer el estudiante al terminarlo (observable, en infinitivo), distinta del deliverable",
+                    m.label
+                ));
+            }
+            Some(objective) if is_vague_deliverable(objective) => {
+                v.push(format!(
+                    "el objective \"{}\" del micromodule \"{}\" (semana {week}) es vago — describe una capacidad \
+                     observable, no \"comprender la teoría\"",
+                    objective, m.label
+                ));
+            }
+            Some(_) => {}
+        }
         if !(3..=4).contains(&m.interactive_blocks.len()) {
             v.push(format!(
                 "el micromodule \"{}\" de la semana {week} tiene {} interactiveBlocks, debe tener 3-4",

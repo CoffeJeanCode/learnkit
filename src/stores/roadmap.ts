@@ -3,6 +3,7 @@ import type { ChatTurn, RoadmapSession, RoadmapSessionSummary } from "../lib/sch
 import {
   answerDiagnosticQuestion,
   deleteRoadmapSession,
+  ensureCourseImported,
   getRoadmapSession,
   listRoadmapSessions,
   renameRoadmapSession,
@@ -13,8 +14,34 @@ import {
   tauriError,
 } from "../lib/tauri";
 import type { ChatMessage } from "../types";
+import { useNotebookNav } from "./notebook";
 
 const HISTORY_FILTER_KEY = "learnkit-restore-history";
+
+/** The session the app is "inside of" — persisted so a relaunch lands back
+ *  on the same session's sections (Conversación | Plan | Clases) instead of
+ *  guessing from whatever course happens to be newest in SQLite. */
+const ACTIVE_SESSION_KEY = "learnkit-active-session";
+
+/** The persisted active session id, or `null` when there isn't one (fresh
+ *  install, or the last active session was deleted). */
+export function readActiveSessionId(): string | null {
+  try {
+    return window.localStorage.getItem(ACTIVE_SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeActiveSessionId(id: string | null): void {
+  try {
+    if (id) window.localStorage.setItem(ACTIVE_SESSION_KEY, id);
+    else window.localStorage.removeItem(ACTIVE_SESSION_KEY);
+  } catch {
+    // Storage unavailable (webview restrictions) — in-memory only, which
+    // just means the session isn't restored after a restart.
+  }
+}
 
 /** Error codes worth retrying: the model never produced output (network
  *  blip, unreachable host, timeout), so the same input can just run again —
@@ -45,6 +72,20 @@ function readHistoryFilter(): boolean {
   } catch {
     return true;
   }
+}
+
+/** Human-readable label for the active-session chip in the header — a mirror
+ *  of Rust `RoadmapSession::display_title` (the session schema itself carries
+ *  no title: only summaries do, and those only exist once the drawer loads). */
+export function displaySessionTitle(session: RoadmapSession | null): string | null {
+  if (!session) return null;
+  const custom = session.custom_title?.trim();
+  if (custom) return custom;
+  const topic = session.learner_profile_card?.topic?.trim();
+  if (topic) return topic;
+  const draftTopic = typeof session.draft.topic === "string" ? session.draft.topic.trim() : "";
+  if (draftTopic) return draftTopic;
+  return "Sesión sin título";
 }
 
 /** Backend `ChatTurn` -> UI `ChatMessage` (same role vocabulary). */
@@ -85,6 +126,13 @@ interface RoadmapState {
   /** Bumped by reset/openSession so late responses from a superseded turn are
    *  discarded instead of resurrecting stale state. */
   epoch: number;
+  /** True only between "the session just sealed" and the UI acting on it —
+   *  the ONE signal that may auto-navigate to the Plan section. A boolean
+   *  one-shot (not a `status === "sealed"` check) on purpose: the old code
+   *  keyed on the status, so re-MOUNTING the view with an already-sealed
+   *  session re-fired the jump and bounced the student out of whatever they
+   *  had deliberately navigated to (the classic "← Ver conversación" loop). */
+  justSealed: boolean;
   /** Saved sessions for the drawer (summaries, newest first). */
   saved: RoadmapSessionSummary[];
   savedLoading: boolean;
@@ -122,6 +170,8 @@ interface RoadmapState {
   /** Replaces the open session in place (e.g. after `ensureCourseImported`
    *  backfills ids on a session sealed before the SQLite import existed). */
   setSession: (session: RoadmapSession) => void;
+  /** Reads (and clears) the one-shot "just sealed" flag. */
+  consumeJustSealed: () => boolean;
   /** Filter toggle: restore saved chat on reopen (persisted). */
   restoreHistory: boolean;
   setRestoreHistory: (on: boolean) => void;
@@ -132,12 +182,17 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
    *  the turn legitimately produced no text, e.g. a mid-battery answer). */
   function applySuccess(epoch: number, result: TurnPayload) {
     if (get().epoch !== epoch) return;
+    // The ONLY place a seal happens under the student's eyes: compare the
+    // session as it was before this turn with the result. Reopening an
+    // already-sealed session (drawer, boot restore) is not a transition.
+    const sealedJustNow = get().session?.status !== "sealed" && result.session.status === "sealed";
     set((s) => ({
       sending: false,
       retryPhase: null,
       retryable: false,
       pendingAnswer: null,
       session: result.session,
+      ...(sealedJustNow ? { justSealed: true } : {}),
       ...(result.message ? { messages: [...s.messages, { role: "assistant" as const, content: result.message }] } : {}),
     }));
   }
@@ -213,6 +268,7 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
     autoRetriesLeft: 0,
     pendingAnswer: null,
     epoch: 0,
+    justSealed: false,
     saved: [],
     savedLoading: false,
     opening: false,
@@ -224,10 +280,11 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
       // settles). A second `start_roadmap_session` would launch a second
       // long-lived LLM call and orphan the first session.
       if (get().sending) return;
-      const epoch = beginTurn({ messages: [], session: null, pendingAnswer: null });
+      const epoch = beginTurn({ messages: [], session: null, pendingAnswer: null, justSealed: false });
       try {
         const { message, session } = await startRoadmapSession();
         if (get().epoch !== epoch) return;
+        writeActiveSessionId(session.session_id);
         set({ session, messages: [{ role: "assistant", content: message }], sending: false, retryPhase: null });
       } catch (e) {
         if (get().epoch !== epoch) return;
@@ -264,7 +321,11 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
       }
     },
 
-    reset: () =>
+    reset: () => {
+      writeActiveSessionId(null);
+      // A new session is a new container: the previous one's classes have
+      // no business staying loaded under the fresh conversation.
+      useNotebookNav.getState().clear();
       set((s) => ({
         session: null,
         messages: [],
@@ -274,8 +335,10 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
         retryPhase: null,
         autoRetriesLeft: 0,
         pendingAnswer: null,
+        justSealed: false,
         epoch: s.epoch + 1,
-      })),
+      }));
+    },
 
     sendOrStart: async (input) => {
       if (!input.trim() || get().sending || get().opening) return;
@@ -342,17 +405,38 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
         retryPhase: null,
         autoRetriesLeft: 0,
         pendingAnswer: null,
+        justSealed: false,
         opening: true,
         epoch,
       });
       try {
-        const session = await getRoadmapSession(id);
+        const loaded = await getRoadmapSession(id);
+        // A session sealed before the SQLite import existed carries no course
+        // ids — the header's Plan/Clases sections need them, so backfill here
+        // (idempotent: it no-ops once the ids are set). No-op for everything
+        // else, including non-sealed sessions (it requires a sealed syllabus).
+        const session =
+          loaded.status === "sealed" && (!loaded.imported_course_id || !loaded.first_class_id)
+            ? await ensureCourseImported(id).catch(() => loaded)
+            : loaded;
         if (get().epoch !== epoch) return;
         // The persisted log restores the conversation; the filter (a UI
         // choice, persisted) mutes the restore without touching the disk copy.
+        writeActiveSessionId(id);
         set({ session, messages: get().restoreHistory ? toChatMessages(session.messages) : [], opening: false });
+        // The header's sections belong to the session now open: load ITS
+        // classes so Plan/Clases stop showing the previous session's course.
+        if (session.imported_course_id) {
+          useNotebookNav.getState().openCourse(session.imported_course_id).catch(() => useNotebookNav.getState().clear());
+        } else {
+          useNotebookNav.getState().clear();
+        }
       } catch (e) {
         if (get().epoch !== epoch) return;
+        // The persisted id pointed at a session that no longer exists (it
+        // was deleted from another window/session) — forget it so the next
+        // launch doesn't fail the same way.
+        if (readActiveSessionId() === id) writeActiveSessionId(null);
         set({ error: tauriError(e).message, opening: false });
       }
     },
@@ -375,7 +459,12 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
     renameSession: async (id, title) => {
       try {
         const updated = await renameRoadmapSession(id, title);
-        set((s) => ({ saved: s.saved.map((x) => (x.session_id === id ? updated : x)) }));
+        set((s) => ({
+          saved: s.saved.map((x) => (x.session_id === id ? updated : x)),
+          // Renaming the OPEN session must move the header chip too — the
+          // chip reads the session, not the drawer's summary list.
+          ...(s.session?.session_id === id ? { session: { ...s.session, custom_title: title } } : {}),
+        }));
       } catch (e) {
         set({ error: tauriError(e).message, retryable: false });
       }
@@ -387,7 +476,14 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
       set({ session });
     },
 
+    consumeJustSealed: () => {
+      const flag = get().justSealed;
+      if (flag) set({ justSealed: false });
+      return flag;
+    },
+
     deleteSession: async (id) => {
+      const wasActive = get().session?.session_id === id || readActiveSessionId() === id;
       try {
         await deleteRoadmapSession(id);
         // Deleting the open conversation drops back to the idle prompt.
@@ -403,10 +499,17 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
                 retryPhase: null,
                 autoRetriesLeft: 0,
                 pendingAnswer: null,
+                justSealed: false,
                 epoch: s.epoch + 1,
               }
             : {}),
         }));
+        if (wasActive) {
+          // The session was this one's container — its course/classes were
+          // cascaded away in the backend, so the nav must not outlive it.
+          writeActiveSessionId(null);
+          useNotebookNav.getState().clear();
+        }
       } catch (e) {
         set({ error: tauriError(e).message, retryable: false });
       }

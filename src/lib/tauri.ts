@@ -201,6 +201,15 @@ export const gradeClosureReflection = (block_id: string, reflection: string) =>
 export const retryPendingBlock = (document_id: string) =>
   invoke<void>("retry_pending_block", { documentId: document_id });
 
+/**
+ * Regenerates ONE already-persisted block whose stored content the renderer
+ * can't display ("formato inesperado"), replacing it in place: same id,
+ * same position, same block type. Returns the refreshed class so the caller
+ * can re-render every block from fresh state.
+ */
+export const regenerateNotebookBlock = (block_id: string) =>
+  invoke("regenerate_notebook_block", { blockId: block_id }).then((v) => NotebookPayloadSchema.parse(v));
+
 export const saveNotebookState = (notebook_id: string, blocks: BlockUpdate[]) =>
   invoke<void>("save_notebook_state", { notebookId: notebook_id, blocks });
 

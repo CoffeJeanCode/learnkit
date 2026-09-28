@@ -49,6 +49,10 @@ export const MicromoduleSchema = z.object({
   label: z.string(),
   hours: z.number(),
   deliverable: z.string(),
+  // What the student will be ABLE TO DO after this module - shown in the
+  // plan and in the class header. Nullish because sessions sealed before
+  // `Micromodule::objective` existed deserialize without the key.
+  objective: z.string().nullish(),
   interactiveBlocks: z.array(z.string()),
 });
 
@@ -178,6 +182,9 @@ export const RoadmapSessionSchema = z.object({
   // Full persisted conversation (user + assistant turns) — `#[serde(default)]`
   // in Rust, so `.default([])` here keeps pre-log snapshots loadable.
   messages: z.array(ChatTurnSchema).default([]),
+  // Student-chosen label for the session (rename in the drawer) — feeds the
+  // header's active-session chip via `displaySessionTitle`.
+  custom_title: z.string().nullable(),
   created_at_ms: z.number(),
   updated_at_ms: z.number(),
 });
@@ -203,6 +210,8 @@ export type EntryLevel = z.infer<typeof EntryLevelSchema>;
 export type LearnerProfileCard = z.infer<typeof LearnerProfileCardSchema>;
 export type DiagnosticSummaryCard = z.infer<typeof DiagnosticSummaryCardSchema>;
 export type RoadmapSyllabusPackage = z.infer<typeof RoadmapSyllabusPackageSchema>;
+export type Milestone = z.infer<typeof MilestoneSchema>;
+export type Micromodule = z.infer<typeof MicromoduleSchema>;
 export type SealedRoadmap = z.infer<typeof SealedRoadmapSchema>;
 export type ProposedPlan = z.infer<typeof ProposedPlanSchema>;
 export type ChatTurn = z.infer<typeof ChatTurnSchema>;
@@ -249,7 +258,12 @@ export const SvgTagSchema = z.enum(["rect", "circle", "line", "path", "text"]);
 export const SvgElementSchema = z.object({
   tag: SvgTagSchema,
   props: z.record(z.string(), z.unknown()),
-  label: z.string().optional(),
+  // Nullish, not optional: Rust's `SvgElement::label` is `Option<String>` and
+  // the model emits an explicit `"label": null` for every non-text element
+  // (rect, line, path). `.optional()` only tolerates the ABSENT key, so a
+  // null label used to fail the whole block parse and render it as
+  // "formato inesperado".
+  label: z.string().nullish(),
 });
 
 // A semantic cluster of elements in a scientific illustration (e.g. one
@@ -273,7 +287,7 @@ export const StaticVisualSpecSchema = z.discriminatedUnion("renderEngine", [
     viewBox: z.string().default("0 0 800 450"),
     elements: z.array(SvgElementSchema).default([]),
     groups: z.array(SvgGroupSchema).default([]),
-    pedagogicalFocus: z.string().optional(),
+    pedagogicalFocus: z.string().nullish(),
     caption: z.string(),
   }),
   z.object({
@@ -335,7 +349,8 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
     branches: z.array(ScenarioBranchSchema),
     // Optional — only present when a diagram genuinely clarifies the
     // scenario itself (see `notebook_agent`'s system prompt).
-    visualAid: StaticVisualSpecSchema.optional(),
+    // Nullish — Rust's `Option<StaticVisualSpec>` takes an explicit null.
+    visualAid: StaticVisualSpecSchema.nullish(),
   }),
   z.object({
     blockType: z.literal("heuristic_error_audit"),
@@ -346,7 +361,8 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
     // `redact_block` — so this can't be required.
     modelSolution: z.string().optional(),
     // Optional — for a flaw that's spatial/visual rather than purely textual.
-    visualAid: StaticVisualSpecSchema.optional(),
+    // Nullish — Rust's `Option<StaticVisualSpec>` takes an explicit null.
+    visualAid: StaticVisualSpecSchema.nullish(),
   }),
   z.object({
     blockType: z.literal("interactive_prediction_gate"),
@@ -357,7 +373,8 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
     // the client at all (see `redact_block`), enforced here at the type
     // level too.
     // Optional — only when the prediction genuinely depends on a diagram.
-    visualAid: StaticVisualSpecSchema.optional(),
+    // Nullish — Rust's `Option<StaticVisualSpec>` takes an explicit null.
+    visualAid: StaticVisualSpecSchema.nullish(),
   }),
   z.object({
     blockType: z.literal("hands_on_mission"),
@@ -367,7 +384,8 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
     scaffoldingHints: z.array(z.string()),
     evaluationRubricSummary: z.array(z.string()),
     // Optional — a reference diagram of the target artifact, when it helps.
-    visualAid: StaticVisualSpecSchema.optional(),
+    // Nullish — Rust's `Option<StaticVisualSpec>` takes an explicit null.
+    visualAid: StaticVisualSpecSchema.nullish(),
   }),
   z.object({
     blockType: z.literal("metacognitive_closure"),
@@ -409,6 +427,10 @@ export const ClassRecordSchema = z.object({
   // This micromodule's own bounded (<=5h) allocation — one class per
   // micromodule now, not one per week (see `Micromodule` above).
   hours: z.number(),
+  // The micromodule's learning objective ("qué sabrás hacer al terminar
+  // esta clase") — null for classes imported before it existed, in which
+  // case the notebook header shows no objective line at all.
+  objective: z.string().nullish(),
   // Derived server-side (`class_is_complete`): every gate resolved plus a
   // revealed closure with a written reflection — the state that unlocks the
   // NEXT class in the sequential path. Older payloads omit it (→ false).

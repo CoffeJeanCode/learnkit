@@ -104,6 +104,7 @@ use super::*;
                     label: "Módulo único".to_string(),
                     hours: 14.0,
                     deliverable: "Artefacto verificable".to_string(),
+                    objective: Some("Explicar el flujo completo del ciclo".to_string()),
                     interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
                 }],
             }],
@@ -134,6 +135,74 @@ use super::*;
         assert!(
             result.session.last_rejection_reasons.iter().any(|r| r.contains("anti-monolito")),
             "rejection must name the anti-monolith rule: {:?}",
+            result.session.last_rejection_reasons
+        );
+        let _ = std::fs::remove_dir_all(&harness.dir);
+    }
+
+    /// Every module must say WHAT the student will be able to DO when it's
+    /// done — the line the plan and the class header both display. A proposal
+    /// that omits it (or words it as a banned vague phrase) is rejected by the
+    /// grounding pass, which is what feeds the correction back to the model.
+    #[tokio::test]
+    async fn a_micromodule_without_an_objective_is_rejected() {
+        let battery = full_battery();
+        let step1 = ScriptedStep {
+            text: "..".to_string(),
+            assessment: Some(full_assessment("Tema", 1, 14.0, EntryLevel::TheoreticalFoundations)),
+            diagnostic_battery: Some(battery.clone()),
+            ..Default::default()
+        };
+        let module = |label: &str, hours: f32, objective: Option<&str>| Micromodule {
+            label: label.to_string(),
+            hours,
+            deliverable: "Artefacto verificable".to_string(),
+            objective: objective.map(str::to_string),
+            interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
+        };
+        // Well-formed EXCEPT for the missing objective: 3 modules summing to
+        // paceHoursPerWeek, none over the 5h anti-monolith cap, so the only
+        // violation the grounding pass can report is the objective itself.
+        let objectiveless_syllabus = RoadmapSyllabusPackage {
+            course_title: "Tema".to_string(),
+            total_weeks: 1,
+            pace_hours_per_week: 14.0,
+            milestones: vec![Milestone {
+                week: 1,
+                title: "Semana 1".to_string(),
+                deliverable: "Entregable de la semana".to_string(),
+                micromodules: vec![
+                    module("Módulo 1", 5.0, None),
+                    module("Módulo 2", 5.0, None),
+                    module("Módulo 3", 4.0, Some("comprender la teoría")), // vague = still rejected
+                ],
+            }],
+        };
+        let step2 = ScriptedStep {
+            text: "..".to_string(),
+            propose_syllabus_plan: Some(ProposeSyllabusPlanArgs {
+                core_focus: "Lo esencial".to_string(),
+                identified_needs: vec!["Entender el flujo".to_string()],
+                learning_strategy: "Guiado".to_string(),
+                syllabus: objectiveless_syllabus,
+                closing_question: "¿Todo bien?".to_string(),
+            }),
+            ..Default::default()
+        };
+        // Queued twice so the in-turn grounding retry can't self-heal it —
+        // the point is that the rejection names the missing objective.
+        let harness = service_with_runner(Arc::new(ScriptedRunner::new(vec![step1, step2.clone(), step2])));
+        let r0 = harness.service.start_session(None).await.expect("start ok");
+        let sid = r0.session.session_id.clone();
+        harness.service.send_message(None, &sid, "Hazlo").await.expect("turn ok");
+
+        let result = answer_all_questions(&harness, &sid, &battery).await;
+
+        assert_eq!(result.session.status, SessionStatus::Active, "a proposal missing objectives must be rejected");
+        assert!(result.session.proposed_plan.is_none(), "no proposal stored while grounding fails");
+        assert!(
+            result.session.last_rejection_reasons.iter().any(|r| r.contains("objective")),
+            "rejection must name the missing objective: {:?}",
             result.session.last_rejection_reasons
         );
         let _ = std::fs::remove_dir_all(&harness.dir);

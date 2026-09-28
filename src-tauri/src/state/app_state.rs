@@ -101,6 +101,15 @@ impl AppState {
         let workflow_service = WorkflowService::new(Arc::clone(&orchestrator));
         let roadmap_service =
             RoadmapService::new(Arc::clone(&orchestrator), store.clone(), notebook_store.clone());
+        // Cleanup for the "borré la sesión y las clases seguían ahí" bug:
+        // courses whose owning session is already gone (deleted before
+        // delete_session cascaded) are removed on every launch, so the
+        // "Clases" section can never show a course no session backs.
+        match roadmap_service.sweep_orphan_courses() {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(removed_courses = n, "swept courses orphaned by deleted sessions"),
+            Err(e) => tracing::warn!(error = %e, "orphan course sweep failed (non-fatal)"),
+        }
         let notebook_service = NotebookService::new(notebook_store, Arc::clone(&orchestrator));
         let lexical_assistant_service = LexicalAssistantService::new(Arc::clone(&orchestrator));
 

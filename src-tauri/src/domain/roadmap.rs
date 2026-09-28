@@ -90,6 +90,15 @@ pub struct Micromodule {
     /// phrase like "comprender la teoría" (see `syllabus_violations`'s
     /// banned-phrase check).
     pub deliverable: String,
+    /// What the student will be ABLE TO DO once this module is done — one
+    /// observable sentence in the infinitive ("Explicar por qué el ciclo
+    /// arranca con acetil-CoA"), answering "¿qué me llevo de este módulo?"
+    /// where `deliverable` answers "¿qué entrego?". Required for every NEW
+    /// proposal (see `syllabus_violations`); nullable only so sessions
+    /// sealed before this field existed keep deserializing (renders as
+    /// "no disponible" instead of breaking the plan).
+    #[serde(default)]
+    pub objective: Option<String>,
     /// 3-4 entries from the fixed methodological catalog (see
     /// `agents::roadmap_agent`'s block catalog and `syllabus_violations`'s
     /// membership check): interactive_visual_anchor | socratic_prediction |
