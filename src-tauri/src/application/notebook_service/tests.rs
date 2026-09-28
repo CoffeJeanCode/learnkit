@@ -315,6 +315,39 @@
     }
 
     #[tokio::test]
+    async fn reset_class_notebook_wipes_the_document_so_a_fresh_start_regenerates_from_scratch() {
+        // 3 scripted blocks: block 1 + the first start's auto-buffered block
+        // 2 (a gate, so the chain stops there) for the ORIGINAL document,
+        // then one more for the fresh document the reset+restart creates.
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(vec![Some(micro_theory()), Some(prediction_gate("B")), Some(micro_theory())].into()),
+            ..Default::default()
+        });
+        let service = service_with(runner.clone());
+        let class_id = first_class_id(&service);
+
+        service.start_class_notebook(None, &class_id).await.expect("first start");
+        let_background_chain_settle().await;
+        assert!(service.get_class_notebook_progress(&class_id).is_ok(), "notebook exists after the first start");
+
+        service.reset_class_notebook(&class_id).expect("reset ok");
+        assert!(
+            service.get_class_notebook_progress(&class_id).is_err(),
+            "no notebook left to resume right after a reset — nothing was regenerated yet"
+        );
+
+        let restarted = service.start_class_notebook(None, &class_id).await.expect("restart after reset");
+        assert_eq!(restarted.blocks.len(), 1, "a plain fresh start, not a resume of anything wiped");
+    }
+
+    #[tokio::test]
+    async fn reset_class_notebook_rejects_an_unknown_class() {
+        let service = service_with(Arc::new(ScriptedNotebookRunner::default()));
+        let err = service.reset_class_notebook("does-not-exist").expect_err("unknown class must error");
+        assert!(matches!(err, crate::error::AppError::InvalidInput(_)), "{err:?}");
+    }
+
+    #[tokio::test]
     async fn a_cursor_left_behind_by_a_lost_race_heals_on_reopen_and_the_gate_becomes_submittable() {
         let runner = Arc::new(ScriptedNotebookRunner {
             blocks: Mutex::new(vec![Some(micro_theory()), Some(prediction_gate("B"))].into()),

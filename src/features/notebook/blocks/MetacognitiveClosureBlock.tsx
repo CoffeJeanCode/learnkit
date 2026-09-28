@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
+import { InlineText, RichText } from "./RichText";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "metacognitive_closure" }>;
 
@@ -77,18 +78,22 @@ export function MetacognitiveClosureBlock({
       {content.predictionComparison && (
         <div className="prediction-comparison">
           <p className="hint">
-            <strong>Predijiste:</strong> {content.predictionComparison.initialPrediction}
+            <strong>Predijiste:</strong> <InlineText text={content.predictionComparison.initialPrediction} />
           </p>
           <p className="hint">
-            <strong>Lo que demostraste:</strong> {content.predictionComparison.finalResult}
+            <strong>Lo que demostraste:</strong> <InlineText text={content.predictionComparison.finalResult} />
           </p>
-          <p>{content.predictionComparison.contrastNarrative}</p>
+          <p>
+            <InlineText text={content.predictionComparison.contrastNarrative} />
+          </p>
         </div>
       )}
-      <p className="block-question">{content.synthesisTask}</p>
+      <RichText className="block-question" text={content.synthesisTask} />
       <ul className="dod-list">
         {content.selfEvaluationChecklist.map((c) => (
-          <li key={c}>{c}</li>
+          <li key={c}>
+            <InlineText text={c} />
+          </li>
         ))}
       </ul>
       <textarea
@@ -112,7 +117,11 @@ export function MetacognitiveClosureBlock({
       </div>
       {busy && <p className="hint">Revisando tu cierre…</p>}
       {error && <p className="hint hint-warn">{error}</p>}
-      {!busy && shownFeedback && <p className={passed ? "hint hint-ok" : "hint hint-warn"}>{shownFeedback}</p>}
+      {!busy && shownFeedback && (
+        <p className={passed ? "hint hint-ok" : "hint hint-warn"}>
+          <InlineText text={shownFeedback} />
+        </p>
+      )}
     </div>
   );
 }

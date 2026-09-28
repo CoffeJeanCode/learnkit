@@ -1,4 +1,5 @@
 import type { DynamicSectionBlock } from "../../../lib/schemas";
+import { InlineText } from "./RichText";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "anchored_micro_theory" }>;
 
@@ -25,18 +26,20 @@ function withoutLeadingMarker(text: string, marker: string): string {
 export function AnchoredMicroTheoryBlock({ content }: { content: Content }) {
   return (
     <div className="notebook-block-body theory-exposition">
-      <h3>{content.title}</h3>
+      <h3>
+        <InlineText text={content.title} />
+      </h3>
       <p className="theory-part theory-hook">
         <span className="theory-part-emoji" aria-hidden="true">🎯</span>
-        {withoutLeadingMarker(content.intuitiveHook, "🎯")}
+        <InlineText text={withoutLeadingMarker(content.intuitiveHook, "🎯")} />
       </p>
       <p className="theory-part theory-rule">
         <span className="theory-part-emoji" aria-hidden="true">📐</span>
-        {withoutLeadingMarker(content.systemRule, "📐")}
+        <InlineText text={withoutLeadingMarker(content.systemRule, "📐")} />
       </p>
       <p className="theory-part theory-error">
         <span className="theory-part-emoji" aria-hidden="true">⚠️</span>
-        {withoutLeadingMarker(content.frequentError, "⚠️")}
+        <InlineText text={withoutLeadingMarker(content.frequentError, "⚠️")} />
       </p>
     </div>
   );

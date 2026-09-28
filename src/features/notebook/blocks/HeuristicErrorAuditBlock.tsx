@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { SubmitGate } from "./index";
+import { InlineText, RichText } from "./RichText";
 import { StaticVisual } from "./StaticVisual";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "heuristic_error_audit" }>;
@@ -43,19 +44,23 @@ export function HeuristicErrorAuditBlock({
 
   return (
     <div className="notebook-block-body">
-      <p>{content.instruction}</p>
-      <p className="hint">{content.flawedRepresentation.context}</p>
+      <RichText text={content.instruction} />
+      <p className="hint">
+        <InlineText text={content.flawedRepresentation.context} />
+      </p>
       {content.visualAid && <StaticVisual visual={content.visualAid} />}
       <pre className="flawed-snippet">{content.flawedRepresentation.buggySnippetOrDiagram}</pre>
       <ul className="dod-list">
         {content.guidingQuestions.map((q) => (
-          <li key={q}>{q}</li>
+          <li key={q}>
+            <InlineText text={q} />
+          </li>
         ))}
       </ul>
       {resolved ? (
         <>
           <p className="hint">Ya identificaste la causa raíz.</p>
-          {content.modelSolution && <p className="block-question">{content.modelSolution}</p>}
+          {content.modelSolution && <RichText className="block-question" text={content.modelSolution} />}
         </>
       ) : (
         <>
@@ -71,7 +76,9 @@ export function HeuristicErrorAuditBlock({
               {busy ? "Calificando…" : "Enviar diagnóstico"}
             </button>
           </div>
-          {!busy && outcome && !outcome.passed && <p className="hint hint-warn">{shownFeedback ?? "Todavía no — inténtalo de nuevo."}</p>}
+          {!busy && outcome && !outcome.passed && (
+            <p className="hint hint-warn">{shownFeedback ? <InlineText text={shownFeedback} /> : "Todavía no — inténtalo de nuevo."}</p>
+          )}
         </>
       )}
     </div>

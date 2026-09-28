@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { SubmitGate } from "./index";
+import { InlineText, RichText } from "./RichText";
 import { StaticVisual } from "./StaticVisual";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "interactive_prediction_gate" }>;
@@ -43,7 +44,7 @@ export function InteractivePredictionGateBlock({
     return (
       <div className="notebook-block-body">
         {content.visualAid && <StaticVisual visual={content.visualAid} />}
-        <p className="block-question">{content.question}</p>
+        <RichText className="block-question" text={content.question} />
         <p className="hint">Ya superaste esta predicción.</p>
       </div>
     );
@@ -54,17 +55,23 @@ export function InteractivePredictionGateBlock({
   return (
     <div className="notebook-block-body">
       {content.visualAid && <StaticVisual visual={content.visualAid} />}
-      <p className="block-question">{content.question}</p>
+      <RichText className="block-question" text={content.question} />
       <div className="prediction-options">
         {content.options.map((opt) => (
           <button key={opt} className={selected === opt ? "btn-primary" : ""} onClick={() => void choose(opt)} disabled={!isActive || busy}>
-            {opt}
+            <InlineText text={opt} />
           </button>
         ))}
       </div>
       {busy && <p className="hint">Calificando…</p>}
-      {!busy && selected && content.conceptualFeedbackMap[selected] && <p className="hint">{content.conceptualFeedbackMap[selected]}</p>}
-      {!busy && outcome && !outcome.passed && <p className="hint hint-warn">{shownFeedback ?? "No es correcto — inténtalo de nuevo."}</p>}
+      {!busy && selected && content.conceptualFeedbackMap[selected] && (
+        <p className="hint">
+          <InlineText text={content.conceptualFeedbackMap[selected]} />
+        </p>
+      )}
+      {!busy && outcome && !outcome.passed && (
+        <p className="hint hint-warn">{shownFeedback ? <InlineText text={shownFeedback} /> : "No es correcto — inténtalo de nuevo."}</p>
+      )}
     </div>
   );
 }

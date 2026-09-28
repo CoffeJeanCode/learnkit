@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { DiagnosticBatteryState } from "../lib/schemas";
 import { getCourseDiagnosticBattery, saveDiagnosticBatteryAnswers, tauriError } from "../lib/tauri";
+import { InlineText } from "../features/notebook/blocks/RichText";
 
 const DIMENSION_LABEL: Record<string, string> = {
   intuition: "Intuición",
@@ -66,7 +67,9 @@ export function DiagnosticBatteryCard({ courseId }: { courseId: string }) {
             <li key={i} className="diagnostic-question">
               <div className="diagnostic-question-head">
                 <span className="badge">{DIMENSION_LABEL[q.dimension] ?? q.dimension}</span>
-                <p className="block-question">{q.prompt}</p>
+                <p className="block-question">
+                  <InlineText text={q.prompt} />
+                </p>
               </div>
               <div className="prediction-options">
                 {q.options.map((opt) => (
@@ -76,7 +79,7 @@ export function DiagnosticBatteryCard({ courseId }: { courseId: string }) {
                     onClick={() => choose(i, opt)}
                     disabled={chosen !== undefined}
                   >
-                    {opt}
+                    <InlineText text={opt} />
                   </button>
                 ))}
               </div>

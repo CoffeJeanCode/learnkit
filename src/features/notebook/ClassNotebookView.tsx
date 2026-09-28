@@ -4,6 +4,7 @@ import type { DynamicBlockType, NotebookBlock } from "../../lib/schemas";
 import {
   gradeClosureReflection,
   listCourseClasses,
+  resetClassNotebook,
   saveNotebookState,
   startClassNotebook,
   tauriError,
@@ -84,6 +85,13 @@ export function ClassNotebookView() {
   const roadmapSession = useRoadmap((s) => s.session);
   const [reloadToken, setReloadToken] = useState(0);
   const [visibleCount, setVisibleCount] = useState(1);
+  // Whole-class regeneration ("caso atípico"): a manual escape hatch for
+  // when the notebook itself is broken in a way no single block repair
+  // fixes (bad composition, a stuck mastery loop, several corrupted blocks
+  // at once). Two-step confirm since it discards all progress in this class.
+  const [confirmRegenerateClass, setConfirmRegenerateClass] = useState(false);
+  const [regeneratingClass, setRegeneratingClass] = useState(false);
+  const [regenerateClassError, setRegenerateClassError] = useState<string | null>(null);
 
   // --- Sidebar plan note -----------------------------------------------
   // Only when the open session actually OWNS this course: the header's
@@ -134,6 +142,8 @@ export function ClassNotebookView() {
   useEffect(() => {
     setVisibleCount(1);
     setRegenerateFailure(null);
+    setConfirmRegenerateClass(false);
+    setRegenerateClassError(null);
   }, [classId]);
   useEffect(() => {
     if (!classId || blocks.length === 0) return;
@@ -217,6 +227,30 @@ export function ClassNotebookView() {
     }
   };
 
+  // Whole-class "start over": wipes the notebook server-side, then bumps
+  // `reloadToken` so `useClassNotebookSession`'s own effect does the exact
+  // same full re-init (state reset, event resubscription, `startClassNotebook`
+  // call) it already does on mount/class-switch — no separate regeneration
+  // path to keep in sync with that one.
+  const handleRegenerateClass = async () => {
+    if (!classId) return;
+    setRegeneratingClass(true);
+    setRegenerateClassError(null);
+    try {
+      await resetClassNotebook(classId);
+      setConfirmRegenerateClass(false);
+      setVisibleCount(1);
+      setReloadToken((n) => n + 1);
+      // The class (and possibly its downstream unlocks) may have flipped
+      // from complete back to in-progress — re-sync the path immediately.
+      void refreshClasses();
+    } catch (e) {
+      setRegenerateClassError(tauriError(e).message);
+    } finally {
+      setRegeneratingClass(false);
+    }
+  };
+
   const classIndex = classes.findIndex((c) => c.id === classId);
   const nextClass = classIndex >= 0 ? classes[classIndex + 1] : undefined;
   const continueLabel = nextClass ? "Continuar con el módulo" : "Volver a tu plan";
@@ -239,7 +273,34 @@ export function ClassNotebookView() {
         <div className="notebook-main">
           <div className="row notebook-header">
             <h2>{activeClass?.title ?? "Clase"}</h2>
+            <div className="notebook-header-actions">
+              {confirmRegenerateClass ? (
+                <>
+                  <span className="danger-confirm-text">Se perderá tu progreso en esta clase.</span>
+                  <button className="btn-danger" onClick={() => void handleRegenerateClass()} disabled={regeneratingClass}>
+                    {regeneratingClass ? "Regenerando…" : "Sí, regenerar"}
+                  </button>
+                  <button className="btn-quiet" onClick={() => setConfirmRegenerateClass(false)} disabled={regeneratingClass}>
+                    Cancelar
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="btn-quiet"
+                  title="Para casos atípicos: reinicia esta clase desde cero, sin conservar el progreso actual"
+                  onClick={() => setConfirmRegenerateClass(true)}
+                  disabled={loading || regeneratingClass}
+                >
+                  🔄 Regenerar clase
+                </button>
+              )}
+            </div>
           </div>
+          {regenerateClassError && (
+            <div className="alert error">
+              <span className="alert-text">{regenerateClassError}</span>
+            </div>
+          )}
           {/* What this class lets you DO when it's done — the micromodule's
               own objective, stamped onto the class at import time. Hidden
               for classes imported before the field existed. */}

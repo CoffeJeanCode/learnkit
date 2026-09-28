@@ -210,6 +210,16 @@ export const retryPendingBlock = (document_id: string) =>
 export const regenerateNotebookBlock = (block_id: string) =>
   invoke("regenerate_notebook_block", { blockId: block_id }).then((v) => NotebookPayloadSchema.parse(v));
 
+/**
+ * Wipes an atypical/broken class's notebook entirely (its document and every
+ * block) — the whole-class counterpart to `regenerateNotebookBlock`'s
+ * single-block in-place repair, for cases a targeted swap can't fix. Does
+ * NOT regenerate anything itself: the caller follows this with
+ * `startClassNotebook` to generate a fresh block 1, the same call it makes
+ * when opening a class for the first time.
+ */
+export const resetClassNotebook = (class_id: string) => invoke<void>("reset_class_notebook", { classId: class_id });
+
 export const saveNotebookState = (notebook_id: string, blocks: BlockUpdate[]) =>
   invoke<void>("save_notebook_state", { notebookId: notebook_id, blocks });
 

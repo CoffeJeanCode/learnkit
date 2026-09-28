@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { DiagnosticBatteryState } from "../lib/schemas";
+import { InlineText } from "../features/notebook/blocks/RichText";
 
 const DIMENSION_LABEL: Record<string, string> = {
   intuition: "Intuición",
@@ -61,7 +62,9 @@ export function DiagnosticBatteryStage({
             <li key={i} className="diagnostic-question">
               <div className="diagnostic-question-head">
                 <span className="badge">{DIMENSION_LABEL[q.dimension] ?? q.dimension}</span>
-                <p className="block-question">{q.prompt}</p>
+                <p className="block-question">
+                  <InlineText text={q.prompt} />
+                </p>
               </div>
               <div className="prediction-options">
                 {q.options.map((opt) => (
@@ -71,7 +74,7 @@ export function DiagnosticBatteryStage({
                     onClick={() => choose(i, opt)}
                     disabled={busy || chosen !== undefined}
                   >
-                    {opt}
+                    <InlineText text={opt} />
                   </button>
                 ))}
               </div>

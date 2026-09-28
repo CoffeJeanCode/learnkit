@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { SubmitGate } from "./index";
+import { InlineText, RichText } from "./RichText";
 import { StaticVisual } from "./StaticVisual";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "branching_scenario_challenge" }>;
@@ -41,7 +42,7 @@ export function BranchingScenarioChallengeBlock({
   if (resolved) {
     return (
       <div className="notebook-block-body">
-        <p className="block-question">{content.scenario}</p>
+        <RichText className="block-question" text={content.scenario} />
         {content.visualAid && <StaticVisual visual={content.visualAid} />}
         <p className="hint">Ya resolviste esta decisión.</p>
       </div>
@@ -53,19 +54,27 @@ export function BranchingScenarioChallengeBlock({
 
   return (
     <div className="notebook-block-body">
-      <p className="block-question">{content.scenario}</p>
+      <RichText className="block-question" text={content.scenario} />
       {content.visualAid && <StaticVisual visual={content.visualAid} />}
-      <p className="hint">{content.decisionPoint}</p>
+      <p className="hint">
+        <InlineText text={content.decisionPoint} />
+      </p>
       <div className="prediction-options">
         {content.branches.map((b) => (
           <button key={b.choice} className={chosen === b.choice ? "btn-primary" : ""} onClick={() => void choose(b.choice)} disabled={!isActive || busy}>
-            {b.choice}
+            <InlineText text={b.choice} />
           </button>
         ))}
       </div>
       {busy && <p className="hint">Calificando…</p>}
-      {!busy && chosenBranch && <p className="hint">{chosenBranch.consequence}</p>}
-      {!busy && outcome && !outcome.passed && <p className="hint hint-warn">{shownFeedback ?? "Esa no era la mejor opción — inténtalo de nuevo."}</p>}
+      {!busy && chosenBranch && (
+        <p className="hint">
+          <InlineText text={chosenBranch.consequence} />
+        </p>
+      )}
+      {!busy && outcome && !outcome.passed && (
+        <p className="hint hint-warn">{shownFeedback ? <InlineText text={shownFeedback} /> : "Esa no era la mejor opción — inténtalo de nuevo."}</p>
+      )}
     </div>
   );
 }

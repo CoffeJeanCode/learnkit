@@ -102,6 +102,15 @@ pub async fn regenerate_notebook_block(
     state.notebook_service.regenerate_block(Some(&app), &block_id).await
 }
 
+/// Wipes an atypical/broken class's notebook entirely (see
+/// `NotebookService::reset_class_notebook`) — the frontend follows this with
+/// `start_class_notebook` to regenerate it from scratch, exactly the same
+/// call it makes when opening a class for the first time.
+#[tauri::command]
+pub fn reset_class_notebook(state: State<'_, AppState>, class_id: String) -> AppResult<()> {
+    state.notebook_service.reset_class_notebook(&class_id)
+}
+
 #[tauri::command]
 pub fn save_notebook_state(state: State<'_, AppState>, notebook_id: String, blocks: Vec<BlockUpdate>) -> AppResult<()> {
     state.notebook_service.save_notebook_state(&notebook_id, &blocks)

@@ -265,9 +265,11 @@ pub enum StaticVisualSpec {
         #[serde(rename = "chartType")]
         chart_type: MermaidChartType,
         /// Must be syntactically valid Mermaid source for `chartType` — the
-        /// frontend renders it directly via `mermaid.render`, no server-side
-        /// validation, so a malformed diagram fails visibly in the browser
-        /// console, not silently.
+        /// frontend renders it directly via `mermaid.render`. Grounding
+        /// rejects the one construct proven unparseable (`::` inside a
+        /// `stateDiagram` label) and the frontend repairs stored diagrams
+        /// that predate that rule; anything else that still fails shows a
+        /// visible error next to the caption, never silently.
         code: String,
         caption: String,
     },

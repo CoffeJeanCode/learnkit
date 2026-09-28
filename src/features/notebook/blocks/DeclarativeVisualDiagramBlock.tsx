@@ -1,4 +1,5 @@
 import type { DynamicSectionBlock } from "../../../lib/schemas";
+import { InlineText } from "./RichText";
 import { StaticVisual } from "./StaticVisual";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "declarative_visual_diagram" }>;
@@ -6,7 +7,9 @@ type Content = Extract<DynamicSectionBlock, { blockType: "declarative_visual_dia
 export function DeclarativeVisualDiagramBlock({ content }: { content: Content }) {
   return (
     <div className="notebook-block-body">
-      <h3>{content.title}</h3>
+      <h3>
+        <InlineText text={content.title} />
+      </h3>
       <StaticVisual visual={content.visualAid} />
       <ol className="walkthrough-list">
         {content.guidedWalkthrough
@@ -14,7 +17,10 @@ export function DeclarativeVisualDiagramBlock({ content }: { content: Content })
           .sort((a, b) => a.stepNumber - b.stepNumber)
           .map((step) => (
             <li key={step.stepNumber}>
-              <strong>{step.targetVisualElement}:</strong> {step.pedagogicalInsight}
+              <strong>
+                <InlineText text={step.targetVisualElement} />:
+              </strong>{" "}
+              <InlineText text={step.pedagogicalInsight} />
             </li>
           ))}
       </ol>

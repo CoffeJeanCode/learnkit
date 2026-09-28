@@ -100,6 +100,24 @@ impl NotebookService {
         Ok(NotebookPayload { document: refreshed, blocks: vec![grading::redact_block(&block)] })
     }
 
+    /// Wipes an atypical/broken class notebook so the student can start it
+    /// over from scratch — the whole-class counterpart to
+    /// [`Self::regenerate_block`]'s single-block in-place repair, for cases
+    /// a targeted block swap can't fix (a bad overall composition, a stuck
+    /// mastery loop, several corrupted blocks at once). Pure deletion: the
+    /// caller (the frontend's confirm button) triggers a fresh
+    /// `start_class_notebook` afterward, same as opening the class for the
+    /// first time — this method does NOT regenerate anything itself, so a
+    /// wipe that's never followed up simply leaves the class notebook-less
+    /// (same as before it was ever opened) rather than silently starting a
+    /// background generation the caller didn't ask for.
+    pub fn reset_class_notebook(&self, class_id: &str) -> AppResult<()> {
+        self.store
+            .class_generation_context(class_id)?
+            .ok_or_else(|| AppError::InvalidInput(format!("class not found: {class_id}")))?;
+        self.store.delete_notebook_for_class(class_id)
+    }
+
     /// Whatever's persisted so far for this class — the resume/reload path.
     /// Never triggers generation itself (that only ever happens from
     /// `start_class_notebook`'s first call or a gate resolving).

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { DynamicSectionBlock } from "../../../lib/schemas";
+import { InlineText } from "./RichText";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "spaced_interleaved_retrieval" }>;
 
@@ -12,10 +13,16 @@ function RetrievalItem({ conceptLabel, prompt, expectedAnswer }: { conceptLabel:
   const [revealed, setRevealed] = useState(false);
   return (
     <li className="retrieval-item">
-      <span className="retrieval-concept-tag">{conceptLabel}</span>
-      <p className="retrieval-prompt">{prompt}</p>
+      <span className="retrieval-concept-tag">
+        <InlineText text={conceptLabel} />
+      </span>
+      <p className="retrieval-prompt">
+        <InlineText text={prompt} />
+      </p>
       {revealed ? (
-        <p className="retrieval-answer">{expectedAnswer}</p>
+        <p className="retrieval-answer">
+          <InlineText text={expectedAnswer} />
+        </p>
       ) : (
         <button className="btn-quiet" onClick={() => setRevealed(true)}>
           Ya recordé — mostrar respuesta

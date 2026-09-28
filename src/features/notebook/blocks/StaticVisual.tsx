@@ -16,6 +16,19 @@ function ensureMermaidInit() {
 
 let mermaidRenderCounter = 0;
 
+// Mermaid's `stateDiagram` grammar has no `::` token: a Rust/C++-style path in
+// a transition label (`String::from("nota")`) fails to parse — verified against
+// mermaid 12, where flowchart/sequenceDiagram accept `::` but stateDiagram does
+// not. U+2236 RATIO looks like a colon and lexes as ordinary text, so swap it
+// in at render time. The stored source is never modified: this only affects
+// what we hand to `mermaid.render`, so a fix here also repairs notebooks that
+// were generated before the grounding rule existed.
+export function repairMermaid(code: string): string {
+  if (!code.includes("::")) return code;
+  if (!/^\s*stateDiagram/.test(code)) return code;
+  return code.replace(/::/g, "\u2236\u2236");
+}
+
 function MermaidVisual({ code, caption }: { code: string; caption: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -26,7 +39,7 @@ function MermaidVisual({ code, caption }: { code: string; caption: string }) {
     setError(null);
     const id = `mermaid-diagram-${++mermaidRenderCounter}`;
     mermaid
-      .render(id, code)
+      .render(id, repairMermaid(code))
       .then(({ svg }) => {
         if (!cancelled && containerRef.current) containerRef.current.innerHTML = svg;
       })
@@ -41,7 +54,10 @@ function MermaidVisual({ code, caption }: { code: string; caption: string }) {
   return (
     <figure className="static-visual">
       {error ? (
-        <div className="alert error">No se pudo renderizar el diagrama: {error}</div>
+        <div className="alert error">
+          <span className="alert-text">No se pudo renderizar este diagrama (sintaxis que Mermaid no entiende) — la leyenda de abajo explica el concepto.</span>
+          <span className="hint">{error}</span>
+        </div>
       ) : (
         <div className="mermaid-visual" ref={containerRef} />
       )}

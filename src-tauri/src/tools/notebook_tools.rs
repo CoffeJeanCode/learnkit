@@ -257,7 +257,7 @@ fn visual_aid_json_schema() -> serde_json::Value {
                 "properties": {
                     "renderEngine": {"const": "mermaid"},
                     "chartType": {"type": "string", "enum": ["flowchart", "sequenceDiagram", "classDiagram", "stateDiagram", "erDiagram"]},
-                    "code": {"type": "string", "description": "Código Mermaid válido y compilable"},
+                    "code": {"type": "string", "description": "Código Mermaid válido y compilable. En stateDiagram no uses '::' dentro de una etiqueta (p. ej. String::from): Mermaid lo rechaza y el diagrama no se dibuja — di el paso con palabras"},
                     "caption": {"type": "string"}
                 },
                 "required": ["renderEngine", "chartType", "code", "caption"]

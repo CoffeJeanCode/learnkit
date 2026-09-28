@@ -8,7 +8,9 @@
 
 use std::collections::HashMap;
 
-use crate::domain::notebook::{BlockStatus, DynamicBlockType, GeneratedSectionBlock, NotebookBlock, StaticVisualSpec};
+use crate::domain::notebook::{
+    BlockStatus, DynamicBlockType, GeneratedSectionBlock, MermaidChartType, NotebookBlock, StaticVisualSpec,
+};
 
 /// The interchangeable "practice/activity" family — these three all serve
 /// the same pedagogical ROLE (give the student something to DO with the
@@ -317,12 +319,23 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
 fn visual_violations(i: usize, visual: &StaticVisualSpec) -> Vec<String> {
     let mut v = Vec::new();
     match visual {
-        StaticVisualSpec::Mermaid { code, caption, .. } => {
+        StaticVisualSpec::Mermaid { code, caption, chart_type } => {
             if code.trim().is_empty() {
                 v.push(format!("bloque {i}: visualAid mermaid sin code"));
             }
             if caption.trim().is_empty() {
                 v.push(format!("bloque {i}: visualAid mermaid sin caption"));
+            }
+            // `stateDiagram` is the one chart type whose grammar has no `::`
+            // token: a Rust/C++-style path in a transition label fails to
+            // parse in the browser (flowchart/sequenceDiagram accept it), so
+            // the diagram renders as an error instead of a picture. Rejecting
+            // here makes the model rewrite the label in the same turn.
+            if *chart_type == MermaidChartType::StateDiagram && code.contains("::") {
+                v.push(format!(
+                    "bloque {i}: una etiqueta del stateDiagram lleva '::' (p. ej. String::from) y Mermaid no puede \
+                     parsearla — reescríbela sin '::', p. ej. String desde \"nota\" en lugar de String::from(\"nota\")"
+                ));
             }
         }
         StaticVisualSpec::DeclarativeSvg { elements, groups, caption, .. } => {
@@ -513,5 +526,39 @@ mod tests {
         let usage: HashMap<String, i64> = [("heuristic_error_audit".to_string(), 2i64)].into_iter().collect();
         assert!(dominance_violation(&block, &(usage.clone(), 1)).is_none(), "only 1 prior class — not enough history yet");
         assert!(dominance_violation(&block, &(usage, 2)).is_some(), "2 of 2 prior classes already used it");
+    }
+
+    #[test]
+    fn a_state_diagram_label_with_a_double_colon_is_rejected_but_other_chart_types_are_not() {
+        fn gate_with(chart_type: MermaidChartType, code: &str) -> GeneratedSectionBlock {
+            GeneratedSectionBlock::InteractivePredictionGate {
+                question: "q".to_string(),
+                options: vec!["A".to_string(), "B".to_string()],
+                conceptual_feedback_map: [("A".to_string(), "a".to_string()), ("B".to_string(), "b".to_string())]
+                    .into_iter()
+                    .collect(),
+                correct_option: "B".to_string(),
+                visual_aid: Some(StaticVisualSpec::Mermaid {
+                    chart_type,
+                    code: code.to_string(),
+                    caption: "c".to_string(),
+                }),
+            }
+        }
+
+        let broken = gate_with(
+            MermaidChartType::StateDiagram,
+            "stateDiagram-v2\n    [*] --> Valido: let nota = String::from(\"idea\")",
+        );
+        let v = single_block_violations(&[], &broken, 1, false, no_mastery(), false, false);
+        assert!(v.iter().any(|s| s.contains("stateDiagram") && s.contains("::")), "{v:?}");
+
+        let fine = gate_with(MermaidChartType::StateDiagram, "stateDiagram-v2\n    [*] --> Valido: el valor queda prestado");
+        let v = single_block_violations(&[], &fine, 1, false, no_mastery(), false, false);
+        assert!(!v.iter().any(|s| s.contains("stateDiagram")), "a natural-language state label is fine: {v:?}");
+
+        let flowchart = gate_with(MermaidChartType::Flowchart, "flowchart LR\n    A[usa String::from] --> B[ok]");
+        let v = single_block_violations(&[], &flowchart, 1, false, no_mastery(), false, false);
+        assert!(!v.iter().any(|s| s.contains("::")), "`::` parses fine outside stateDiagram: {v:?}");
     }
 }

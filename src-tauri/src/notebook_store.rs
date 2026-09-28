@@ -388,6 +388,19 @@ impl NotebookStore {
         Ok(())
     }
 
+    /// Wipes a class's notebook (its `notebook_documents` row and, via the
+    /// same `ON DELETE CASCADE` chain `delete_course` relies on, every block
+    /// hanging off it) WITHOUT touching the class/milestone/course rows
+    /// themselves — the manual "start this one class over" escape hatch for
+    /// an atypical notebook (stuck on a bad composition, a corrupted block
+    /// no single regeneration fixes, etc.), as opposed to
+    /// `NotebookService::regenerate_block`'s in-place single-block repair.
+    /// A no-op if the class never had a notebook generated yet.
+    pub fn delete_notebook_for_class(&self, class_id: &str) -> AppResult<()> {
+        self.lock().execute("DELETE FROM notebook_documents WHERE class_id = ?1", params![class_id])?;
+        Ok(())
+    }
+
     /// Removes every course that no session references anymore — the
     /// startup sweep for the "borré la sesión y las clases quedaron" bug.
     /// `owned_course_ids` is what the surviving roadmap sessions point at

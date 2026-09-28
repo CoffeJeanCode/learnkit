@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { SubmitGate } from "./index";
+import { InlineText, RichText } from "./RichText";
 import { StaticVisual } from "./StaticVisual";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "hands_on_mission" }>;
@@ -42,16 +43,24 @@ export function HandsOnMissionBlock({
 
   return (
     <div className="notebook-block-body">
-      <p className="block-question">{content.challengeStatement}</p>
+      <RichText className="block-question" text={content.challengeStatement} />
       {content.visualAid && <StaticVisual visual={content.visualAid} />}
-      <p className="hint">Entregable: {content.expectedMilestoneArtifact}</p>
-      <p className="hint">Restricciones: {content.constraints.join(" · ")}</p>
+      <p className="hint">
+        Entregable: <InlineText text={content.expectedMilestoneArtifact} />
+      </p>
+      <p className="hint">
+        Restricciones: <InlineText text={content.constraints.join(" · ")} />
+      </p>
       <ul className="dod-list">
         {content.scaffoldingHints.map((h) => (
-          <li key={h}>{h}</li>
+          <li key={h}>
+            <InlineText text={h} />
+          </li>
         ))}
       </ul>
-      <p className="hint">Te evaluarás en: {content.evaluationRubricSummary.join(" · ")}</p>
+      <p className="hint">
+        Te evaluarás en: <InlineText text={content.evaluationRubricSummary.join(" · ")} />
+      </p>
       {resolved ? (
         <p className="hint">Superaste este reto.</p>
       ) : (
@@ -68,7 +77,9 @@ export function HandsOnMissionBlock({
               {busy ? "Calificando…" : "Enviar mi solución"}
             </button>
           </div>
-          {!busy && outcome && !outcome.passed && <p className="hint hint-warn">{shownFeedback ?? "Todavía no — inténtalo de nuevo."}</p>}
+          {!busy && outcome && !outcome.passed && (
+            <p className="hint hint-warn">{shownFeedback ? <InlineText text={shownFeedback} /> : "Todavía no — inténtalo de nuevo."}</p>
+          )}
         </>
       )}
     </div>

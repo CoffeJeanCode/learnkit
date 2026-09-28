@@ -29,7 +29,9 @@ build: ## typecheck + production frontend build + cargo build
 typecheck: ## tsc --noEmit
 	bunx tsc --noEmit
 
-test: typecheck ## tsc --noEmit + cargo test
+test: typecheck ## tsc --noEmit + UI render checks + cargo test
+	bun run scripts/check-rendering.tsx
+	bun run scripts/check-mermaid-repair.ts
 	cargo test --manifest-path $(MANIFEST)
 
 clean: ## remove build output (dist/ + src-tauri/target)
