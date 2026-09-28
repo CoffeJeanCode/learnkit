@@ -59,6 +59,33 @@ Frontend layout (`src/`): `app/`, `components/`, `features/` (agents, chat, prov
 workflows), `hooks/` (reserved), `lib/tauri.ts` (typed invoke + events), `stores/`
 (zustand, no secrets persisted), `types/`.
 
+## Quick start
+
+One command installs whatever toolchain is missing (rustup, Bun, Node ≥ 18)
+plus `bun install` and `cargo fetch`; the other one launches the app. Pick your
+shell:
+
+| Shell | Setup | Run |
+|-------|-------|-----|
+| **make** (Linux / macOS / Git Bash) | `make setup` | `make run` |
+| **bash** | `bash scripts/setup.sh` | `bash scripts/run.sh` |
+| **PowerShell** | `.\scripts\setup.ps1` | `.\run.ps1` |
+| **cmd** | `setup.cmd` | `run.cmd` |
+
+All of them delegate to the same two scripts (`scripts/setup.sh`,
+`scripts/setup.ps1` and siblings), so they are idempotent — re-running one just
+re-checks and tops up what changed. Append `--check` (PowerShell: `-Check`) for a
+**read-only probe** that exits non-zero when a prerequisite is missing; that is
+what `make check` runs and what a CI/pre-commit gate should call.
+
+Other targets: `make build` (typecheck + production frontend build + `cargo
+build`), `make test` (`tsc --noEmit` + `cargo test`), `make clean` (drops
+`dist/` and `src-tauri/target`), `make clean-all` (also `node_modules`).
+
+> Windows without a Visual Studio linker: `scripts\setup.ps1` detects it and
+> installs the GNU toolchain instead of MSVC — the path this repo already
+> documents (see **Windows-GNU notes** below).
+
 ## Requirements
 
 - **Bun** ≥ 1 (`bun --version`)
@@ -68,6 +95,9 @@ workflows), `hooks/` (reserved), `lib/tauri.ts` (typed invoke + events), `stores
 - No LLM key is needed to build or run the test suite
 
 ## Development
+
+From a clean checkout the bootstrap in **Quick start** is the fast path; the
+manual equivalent:
 
 ```bash
 bun install

@@ -1,0 +1,39 @@
+# LearnKit - toolchain bootstrap + common tasks.
+#
+# Delegates to the plain scripts in scripts/, so nothing here needs make:
+#   bash scripts/setup.sh   and   bash scripts/run.sh   do the same thing.
+# On Windows without GNU make use setup.cmd / run.cmd or .\scripts\*.ps1.
+
+SHELL := bash
+MANIFEST := src-tauri/Cargo.toml
+
+.PHONY: help setup check run build test typecheck clean clean-all
+
+help: ## show this help
+	@grep -E '^[a-z0-9-]+:[^#]*## ' Makefile | sed -E 's/^([a-z0-9-]+):[^#]*## /\1\t/'
+
+setup: ## install missing toolchain (rustup, bun, node check) + bun install + cargo fetch
+	bash scripts/setup.sh
+
+check: ## read-only probe of every prerequisite (exits non-zero if one is missing)
+	bash scripts/setup.sh --check
+	bash scripts/run.sh --check
+
+run: ## bun run tauri dev (Vite + Tauri desktop app)
+	bash scripts/run.sh
+
+build: ## typecheck + production frontend build + cargo build
+	bun run build
+	cargo build --manifest-path $(MANIFEST)
+
+typecheck: ## tsc --noEmit
+	bunx tsc --noEmit
+
+test: typecheck ## tsc --noEmit + cargo test
+	cargo test --manifest-path $(MANIFEST)
+
+clean: ## remove build output (dist/ + src-tauri/target)
+	rm -rf dist src-tauri/target
+
+clean-all: clean ## also remove node_modules
+	rm -rf node_modules
