@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-/// The 7 pedagogical block types a dynamically-composed class notebook can
+/// The 8 pedagogical block types a dynamically-composed class notebook can
 /// draw from (3-5 per class — see `GeneratedDynamicNotebook`). No mandatory
 /// sequence and no fixed template: `notebook_agent` (and `roadmap_agent`'s
 /// embedded first-class generation) choose which blocks to use, how many,
@@ -27,6 +27,12 @@ pub enum GateCategory {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DynamicBlockType {
+    /// Quick recall of 1-2 concepts from PRIOR classes, never this class's
+    /// new material — the testing-effect/spaced-retrieval primitive (see
+    /// `domain::learner_memory::LearnerCognitiveMemory::due_retrieval_items`).
+    /// Non-gate: it's a self-check (reveal-after-recall), not a graded
+    /// mastery gate — see `is_gate`.
+    SpacedInterleavedRetrieval,
     AnchoredMicroTheory,
     DeclarativeVisualDiagram,
     BranchingScenarioChallenge,
@@ -39,6 +45,7 @@ pub enum DynamicBlockType {
 impl DynamicBlockType {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::SpacedInterleavedRetrieval => "spaced_interleaved_retrieval",
             Self::AnchoredMicroTheory => "anchored_micro_theory",
             Self::DeclarativeVisualDiagram => "declarative_visual_diagram",
             Self::BranchingScenarioChallenge => "branching_scenario_challenge",
@@ -51,6 +58,7 @@ impl DynamicBlockType {
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
+            "spaced_interleaved_retrieval" => Some(Self::SpacedInterleavedRetrieval),
             "anchored_micro_theory" => Some(Self::AnchoredMicroTheory),
             "declarative_visual_diagram" => Some(Self::DeclarativeVisualDiagram),
             "branching_scenario_challenge" => Some(Self::BranchingScenarioChallenge),
@@ -336,6 +344,21 @@ pub struct ScenarioBranch {
     pub is_optimal: bool,
 }
 
+/// One recall prompt inside a `spaced_interleaved_retrieval` block — a
+/// concept from a PRIOR class, never this class's new material. Both
+/// `prompt` and `expectedAnswer` are shown to the student (self-check, not
+/// a graded gate — see `DynamicBlockType::SpacedInterleavedRetrieval`): the
+/// frontend hides `expectedAnswer` behind a reveal interaction so the
+/// testing-effect recall still happens, but nothing here is an answer key
+/// that needs server-side redaction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievalPrompt {
+    pub concept_label: String,
+    pub prompt: String,
+    pub expected_answer: String,
+}
+
 /// One block the model proposes, in the order it should appear — the
 /// agent-facing / tool-args shape. Deliberately has NO `id`: like every
 /// other backend-owned identifier in this app, block ids are assigned at
@@ -344,6 +367,13 @@ pub struct ScenarioBranch {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "blockType")]
 pub enum GeneratedSectionBlock {
+    /// 1-2 quick recall prompts of concepts from PRIOR classes — see
+    /// `DynamicBlockType::SpacedInterleavedRetrieval`. Content, not a gate:
+    /// generated ONLY when `domain::learner_memory::LearnerCognitiveMemory`
+    /// has due items, and ONLY ever as the class's first block (see
+    /// `notebook_service::grounding::single_block_violations`).
+    #[serde(rename = "spaced_interleaved_retrieval", rename_all = "camelCase")]
+    SpacedInterleavedRetrieval { items: Vec<RetrievalPrompt> },
     /// Layered microtheory in exactly 3 parts (🎯📐⚠️) — never one
     /// undifferentiated paragraph — and capped at 160 words combined (see
     /// `notebook_service::notebook_grounding_violations`) so it can never
@@ -460,6 +490,7 @@ pub struct PredictionComparison {
 impl GeneratedSectionBlock {
     pub fn block_type(&self) -> DynamicBlockType {
         match self {
+            Self::SpacedInterleavedRetrieval { .. } => DynamicBlockType::SpacedInterleavedRetrieval,
             Self::AnchoredMicroTheory { .. } => DynamicBlockType::AnchoredMicroTheory,
             Self::DeclarativeVisualDiagram { .. } => DynamicBlockType::DeclarativeVisualDiagram,
             Self::BranchingScenarioChallenge { .. } => DynamicBlockType::BranchingScenarioChallenge,

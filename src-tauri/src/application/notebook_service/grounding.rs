@@ -103,6 +103,7 @@ pub(super) fn single_block_violations(
     is_escalation: bool,
     mastery: MasteryProgress,
     force_close: bool,
+    has_due_retrieval: bool,
 ) -> Vec<String> {
     let mut v = Vec::new();
     if !is_escalation && total_so_far > MAX_TOTAL_BLOCKS {
@@ -115,6 +116,20 @@ pub(super) fn single_block_violations(
                 block.block_type().as_str()
             ));
         }
+    }
+    let is_first_block = prior_types.is_empty();
+    if is_first_block && has_due_retrieval && !is_escalation && block.block_type() != DynamicBlockType::SpacedInterleavedRetrieval {
+        v.push(
+            "el estudiante tiene conceptos vencidos para recuperación espaciada (learnerMemory.dueRetrieval) — el \
+             PRIMER bloque de esta clase debe ser spaced_interleaved_retrieval antes de tocar material nuevo"
+                .to_string(),
+        );
+    }
+    if !is_first_block && block.block_type() == DynamicBlockType::SpacedInterleavedRetrieval {
+        v.push(
+            "spaced_interleaved_retrieval solo es válido como el PRIMER bloque de la clase, nunca más adelante"
+                .to_string(),
+        );
     }
     if force_close && block.block_type() != DynamicBlockType::MetacognitiveClosure {
         v.push(
@@ -144,6 +159,20 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
     let empty = |field: &str| format!("bloque {i} ({}): {field} está vacío", b.block_type().as_str());
 
     match b {
+        GeneratedSectionBlock::SpacedInterleavedRetrieval { items } => {
+            if !(1..=crate::domain::learner_memory::MAX_RETRIEVAL_ITEMS_PER_BLOCK).contains(&items.len()) {
+                v.push(format!(
+                    "bloque {i} (spaced_interleaved_retrieval): tiene {} items, debe tener 1-{}",
+                    items.len(),
+                    crate::domain::learner_memory::MAX_RETRIEVAL_ITEMS_PER_BLOCK
+                ));
+            }
+            for (idx, item) in items.iter().enumerate() {
+                if item.concept_label.trim().is_empty() || item.prompt.trim().is_empty() || item.expected_answer.trim().is_empty() {
+                    v.push(format!("bloque {i} (spaced_interleaved_retrieval): items[{idx}] tiene un campo vacío"));
+                }
+            }
+        }
         GeneratedSectionBlock::AnchoredMicroTheory { title, intuitive_hook, system_rule, frequent_error } => {
             if title.trim().is_empty() {
                 v.push(empty("title"));
@@ -353,7 +382,7 @@ mod tests {
 
     #[test]
     fn flags_consecutive_repeated_block_type() {
-        let v = single_block_violations(&[DynamicBlockType::InteractivePredictionGate], &valid_gate(), 2, false, no_mastery(), false);
+        let v = single_block_violations(&[DynamicBlockType::InteractivePredictionGate], &valid_gate(), 2, false, no_mastery(), false, false);
         assert!(v.iter().any(|s| s.contains("se repite consecutivamente")), "{v:?}");
     }
 
@@ -363,7 +392,7 @@ mod tests {
         if let GeneratedSectionBlock::InteractivePredictionGate { correct_option, .. } = &mut gate {
             *correct_option = "Z".to_string();
         }
-        let v = single_block_violations(&[], &gate, 1, false, no_mastery(), false);
+        let v = single_block_violations(&[], &gate, 1, false, no_mastery(), false, false);
         assert!(v.iter().any(|s| s.contains("correctOption")), "{v:?}");
     }
 
@@ -375,14 +404,14 @@ mod tests {
             system_rule: "r".to_string(),
             frequent_error: "e".to_string(),
         };
-        let v = single_block_violations(&[], &block, 1, false, no_mastery(), false);
+        let v = single_block_violations(&[], &block, 1, false, no_mastery(), false, false);
         assert!(v.iter().any(|s| s.contains("máximo 160")), "{v:?}");
     }
 
     #[test]
     fn flags_metacognitive_closure_before_mastery_is_complete_unless_forced() {
         let block = closure_block();
-        let too_early = single_block_violations(&[], &block, 4, false, no_mastery(), false);
+        let too_early = single_block_violations(&[], &block, 4, false, no_mastery(), false, false);
         assert!(too_early.iter().any(|s| s.contains("antes de tiempo")), "{too_early:?}");
 
         let partial = single_block_violations(
@@ -392,21 +421,22 @@ mod tests {
             false,
             MasteryProgress { has_passed_conceptual: true, has_passed_practice: false },
             false,
+            false,
         );
         assert!(partial.iter().any(|s| s.contains("compuerta de práctica")), "{partial:?}");
 
-        let ok = single_block_violations(&[], &block, 6, false, full_mastery(), false);
+        let ok = single_block_violations(&[], &block, 6, false, full_mastery(), false, false);
         assert!(!ok.iter().any(|s| s.contains("antes de tiempo")), "{ok:?}");
     }
 
     #[test]
     fn force_close_bypasses_the_mastery_requirement_but_demands_a_closure_block() {
         let closure = closure_block();
-        let v = single_block_violations(&[], &closure, 21, false, no_mastery(), true);
+        let v = single_block_violations(&[], &closure, 21, false, no_mastery(), true, false);
         assert!(!v.iter().any(|s| s.contains("antes de tiempo")), "{v:?}");
 
         let non_closure = valid_gate();
-        let v = single_block_violations(&[], &non_closure, 21, false, no_mastery(), true);
+        let v = single_block_violations(&[], &non_closure, 21, false, no_mastery(), true, false);
         assert!(v.iter().any(|s| s.contains("cierre inmediato")), "{v:?}");
     }
 
@@ -441,10 +471,30 @@ mod tests {
 
     #[test]
     fn skips_the_safety_ceiling_only_during_escalation() {
-        let v_normal = single_block_violations(&[], &valid_gate(), MAX_TOTAL_BLOCKS + 1, false, no_mastery(), false);
+        let v_normal = single_block_violations(&[], &valid_gate(), MAX_TOTAL_BLOCKS + 1, false, no_mastery(), false, false);
         assert!(v_normal.iter().any(|s| s.contains("tope de seguridad")), "{v_normal:?}");
-        let v_escalation = single_block_violations(&[], &valid_gate(), MAX_TOTAL_BLOCKS + 1, true, no_mastery(), false);
+        let v_escalation = single_block_violations(&[], &valid_gate(), MAX_TOTAL_BLOCKS + 1, true, no_mastery(), false, false);
         assert!(!v_escalation.iter().any(|s| s.contains("tope de seguridad")), "{v_escalation:?}");
+    }
+
+    #[test]
+    fn spaced_retrieval_is_required_as_the_first_block_when_due_and_forbidden_later() {
+        let retrieval = GeneratedSectionBlock::SpacedInterleavedRetrieval {
+            items: vec![crate::domain::notebook::RetrievalPrompt {
+                concept_label: "Ósmosis".to_string(),
+                prompt: "¿Hacia dónde se mueve el agua?".to_string(),
+                expected_answer: "Hacia la mayor concentración de soluto".to_string(),
+            }],
+        };
+        let missing = single_block_violations(&[], &valid_gate(), 1, false, no_mastery(), false, true);
+        assert!(missing.iter().any(|s| s.contains("spaced_interleaved_retrieval")), "{missing:?}");
+
+        let ok_first = single_block_violations(&[], &retrieval, 1, false, no_mastery(), false, true);
+        assert!(!ok_first.iter().any(|s| s.contains("PRIMER bloque")), "{ok_first:?}");
+
+        let too_late =
+            single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &retrieval, 2, false, no_mastery(), false, false);
+        assert!(too_late.iter().any(|s| s.contains("PRIMER bloque")), "{too_late:?}");
     }
 
     #[test]

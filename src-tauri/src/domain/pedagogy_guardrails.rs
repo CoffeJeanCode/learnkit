@@ -24,6 +24,13 @@ pub fn needs_llm_critic(block_type: DynamicBlockType) -> bool {
 pub fn block_guardrail_violations(block: &GeneratedSectionBlock) -> Vec<String> {
     let mut v = Vec::new();
     match block {
+        GeneratedSectionBlock::SpacedInterleavedRetrieval { items } => {
+            for (i, item) in items.iter().enumerate() {
+                scan_text(&format!("items[{i}].conceptLabel"), &item.concept_label, &mut v);
+                scan_text(&format!("items[{i}].prompt"), &item.prompt, &mut v);
+                scan_text(&format!("items[{i}].expectedAnswer"), &item.expected_answer, &mut v);
+            }
+        }
         GeneratedSectionBlock::AnchoredMicroTheory { title, intuitive_hook, system_rule, frequent_error } => {
             scan_text("title", title, &mut v);
             scan_text("intuitiveHook", intuitive_hook, &mut v);

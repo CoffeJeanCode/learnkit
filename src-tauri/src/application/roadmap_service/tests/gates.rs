@@ -50,7 +50,7 @@ use super::*;
             .notebook_store
             .list_classes_for_course(result.session.imported_course_id.as_deref().unwrap())
             .expect("list classes");
-        assert_eq!(classes.len(), 4, "one class per week imported");
+        assert_eq!(classes.len(), 8, "2 sessions per week imported (4 weeks x 2 sessions)");
 
         assert!(
             harness.service.notebook_store.load_notebook_by_class(result.session.first_class_id.as_deref().unwrap()).expect("query").is_none(),
@@ -125,7 +125,7 @@ use super::*;
             .notebook_store
             .list_classes_for_course(result.session.imported_course_id.as_deref().unwrap())
             .expect("list classes");
-        assert_eq!(classes.len(), 4, "sealed with the REVISED syllabus, still 4 weeks");
+        assert_eq!(classes.len(), 8, "sealed with the REVISED syllabus, still 4 weeks x 2 sessions");
 
         let _ = std::fs::remove_dir_all(&harness.dir);
     }

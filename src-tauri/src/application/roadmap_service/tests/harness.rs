@@ -97,17 +97,33 @@ use super::*;
                     week,
                     title: format!("Semana {week}"),
                     deliverable: "Entregable de la semana".to_string(),
-                    micromodules: vec![Micromodule {
-                        label: "Módulo 1".to_string(),
-                        hours,
-                        deliverable: "Artefacto verificable".to_string(),
-                        objective: Some("Explicar el concepto central del módulo con un ejemplo propio".to_string()),
-                        interactive_blocks: vec![
-                            "socratic_prediction".to_string(),
-                            "hands_on_mission".to_string(),
-                            "metacognitive_closure".to_string(),
-                        ],
-                    }],
+                    weekly_goal: Some("Avanzar un paso concreto hacia la meta declarada".to_string()),
+                    micromodules: vec![
+                        Micromodule {
+                            label: "Días 1-2".to_string(),
+                            hours: hours / 2.0,
+                            focus: Some("Conceptos centrales de la primera sesión".to_string()),
+                            deliverable: "Artefacto verificable".to_string(),
+                            objective: Some("Explicar el concepto central de la sesión con un ejemplo propio".to_string()),
+                            interactive_blocks: vec![
+                                "socratic_prediction".to_string(),
+                                "hands_on_mission".to_string(),
+                                "metacognitive_closure".to_string(),
+                            ],
+                        },
+                        Micromodule {
+                            label: "Días 3-4".to_string(),
+                            hours: hours / 2.0,
+                            focus: Some("Profundización y casos límite".to_string()),
+                            deliverable: "Artefacto verificable 2".to_string(),
+                            objective: Some("Resolver un caso límite del concepto central".to_string()),
+                            interactive_blocks: vec![
+                                "error_audit_challenge".to_string(),
+                                "hands_on_mission".to_string(),
+                                "metacognitive_closure".to_string(),
+                            ],
+                        },
+                    ],
                 })
                 .collect(),
         }

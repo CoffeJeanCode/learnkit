@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
+use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{
     BlockStatus, BlockUpdate, ClassRecord, Course, DiagnosticBattery, DiagnosticBatteryState, DynamicBlockType,
     NotebookBlock, NotebookDocument, NotebookPayload, NotebookStatus, SyllabusMilestone,
@@ -75,6 +76,16 @@ CREATE TABLE IF NOT EXISTS notebook_blocks (
     last_feedback TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_blocks_document ON notebook_blocks(document_id);
+
+-- One row per learner (today, always `learner_memory::LOCAL_LEARNER_ID` —
+-- see that module's doc comment) — the WHOLE `LearnerCognitiveMemory`
+-- serialized as JSON, same "don't invent a relational shape for a
+-- backend-only blob" precedent as `courses.diagnostic_battery_json`.
+CREATE TABLE IF NOT EXISTS learner_memory (
+    learner_id TEXT PRIMARY KEY,
+    data_json TEXT NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
 "#;
 
 /// One-time migration: an sqlite file written before the fixed-4-section
@@ -564,6 +575,32 @@ impl NotebookStore {
         state.answers = answers.clone();
         let json = serde_json::to_string(&state).map_err(|e| AppError::Persistence(e.to_string()))?;
         self.lock().execute("UPDATE courses SET diagnostic_battery_json = ?1 WHERE id = ?2", params![json, course_id])?;
+        Ok(())
+    }
+
+    // --- Learner cognitive memory --------------------------------------------
+
+    /// Loads `learner_id`'s cognitive memory, or a fresh default if none was
+    /// ever saved (first-ever generation for this learner) or the stored
+    /// JSON somehow fails to parse (a schema change on a dev build, say) —
+    /// personalization degrading to neutral defaults is always preferable to
+    /// failing the whole class-generation call over stale memory state.
+    pub fn get_learner_memory(&self, learner_id: &str) -> AppResult<LearnerCognitiveMemory> {
+        let json: Option<String> =
+            self.lock().query_row("SELECT data_json FROM learner_memory WHERE learner_id = ?1", params![learner_id], |row| row.get(0)).optional()?;
+        Ok(match json {
+            Some(j) => serde_json::from_str(&j).unwrap_or_else(|_| LearnerCognitiveMemory::new(learner_id)),
+            None => LearnerCognitiveMemory::new(learner_id),
+        })
+    }
+
+    pub fn save_learner_memory(&self, memory: &LearnerCognitiveMemory) -> AppResult<()> {
+        let json = serde_json::to_string(memory).map_err(|e| AppError::Persistence(e.to_string()))?;
+        self.lock().execute(
+            "INSERT INTO learner_memory (learner_id, data_json, updated_at_ms) VALUES (?1, ?2, ?3)
+             ON CONFLICT(learner_id) DO UPDATE SET data_json = excluded.data_json, updated_at_ms = excluded.updated_at_ms",
+            params![memory.learner_id, json, now_ms()],
+        )?;
         Ok(())
     }
 

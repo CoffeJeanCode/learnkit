@@ -42,17 +42,23 @@ export const DiagnosticSummaryCardSchema = z.object({
   learningStrategy: z.string(),
 });
 
-// A bounded (<=5h) chunk of a week's workload — the anti-monolith unit, each
-// ending in its OWN authentic, verifiable artifact (see `Micromodule` in
-// `src-tauri/src/domain/roadmap.rs`).
+// One of the week's exactly-2 study sessions (<=4h each, homogeneous) — the
+// anti-monolith unit, each ending in its OWN authentic, verifiable artifact
+// (see `Micromodule` in `src-tauri/src/domain/roadmap.rs`).
 export const MicromoduleSchema = z.object({
   label: z.string(),
   hours: z.number(),
   deliverable: z.string(),
-  // What the student will be ABLE TO DO after this module - shown in the
+  // Central concepts + cause-effect this session explores, landed in the
+  // real friction it resolves. Nullish because sessions sealed before
+  // `Micromodule::focus` existed deserialize without the key.
+  focus: z.string().nullish(),
+  // What the student will be ABLE TO DO after this session - shown in the
   // plan and in the class header. Nullish because sessions sealed before
   // `Micromodule::objective` existed deserialize without the key.
   objective: z.string().nullish(),
+  // Pure backend metadata for `notebook_generator` — never rendered by the
+  // frontend (see `Micromodule::interactive_blocks`).
   interactiveBlocks: z.array(z.string()),
 });
 
@@ -61,6 +67,10 @@ export const MilestoneSchema = z.object({
   title: z.string(),
   // Week-level rollup — the real decomposition lives in `micromodules`.
   deliverable: z.string(),
+  // Backward Design's weekly goal: the real problem this week resolves and
+  // the capability it unlocks. Nullish because sessions sealed before
+  // `Milestone::weekly_goal` existed deserialize without the key.
+  weeklyGoal: z.string().nullish(),
   micromodules: z.array(MicromoduleSchema),
 });
 
@@ -233,6 +243,7 @@ export type RoadmapSessionSummary = z.infer<typeof RoadmapSessionSummarySchema>;
 // prompt) — `DynamicBlockTypeSchema` is the catalog it picks from.
 
 export const DynamicBlockTypeSchema = z.enum([
+  "spaced_interleaved_retrieval",
   "anchored_micro_theory",
   "declarative_visual_diagram",
   "branching_scenario_challenge",
@@ -322,6 +333,18 @@ export const ScenarioBranchSchema = z.object({
   consequence: z.string(),
 });
 
+// A prior-class concept reactivated in a `spaced_interleaved_retrieval`
+// block — see `RetrievalPrompt` in `src-tauri/src/domain/notebook.rs`.
+// `expectedAnswer` is NOT an answer key needing redaction: this block is
+// self-check, not a graded gate (see `DynamicBlockType::
+// SpacedInterleavedRetrieval`'s doc comment) — the frontend hides it behind
+// a reveal interaction purely for the testing-effect UX, not for security.
+export const RetrievalPromptSchema = z.object({
+  conceptLabel: z.string(),
+  prompt: z.string(),
+  expectedAnswer: z.string(),
+});
+
 export const PredictionComparisonSchema = z.object({
   initialPrediction: z.string(),
   finalResult: z.string(),
@@ -329,6 +352,10 @@ export const PredictionComparisonSchema = z.object({
 });
 
 export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
+  z.object({
+    blockType: z.literal("spaced_interleaved_retrieval"),
+    items: z.array(RetrievalPromptSchema),
+  }),
   z.object({
     blockType: z.literal("anchored_micro_theory"),
     title: z.string(),
@@ -538,6 +565,7 @@ export type DiagnosticQuestion = z.infer<typeof DiagnosticQuestionSchema>;
 export type DiagnosticBattery = z.infer<typeof DiagnosticBatterySchema>;
 export type DiagnosticBatteryState = z.infer<typeof DiagnosticBatteryStateSchema>;
 export type ScenarioBranch = z.infer<typeof ScenarioBranchSchema>;
+export type RetrievalPrompt = z.infer<typeof RetrievalPromptSchema>;
 export type DynamicSectionBlock = z.infer<typeof DynamicSectionBlockSchema>;
 export type Course = z.infer<typeof CourseSchema>;
 export type SyllabusMilestone = z.infer<typeof SyllabusMilestoneSchema>;

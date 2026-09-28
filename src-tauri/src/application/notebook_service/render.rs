@@ -5,10 +5,56 @@
 
 use std::collections::HashMap;
 
+use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{BlockStatus, GeneratedSectionBlock, NotebookBlock};
 use crate::notebook_store::ClassGenerationContext;
 
 use super::grounding::MasteryProgress;
+
+/// Reduces `LearnerCognitiveMemory` down to exactly what ONE block-generation
+/// call needs to see — never the raw store row (timestamps, EMA internals):
+/// due retrieval items already resolved to a boolean-shaped list, relevant
+/// misconceptions already matched against this class's own title/goal, and
+/// the two personalization directives as plain strings the prompt already
+/// knows how to read. `None` fields are simply omitted from the JSON so the
+/// model isn't asked to reason about an empty personalization with nothing
+/// to say.
+fn render_learner_memory_context(memory: &LearnerCognitiveMemory, ctx: &ClassGenerationContext, now_ms: i64) -> serde_json::Value {
+    let due: Vec<serde_json::Value> = memory
+        .due_retrieval_items(now_ms)
+        .iter()
+        .map(|i| serde_json::json!({ "conceptId": i.concept_id, "conceptLabel": i.concept_label }))
+        .collect();
+    let relevance_text = format!("{} {} {}", ctx.course.title, ctx.course.target_goal, ctx.class.title);
+    let misconceptions: Vec<serde_json::Value> = memory
+        .misconceptions_relevant_to(&relevance_text)
+        .iter()
+        .map(|m| serde_json::json!({ "domainConcept": m.domain_concept, "identifiedErrorPattern": m.identified_error_pattern }))
+        .collect();
+    let mut out = serde_json::json!({
+        "calibratedBaseline": memory.calibrated_baseline,
+        "dueRetrieval": due,
+        "relevantMisconceptions": misconceptions,
+    });
+    if memory.needs_heavy_scaffolding() {
+        out["scaffoldingDirective"] = serde_json::Value::String(
+            "andamiaje_fuerte: el estudiante parte de cero o su precisión reciente en predicciones es baja — antes \
+             de cualquier compuerta autónoma, dedica un anchored_micro_theory (o declarative_visual_diagram) extra, \
+             muy guiado, con la analogía más concreta posible."
+                .to_string(),
+        );
+    }
+    if memory.friction_is_low() {
+        out["frictionDirective"] = serde_json::Value::String(
+            "tolerancia_baja_a_la_friccion: este estudiante se frustra rápido — el sistema ya reduce el umbral de \
+             escalación a 1 solo fallo (en vez de 3). Cuando generes un bloque de re-enfoque para este estudiante, \
+             prioriza SIEMPRE el ángulo más visual/concreto disponible (declarative_visual_diagram > \
+             anchored_micro_theory con analogía) antes que otro acertijo abstracto."
+                .to_string(),
+        );
+    }
+    out
+}
 
 /// Input for a normal (non-escalation) `publish_notebook_block` call — used
 /// for both the very first block (`existing_blocks` empty) and every
@@ -28,6 +74,8 @@ pub(super) fn render_next_block_input(
     initial_prediction: Option<&str>,
     final_result_so_far: &str,
     mastery: MasteryProgress,
+    learner_memory: &LearnerCognitiveMemory,
+    now_ms: i64,
 ) -> String {
     let mut context = serde_json::json!({
         "course": {
@@ -57,6 +105,7 @@ pub(super) fn render_next_block_input(
     if let Some(profile) = diagnostic_profile {
         context["diagnosticProfile"] = profile.clone();
     }
+    context["learnerMemory"] = render_learner_memory_context(learner_memory, ctx, now_ms);
     if let Some(last) = existing_blocks.last() {
         if last.block_type.is_gate() && last.status == BlockStatus::Passed {
             context["lastGateOutcome"] = serde_json::json!({

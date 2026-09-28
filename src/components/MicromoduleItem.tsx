@@ -1,20 +1,32 @@
 import type { Micromodule } from "../lib/schemas";
 
-/** One module inside a week of the plan — the SAME markup for the proposal
- *  card, the saved plan and the notebook's Plan tab, so the learning
- *  objective can't drift between them. The objective is the line that
- *  answers "¿qué me llevo de este módulo?" (what you'll be able to DO);
- *  the deliverable stays what you hand in. Rendered only when present —
- *  syllabi sealed before `Micromodule::objective` existed have none. */
+/** One study session inside a week of the plan — the SAME markup for the
+ *  proposal card, the saved plan and the notebook's Plan tab, so it can't
+ *  drift between them. Shows only what the student needs to act: the
+ *  session's title/hours, its conceptual focus, the artifact it produces,
+ *  and the capability gained. `interactiveBlocks` is internal orchestrator
+ *  metadata (see `domain::roadmap::Micromodule`) and is NEVER rendered here
+ *  — the student must never see raw catalog names like "socratic
+ *  prediction" or "metacognitive closure". */
 export function MicromoduleItem({ mod, className }: { mod: Micromodule; className?: string }) {
   return (
     <li className={className}>
       <strong>
         {mod.label} ({mod.hours} h)
-      </strong>{" "}
-      — {mod.deliverable}.{" "}
-      {mod.interactiveBlocks.map((b) => b.replace(/_/g, " ")).join(" · ")}
-      {mod.objective && <span className="mod-objective">Objetivo: {mod.objective}</span>}
+      </strong>
+      {mod.focus && (
+        <p className="mod-focus">
+          <strong>Foco:</strong> {mod.focus}
+        </p>
+      )}
+      <p className="mod-deliverable">
+        <strong>Entregable:</strong> {mod.deliverable}
+      </p>
+      {mod.objective && (
+        <p className="mod-objective">
+          <strong>Objetivo:</strong> {mod.objective}
+        </p>
+      )}
     </li>
   );
 }

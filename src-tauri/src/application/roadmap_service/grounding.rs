@@ -63,50 +63,108 @@ pub(super) fn is_vague_deliverable(text: &str) -> bool {
     VAGUE_DELIVERABLE_PHRASES.iter().any(|p| lower.contains(p))
 }
 
+/// The `interactive_blocks` catalog's own vocabulary (snake_case, as stored,
+/// and spaced, as it'd read if naively humanized) — the ONE thing this check
+/// hard-rejects on. Deliberately narrow: generic process jargon ("sprint",
+/// "compuerta", "gate"...) is instead a soft instruction in
+/// `agents::roadmap_agent`'s "CERO META-LENGUAJE" section, not a hard
+/// validator here, because those words can be legitimate domain content
+/// (e.g. "compuertas lógicas" in a digital-electronics syllabus) — rejecting
+/// on them would false-positive a valid proposal into an endless retry loop.
+/// `interactive_blocks` itself is exempt from this check: it's pure backend
+/// metadata for `notebook_generator`, never rendered by the frontend — see
+/// `Micromodule::interactive_blocks`.
+pub(super) const LEAKED_JARGON_PHRASES: [&str; 10] = [
+    "socratic_prediction",
+    "socratic prediction",
+    "error_audit_challenge",
+    "error audit challenge",
+    "interactive_visual_anchor",
+    "interactive visual anchor",
+    "hands_on_mission",
+    "hands-on mission",
+    "metacognitive_closure",
+    "metacognitive closure",
+];
+
+pub(super) fn has_leaked_jargon(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    LEAKED_JARGON_PHRASES.iter().any(|p| lower.contains(p))
+}
+
+fn check_student_facing_text(v: &mut Vec<String>, field_name: &str, text: &str) {
+    if has_leaked_jargon(text) {
+        v.push(format!("\"{text}\" ({field_name}) expone jerga metodológica interna — el estudiante nunca debe verla"));
+    }
+}
+
+/// EXACTLY 2 sessions per week, homogeneous in hours (max 1h of spread
+/// between them) and never more than 4h each — the anti-monolito dosing rule
+/// (see `agents::roadmap_agent`'s "DOSIFICACIÓN HORARIA HOMOGÉNEA").
+pub(super) const MAX_SESSION_HOURS: f32 = 4.0;
+pub(super) const MAX_SESSION_HOUR_SPREAD: f32 = 1.0;
+
 pub(super) fn micromodule_violations(week: u16, pace_hours_per_week: f32, modules: &[Micromodule]) -> Vec<String> {
     let mut v = Vec::new();
-    if !(1..=3).contains(&modules.len()) {
-        v.push(format!("la semana {week} tiene {} micromodules, debe tener 1-3", modules.len()));
+    if modules.len() != 2 {
+        v.push(format!("la semana {week} tiene {} sesiones, debe tener EXACTAMENTE 2 (anti-monolito)", modules.len()));
     }
     let mut total_hours = 0.0f32;
     for m in modules {
         if m.label.trim().is_empty() {
-            v.push(format!("un micromodule de la semana {week} tiene label vacío"));
+            v.push(format!("una sesión de la semana {week} tiene label vacío"));
+        } else {
+            check_student_facing_text(&mut v, &format!("label de la semana {week}"), &m.label);
         }
-        if !(m.hours > 0.0 && m.hours <= 5.0) {
+        if !(m.hours > 0.0 && m.hours <= MAX_SESSION_HOURS) {
             v.push(format!(
-                "el micromodule \"{}\" de la semana {week} tiene {} horas — debe ser mayor a 0 y como máximo 5 (anti-monolito)",
+                "la sesión \"{}\" de la semana {week} tiene {} horas — debe ser mayor a 0 y como máximo {MAX_SESSION_HOURS} (anti-monolito)",
                 m.label, m.hours
             ));
         }
         if m.deliverable.trim().is_empty() {
-            v.push(format!("el micromodule \"{}\" de la semana {week} tiene deliverable vacío", m.label));
+            v.push(format!("la sesión \"{}\" de la semana {week} tiene deliverable vacío", m.label));
         } else if is_vague_deliverable(&m.deliverable) {
             v.push(format!(
-                "el deliverable \"{}\" del micromodule \"{}\" (semana {week}) es vago — debe ser un artefacto verificable",
+                "el deliverable \"{}\" de la sesión \"{}\" (semana {week}) es vago — debe ser un artefacto verificable",
                 m.deliverable, m.label
             ));
+        } else {
+            check_student_facing_text(&mut v, &format!("deliverable de la sesión \"{}\" (semana {week})", m.label), &m.deliverable);
+        }
+        match m.focus.as_deref().map(str::trim) {
+            None | Some("") => {
+                v.push(format!(
+                    "la sesión \"{}\" de la semana {week} no tiene focus — los conceptos centrales y la relación \
+                     causa-efecto que explora, aterrizados en la fricción real que resuelve",
+                    m.label
+                ));
+            }
+            Some(focus) if is_vague_deliverable(focus) => {
+                v.push(format!("el focus \"{focus}\" de la sesión \"{}\" (semana {week}) es vago", m.label));
+            }
+            Some(focus) => check_student_facing_text(&mut v, &format!("focus de la sesión \"{}\" (semana {week})", m.label), focus),
         }
         match m.objective.as_deref().map(str::trim) {
             None | Some("") => {
                 v.push(format!(
-                    "el micromodule \"{}\" de la semana {week} no tiene objective — es la frase que dice qué sabrá \
-                     hacer el estudiante al terminarlo (observable, en infinitivo), distinta del deliverable",
+                    "la sesión \"{}\" de la semana {week} no tiene objective — es la frase que dice qué sabrá \
+                     hacer el estudiante al terminarla (observable, en infinitivo), distinta del deliverable",
                     m.label
                 ));
             }
             Some(objective) if is_vague_deliverable(objective) => {
                 v.push(format!(
-                    "el objective \"{}\" del micromodule \"{}\" (semana {week}) es vago — describe una capacidad \
+                    "el objective \"{}\" de la sesión \"{}\" (semana {week}) es vago — describe una capacidad \
                      observable, no \"comprender la teoría\"",
                     objective, m.label
                 ));
             }
-            Some(_) => {}
+            Some(objective) => check_student_facing_text(&mut v, &format!("objective de la sesión \"{}\" (semana {week})", m.label), objective),
         }
         if !(3..=4).contains(&m.interactive_blocks.len()) {
             v.push(format!(
-                "el micromodule \"{}\" de la semana {week} tiene {} interactiveBlocks, debe tener 3-4",
+                "la sesión \"{}\" de la semana {week} tiene {} interactiveBlocks, debe tener 3-4",
                 m.label,
                 m.interactive_blocks.len()
             ));
@@ -114,16 +172,25 @@ pub(super) fn micromodule_violations(week: u16, pace_hours_per_week: f32, module
         for b in &m.interactive_blocks {
             if !VALID_INTERACTIVE_BLOCKS.contains(&b.as_str()) {
                 v.push(format!(
-                    "el bloque \"{b}\" del micromodule \"{}\" (semana {week}) no está en el catálogo válido {VALID_INTERACTIVE_BLOCKS:?}",
+                    "el bloque \"{b}\" de la sesión \"{}\" (semana {week}) no está en el catálogo válido {VALID_INTERACTIVE_BLOCKS:?}",
                     m.label
                 ));
             }
         }
         total_hours += m.hours;
     }
+    if modules.len() == 2 {
+        let spread = (modules[0].hours - modules[1].hours).abs();
+        if spread > MAX_SESSION_HOUR_SPREAD {
+            v.push(format!(
+                "las 2 sesiones de la semana {week} no son homogéneas — {}h vs {}h, diferencia de {spread}h (máximo {MAX_SESSION_HOUR_SPREAD}h)",
+                modules[0].hours, modules[1].hours
+            ));
+        }
+    }
     if (total_hours - pace_hours_per_week).abs() > 0.5 {
         v.push(format!(
-            "la suma de horas de los micromodules de la semana {week} ({total_hours}) no coincide con paceHoursPerWeek ({pace_hours_per_week})"
+            "la suma de horas de las sesiones de la semana {week} ({total_hours}) no coincide con paceHoursPerWeek ({pace_hours_per_week})"
         ));
     }
     v
@@ -133,6 +200,8 @@ pub(super) fn syllabus_violations(profile: &LearnerProfileCard, syllabus: &Roadm
     let mut v = Vec::new();
     if syllabus.course_title.trim().is_empty() {
         v.push("courseTitle está vacío".to_string());
+    } else {
+        check_student_facing_text(&mut v, "courseTitle", &syllabus.course_title);
     }
     if syllabus.milestones.is_empty() {
         v.push("milestones está vacío".to_string());
@@ -155,11 +224,28 @@ pub(super) fn syllabus_violations(profile: &LearnerProfileCard, syllabus: &Roadm
     for m in &syllabus.milestones {
         if m.title.trim().is_empty() {
             v.push(format!("la semana {} tiene título vacío", m.week));
+        } else {
+            check_student_facing_text(&mut v, &format!("título de la semana {}", m.week), &m.title);
         }
         if m.deliverable.trim().is_empty() {
             v.push(format!("la semana {} tiene entregable vacío", m.week));
         } else if is_vague_deliverable(&m.deliverable) {
             v.push(format!("el entregable de la semana {} (\"{}\") es vago — debe ser un artefacto verificable", m.week, m.deliverable));
+        } else {
+            check_student_facing_text(&mut v, &format!("entregable de la semana {}", m.week), &m.deliverable);
+        }
+        match m.weekly_goal.as_deref().map(str::trim) {
+            None | Some("") => {
+                v.push(format!(
+                    "la semana {} no tiene weeklyGoal — la meta semanal que dice qué problema resuelve y qué \
+                     capacidad desbloquea (Backward Design)",
+                    m.week
+                ));
+            }
+            Some(goal) if is_vague_deliverable(goal) => {
+                v.push(format!("el weeklyGoal de la semana {} (\"{goal}\") es vago", m.week));
+            }
+            Some(goal) => check_student_facing_text(&mut v, &format!("weeklyGoal de la semana {}", m.week), goal),
         }
         v.extend(micromodule_violations(m.week, syllabus.pace_hours_per_week, &m.micromodules));
     }

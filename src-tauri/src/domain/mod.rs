@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod learner_memory;
 pub mod message;
 pub mod model;
 pub mod notebook;

@@ -59,7 +59,9 @@ function deriveKeyConcepts(blocks: NotebookBlock[]): string[] {
               ? c.instruction
               : c.blockType === "hands_on_mission"
                 ? c.challengeStatement
-                : c.synthesisTask;
+                : c.blockType === "spaced_interleaved_retrieval"
+                  ? c.items[0]?.conceptLabel
+                  : c.synthesisTask;
     if (label) labels.add(label.slice(0, 80));
   }
   return [...labels].slice(0, 8);

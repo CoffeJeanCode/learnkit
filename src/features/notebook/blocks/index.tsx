@@ -7,9 +7,11 @@ import { HandsOnMissionBlock } from "./HandsOnMissionBlock";
 import { HeuristicErrorAuditBlock } from "./HeuristicErrorAuditBlock";
 import { InteractivePredictionGateBlock } from "./InteractivePredictionGateBlock";
 import { MetacognitiveClosureBlock } from "./MetacognitiveClosureBlock";
+import { SpacedInterleavedRetrievalBlock } from "./SpacedInterleavedRetrievalBlock";
 import { BlockLexicalAssistant } from "../LexicalAssistantPopover";
 
 const BLOCK_LABEL: Record<string, string> = {
+  spaced_interleaved_retrieval: "Repaso rápido",
   anchored_micro_theory: "Teoría",
   declarative_visual_diagram: "Diagrama",
   branching_scenario_challenge: "Decisión",
@@ -35,6 +37,12 @@ const TERM_MAX_CHARS = 100;
  *  never sent into the assistant's own prompt. */
 function deriveBlockLexicalContext(content: DynamicSectionBlock): { term: string; fragmentContext: string; answerBearing: string[] } {
   switch (content.blockType) {
+    case "spaced_interleaved_retrieval":
+      return {
+        term: content.items[0]?.conceptLabel ?? "",
+        fragmentContext: content.items.map((i) => i.prompt).join(" "),
+        answerBearing: content.items.map((i) => i.expectedAnswer),
+      };
     case "anchored_micro_theory":
       return { term: content.title, fragmentContext: `${content.intuitiveHook} ${content.systemRule}`, answerBearing: [] };
     case "declarative_visual_diagram":
@@ -126,6 +134,7 @@ export function DynamicNotebookBlock({
           answerBearingStrings={lexical.answerBearing}
         />
       </div>
+      {content.blockType === "spaced_interleaved_retrieval" && <SpacedInterleavedRetrievalBlock content={content} />}
       {content.blockType === "anchored_micro_theory" && <AnchoredMicroTheoryBlock content={content} />}
       {content.blockType === "declarative_visual_diagram" && <DeclarativeVisualDiagramBlock content={content} />}
       {content.blockType === "branching_scenario_challenge" && (

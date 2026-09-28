@@ -91,7 +91,8 @@ use super::*;
             ..Default::default()
         };
         // The exact anti-pattern the spec calls out: 14 hours crammed into
-        // one undifferentiated block instead of 2-3 modules of <=5h each.
+        // one undifferentiated block instead of 2 homogeneous sessions of
+        // <=4h each.
         let monolithic_syllabus = RoadmapSyllabusPackage {
             course_title: "Tema".to_string(),
             total_weeks: 1,
@@ -100,9 +101,11 @@ use super::*;
                 week: 1,
                 title: "Semana 1".to_string(),
                 deliverable: "Entregable de la semana".to_string(),
+                weekly_goal: Some("Avanzar en el tema".to_string()),
                 micromodules: vec![Micromodule {
-                    label: "Módulo único".to_string(),
+                    label: "Sesión única".to_string(),
                     hours: 14.0,
+                    focus: Some("Todo el tema de una vez".to_string()),
                     deliverable: "Artefacto verificable".to_string(),
                     objective: Some("Explicar el flujo completo del ciclo".to_string()),
                     interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
@@ -149,32 +152,34 @@ use super::*;
         let battery = full_battery();
         let step1 = ScriptedStep {
             text: "..".to_string(),
-            assessment: Some(full_assessment("Tema", 1, 14.0, EntryLevel::TheoreticalFoundations)),
+            assessment: Some(full_assessment("Tema", 1, 3.0, EntryLevel::TheoreticalFoundations)),
             diagnostic_battery: Some(battery.clone()),
             ..Default::default()
         };
         let module = |label: &str, hours: f32, objective: Option<&str>| Micromodule {
             label: label.to_string(),
             hours,
+            focus: Some("Conceptos centrales de la sesión".to_string()),
             deliverable: "Artefacto verificable".to_string(),
             objective: objective.map(str::to_string),
             interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
         };
-        // Well-formed EXCEPT for the missing objective: 3 modules summing to
-        // paceHoursPerWeek, none over the 5h anti-monolith cap, so the only
-        // violation the grounding pass can report is the objective itself.
+        // Well-formed EXCEPT for the missing objective: 2 homogeneous sessions
+        // summing to paceHoursPerWeek, none over the 4h anti-monolith cap, so
+        // the only violation the grounding pass can report is the objective
+        // itself.
         let objectiveless_syllabus = RoadmapSyllabusPackage {
             course_title: "Tema".to_string(),
             total_weeks: 1,
-            pace_hours_per_week: 14.0,
+            pace_hours_per_week: 3.0,
             milestones: vec![Milestone {
                 week: 1,
                 title: "Semana 1".to_string(),
                 deliverable: "Entregable de la semana".to_string(),
+                weekly_goal: Some("Avanzar en el tema".to_string()),
                 micromodules: vec![
-                    module("Módulo 1", 5.0, None),
-                    module("Módulo 2", 5.0, None),
-                    module("Módulo 3", 4.0, Some("comprender la teoría")), // vague = still rejected
+                    module("Sesión 1", 1.5, None),
+                    module("Sesión 2", 1.5, Some("comprender la teoría")), // vague = still rejected
                 ],
             }],
         };

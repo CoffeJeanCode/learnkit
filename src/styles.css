@@ -166,12 +166,26 @@ body {
 .muted { color: var(--chalk-soft); font-size: 14px; }
 .hint { color: var(--chalk-soft); font-size: 13px; margin: 4px 0; }
 
-/* Learning objective: "qué sabrás hacer al terminar" — under each module of
-   the plan (proposal, saved plan, Plan tab) and under the class title in the
-   notebook. Its own line so it never runs into the deliverable/blocks list;
-   absent for syllabi sealed before `Micromodule::objective` existed. */
-.mod-objective { display: block; margin-top: 4px; color: var(--chalk-soft); font-size: 13px; font-style: italic; }
+/* Foco / Entregable / Objetivo: one line each under a session, kept visually
+   distinct (see `MicromoduleItem`) so the plan reads as a scannable list of
+   claims, never a run-on paragraph. `interactiveBlocks` never gets a line —
+   it's internal orchestrator metadata the student must never see. */
+.mod-focus, .mod-deliverable { margin: 4px 0 0; color: var(--chalk-soft); font-size: 13px; }
+.mod-objective { margin: 4px 0 0; color: var(--chalk-soft); font-size: 13px; font-style: italic; }
 .class-objective { margin-top: -2px; font-style: italic; }
+
+/* Meta semanal: Backward Design's weekly goal, set apart from the deliverable
+   summary right above it so the "why this week" reads before the "what you
+   build" — absent for syllabi sealed before `Milestone::weeklyGoal` existed. */
+.week-goal {
+  margin: 4px 0 8px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid var(--chalk-faint);
+  color: var(--chalk-soft);
+  font-size: 13px;
+  font-style: italic;
+}
+.milestone-list > li { margin-bottom: 10px; }
 
 /* --- Cards: dark notes, flat surface (texture lives on the page) --- */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 18px; margin: 14px 0; }
@@ -762,6 +776,23 @@ pre.output, .quickrun pre {
 .theory-hook { font-style: italic; color: var(--chalk-soft); }
 .theory-error { color: var(--red-chalk); }
 .theory-pause { color: var(--chalk); font-family: var(--font-hand); font-size: 17px; }
+
+/* spaced_interleaved_retrieval — quick recall of PRIOR concepts, always the
+   class's first block when the student has due items */
+.retrieval-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.retrieval-item { border: 1px dashed var(--chalk-faint); border-radius: 8px; padding: 10px 12px; }
+.retrieval-concept-tag {
+  display: inline-block;
+  font-family: var(--font-hand);
+  font-size: 12px;
+  color: var(--chalk-soft);
+  border: 1px solid var(--chalk-faint);
+  border-radius: 999px;
+  padding: 1px 8px;
+  margin-bottom: 6px;
+}
+.retrieval-prompt { margin: 4px 0; }
+.retrieval-answer { margin: 6px 0 0; color: var(--green-chalk); }
 
 /* diagnostic_battery */
 .diagnostic-question-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 16px; }

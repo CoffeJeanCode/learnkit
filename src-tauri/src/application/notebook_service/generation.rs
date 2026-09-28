@@ -14,6 +14,7 @@ use tauri::AppHandle;
 
 use crate::agents::notebook_agent::NOTEBOOK_AGENT_ID;
 use crate::agents::pedagogical_critic_agent::PEDAGOGICAL_CRITIC_AGENT_ID;
+use crate::domain::learner_memory::{LOCAL_LEARNER_ID, iso_date_from_ms};
 use crate::domain::notebook::{
     BlockStatus, BlockUpdate, ClassRecord, ClosureFeedback, DynamicBlockType, GateResult, GateSubmission, GeneratedSectionBlock,
     NotebookBlock, NotebookPayload,
@@ -169,6 +170,27 @@ impl NotebookService {
             }
         };
 
+        // Roll this outcome into the learner's cross-course cognitive memory
+        // — see `domain::learner_memory`. Best-effort: a memory read/write
+        // failure must never block the student's actual grading result, so
+        // errors here are logged, not propagated.
+        let mut memory = self.store.get_learner_memory(LOCAL_LEARNER_ID).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "failed to load learner memory, using transient defaults");
+            crate::domain::learner_memory::LearnerCognitiveMemory::new(LOCAL_LEARNER_ID)
+        });
+        memory.record_gate_outcome(block.block_type, passed);
+        let friction_is_low = memory.friction_is_low();
+        if let Ok(Some(gen_ctx)) = self.store.class_generation_context(&document.class_id) {
+            if passed {
+                memory.resolve_misconceptions_for(&gen_ctx.class.title);
+            } else if let Some(pattern) = misconception_pattern_from_submission(&block, &submission) {
+                memory.record_misconception(&gen_ctx.class.title, &pattern, &iso_date_from_ms(now_ms()));
+            }
+        }
+        if let Err(e) = self.store.save_learner_memory(&memory) {
+            tracing::warn!(error = %e, "failed to persist learner memory update");
+        }
+
         if passed {
             let updated = self.store.update_block_status(block_id, BlockStatus::Passed, None, true)?;
             if document.initial_prediction.is_none() {
@@ -195,8 +217,13 @@ impl NotebookService {
             });
         }
 
+        // `cognitiveFrictionTolerance == low_frustration` (see
+        // `domain::learner_memory`): escalate to a re-angled block after
+        // just 1 failure instead of insisting on 3 — "ofrece
+        // desescalamiento visual inmediato tras un primer fallo".
+        let effective_max_attempts = if friction_is_low { 1 } else { MAX_GATE_ATTEMPTS };
         let attempt_count = block.attempt_count + 1;
-        if attempt_count < MAX_GATE_ATTEMPTS {
+        if attempt_count < effective_max_attempts {
             let updated = self.store.update_block_status(block_id, BlockStatus::Failed, scaffold_feedback.as_deref(), true)?;
             return Ok(GateResult {
                 passed: false,
@@ -288,6 +315,26 @@ impl NotebookService {
         let graded = grading::grade_closure_with_model(&self.orchestrator, app, &block, reflection, block.attempt_count + 1).await?;
         let status = if graded.passed { BlockStatus::Passed } else { BlockStatus::Failed };
         let updated = self.store.update_block_status(block_id, status, Some(&graded.feedback), true)?;
+
+        // A passed closure means the class's concept is genuinely learned —
+        // seed it into the spaced-retrieval queue so a FUTURE class's first
+        // block can reactivate it (see `domain::learner_memory` and
+        // `grounding::single_block_violations`'s due-retrieval rule).
+        // Best-effort, same as the gate-outcome recording above.
+        if graded.passed {
+            if let Ok(Some(gen_ctx)) = self.store.class_generation_context(&document.class_id) {
+                match self.store.get_learner_memory(LOCAL_LEARNER_ID) {
+                    Ok(mut memory) => {
+                        memory.queue_retrieval(&document.class_id, &gen_ctx.class.title, now_ms());
+                        if let Err(e) = self.store.save_learner_memory(&memory) {
+                            tracing::warn!(error = %e, "failed to persist learner memory after closure");
+                        }
+                    }
+                    Err(e) => tracing::warn!(error = %e, "failed to load learner memory after closure"),
+                }
+            }
+        }
+
         Ok(ClosureFeedback { passed: graded.passed, feedback: graded.feedback, block: grading::redact_block(&updated) })
     }
 
@@ -332,6 +379,7 @@ impl NotebookService {
 
         let diagnostic_profile = self.store.get_course_diagnostic_battery(&ctx.course.id)?.map(|s| s.profile_summary());
         let block_type_usage = self.store.block_type_usage_for_course(&ctx.course.id, &class_id)?;
+        let learner_memory = self.store.get_learner_memory(LOCAL_LEARNER_ID)?;
         let mastery = mastery_progress(&existing_blocks);
         let required = broken.block_type;
         let is_closing_block = required == DynamicBlockType::MetacognitiveClosure;
@@ -352,6 +400,8 @@ impl NotebookService {
                 initial_prediction.as_deref(),
                 &final_result_so_far,
                 mastery,
+                &learner_memory,
+                now_ms(),
             )
         };
         base_input.push_str(&format!(
@@ -372,6 +422,11 @@ impl NotebookService {
             mastery,
             is_escalation: false,
             force_close: is_closing_block,
+            // A regeneration repairs a block that already occupies a fixed
+            // position/type — the due-retrieval rule must never veto it,
+            // even if a due item exists NOW (memory state can move between
+            // the original generation and a later repair).
+            has_due_retrieval: false,
             required_block_type: Some(required),
             is_regeneration: true,
             last_grounded: Mutex::new(None),
@@ -496,12 +551,43 @@ struct EscalationInput {
     recent_wrong_submission: String,
 }
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
 fn submission_text_of(submission: &GateSubmission) -> String {
     match submission {
         GateSubmission::InteractivePredictionGate { selected_option } => selected_option.clone(),
         GateSubmission::BranchingScenarioChallenge { selected_choice } => selected_choice.clone(),
         GateSubmission::HeuristicErrorAudit { diagnosis_text } => diagnosis_text.clone(),
         GateSubmission::HandsOnMission { submission_text } => submission_text.clone(),
+    }
+}
+
+/// Pulls a concrete, documented misconception label out of a FAILED
+/// conceptual-gate submission — the wrong option's own feedback text
+/// (`conceptualFeedbackMap`/branch `consequence`), never invented text. Only
+/// the two deterministically-graded conceptual gates have this readily
+/// available; `heuristic_error_audit`/`hands_on_mission` are graded by
+/// `notebook_gate_grader`, whose free-text `rationale` never reaches this
+/// layer (see `grading::grade_with_model`'s return shape) — `None` for those,
+/// which simply means no `RecurringMisconception` is recorded for that
+/// attempt, not an error.
+fn misconception_pattern_from_submission(block: &NotebookBlock, submission: &GateSubmission) -> Option<String> {
+    match submission {
+        GateSubmission::InteractivePredictionGate { selected_option } => {
+            block.content_json.get("conceptualFeedbackMap")?.get(selected_option)?.as_str().map(str::to_string)
+        }
+        GateSubmission::BranchingScenarioChallenge { selected_choice } => block
+            .content_json
+            .get("branches")?
+            .as_array()?
+            .iter()
+            .find(|b| b.get("choice").and_then(|v| v.as_str()) == Some(selected_choice.as_str()))?
+            .get("consequence")?
+            .as_str()
+            .map(str::to_string),
+        GateSubmission::HeuristicErrorAudit { .. } | GateSubmission::HandsOnMission { .. } => None,
     }
 }
 
@@ -528,6 +614,16 @@ async fn generate_and_persist_block(
     let existing_blocks = store.load_notebook_by_class(class_id)?.map(|p| p.blocks).unwrap_or_default();
     let diagnostic_profile = store.get_course_diagnostic_battery(&ctx.course.id)?.map(|s| s.profile_summary());
     let block_type_usage = store.block_type_usage_for_course(&ctx.course.id, class_id)?;
+    let learner_memory = store.get_learner_memory(LOCAL_LEARNER_ID)?;
+    let now = now_ms();
+    // The exact concept ids shown to the model as `learnerMemory.dueRetrieval`
+    // — captured now so a successful `spaced_interleaved_retrieval` block can
+    // reactivate exactly these (never re-derived after the fact, since the
+    // due set could shift between now and persistence).
+    let due_ids: Vec<String> = learner_memory.due_retrieval_items(now).iter().map(|i| i.concept_id.clone()).collect();
+    // Only meaningful for the class's very FIRST block — see
+    // `grounding::single_block_violations`'s hard rule.
+    let has_due_retrieval = existing_blocks.is_empty() && !due_ids.is_empty();
 
     let is_escalation = escalation.is_some();
     // Safety valve only — see `grounding::MAX_TOTAL_BLOCKS`. Never true for
@@ -553,6 +649,8 @@ async fn generate_and_persist_block(
                     initial_prediction.as_deref(),
                     &final_result_so_far,
                     mastery,
+                    &learner_memory,
+                    now,
                 )
             }
         }
@@ -575,19 +673,35 @@ async fn generate_and_persist_block(
         mastery,
         is_escalation,
         force_close,
+        // An escalation call never needs the due-retrieval rule: it's a
+        // re-approach for an already-in-progress class, never the class's
+        // first block.
+        has_due_retrieval: has_due_retrieval && !is_escalation,
         required_block_type: None,
         is_regeneration: false,
         last_grounded: Mutex::new(None),
     };
     let report = run_generator_critic_loop(&job, MAX_ATTEMPTS, RETRY_BACKOFF_BASE).await?;
+    let block_type = report.value.block_type();
     let content_json = serde_json::to_value(&report.value).map_err(|e| AppError::Persistence(e.to_string()))?;
-    store.insert_block_if_count(
-        document_id,
-        report.value.block_type(),
-        &content_json,
-        BlockStatus::Ready,
-        Some(expected_block_count),
-    )
+    let inserted = store.insert_block_if_count(document_id, block_type, &content_json, BlockStatus::Ready, Some(expected_block_count))?;
+
+    // The retrieval block is non-gate content (see
+    // `DynamicBlockType::SpacedInterleavedRetrieval`'s doc comment): reaching
+    // it IS the reactivation, same "no grading needed" philosophy as
+    // `anchored_micro_theory`/`declarative_visual_diagram`. Push each of the
+    // due items' schedule forward now that they've been shown again.
+    if inserted.is_some() && block_type == DynamicBlockType::SpacedInterleavedRetrieval && !due_ids.is_empty() {
+        let mut memory = learner_memory;
+        for id in &due_ids {
+            memory.reactivate_retrieval(id, true, now);
+        }
+        if let Err(e) = store.save_learner_memory(&memory) {
+            tracing::warn!(error = %e, "failed to persist spaced-retrieval reactivation");
+        }
+    }
+
+    Ok(inserted)
 }
 
 /// One block-generation job wired into the shared generator-critic loop
@@ -610,6 +724,11 @@ struct BlockGenerationJob<'a> {
     mastery: MasteryProgress,
     is_escalation: bool,
     force_close: bool,
+    /// Whether the learner has retrieval items due RIGHT NOW and this is the
+    /// class's very first block — see `grounding::single_block_violations`'s
+    /// hard rule. `false` for every escalation and regeneration call (see
+    /// their own construction sites for why).
+    has_due_retrieval: bool,
     /// Set only by [`NotebookService::regenerate_block`]: the exact type the
     /// candidate MUST be — the block being repaired already occupies a slot
     /// in the sequence, so the replacement can't be a different type (it
@@ -659,6 +778,7 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
             self.is_escalation || self.is_regeneration,
             self.mastery,
             self.force_close,
+            self.has_due_retrieval,
         );
         if let Some(v) = dominance_violation(candidate, &self.block_type_usage) {
             violations.push(v);

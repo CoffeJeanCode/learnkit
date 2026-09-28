@@ -41,13 +41,25 @@
                     week: 1,
                     title: "La gran imagen".to_string(),
                     deliverable: "Mapa visual".to_string(),
-                    micromodules: vec![Micromodule {
-                        label: "Módulo 1".to_string(),
-                        hours: 3.0,
-                        deliverable: "Mapa visual anotado".to_string(),
-                        objective: Some("Explicar el ciclo de Krebs con un mapa propio".to_string()),
-                        interactive_blocks: vec!["interactive_visual_anchor".to_string(), "metacognitive_closure".to_string()],
-                    }],
+                    weekly_goal: Some("Ver el ciclo completo antes de entrar en cada paso".to_string()),
+                    micromodules: vec![
+                        Micromodule {
+                            label: "Días 1-2 — Panorama general".to_string(),
+                            hours: 1.5,
+                            focus: Some("Cómo se conectan las 8 reacciones del ciclo entre sí".to_string()),
+                            deliverable: "Mapa visual anotado".to_string(),
+                            objective: Some("Explicar el ciclo de Krebs con un mapa propio".to_string()),
+                            interactive_blocks: vec!["interactive_visual_anchor".to_string(), "metacognitive_closure".to_string(), "hands_on_mission".to_string()],
+                        },
+                        Micromodule {
+                            label: "Días 3-4 — Puntos de control".to_string(),
+                            hours: 1.5,
+                            focus: Some("Qué reacciones regulan la velocidad del ciclo".to_string()),
+                            deliverable: "Mapa visual anotado 2".to_string(),
+                            objective: Some("Señalar los puntos de control del ciclo en el mapa".to_string()),
+                            interactive_blocks: vec!["error_audit_challenge".to_string(), "metacognitive_closure".to_string(), "hands_on_mission".to_string()],
+                        },
+                    ],
                 }],
             },
             diagnostic_battery: None,
@@ -253,8 +265,8 @@
     fn import_course_from_roadmap_seeds_one_class_per_micromodule() {
         let service = service_with(Arc::new(ScriptedNotebookRunner::default()));
         let classes = service.import_course_from_roadmap(&sealed_roadmap_session()).expect("import ok");
-        assert_eq!(classes.len(), 1);
-        assert_eq!(classes[0].title, "Semana 1: Módulo 1");
+        assert_eq!(classes.len(), 2);
+        assert_eq!(classes[0].title, "Semana 1: Días 1-2 — Panorama general");
     }
 
     #[test]

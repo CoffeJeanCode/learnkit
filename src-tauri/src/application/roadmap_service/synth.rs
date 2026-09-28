@@ -38,19 +38,19 @@ pub(super) fn synth_diagnostic_card() -> DiagnosticSummaryCard {
     }
 }
 
-/// Splits a week's total hours into 1-3 modules of at most 5h each (the
-/// anti-monolith cap — see `micromodule_violations`), used by the force-close
-/// fallback so even a synthesized syllabus respects the same rule a real
-/// `propose_syllabus_plan` call is held to.
+/// Splits a week's total hours into EXACTLY 2 homogeneous sessions (the
+/// anti-monolith dosing rule — see `grounding::micromodule_violations`),
+/// used by the force-close fallback so even a synthesized syllabus respects
+/// the same rule a real `propose_syllabus_plan` call is held to.
 pub(super) fn synth_micromodules(total_hours: f32) -> Vec<Micromodule> {
-    let count = ((total_hours / 5.0).ceil() as usize).clamp(1, 3);
-    let per_module = total_hours / count as f32;
-    (1..=count)
+    let half = total_hours / 2.0;
+    (1..=2)
         .map(|i| Micromodule {
-            label: format!("Módulo {i}"),
-            hours: per_module,
-            deliverable: format!("Entregable verificable del módulo {i}"),
-            objective: Some(format!("Aplicar los conceptos clave del módulo {i} a un caso concreto del curso")),
+            label: format!("Sesión {i}"),
+            hours: half,
+            focus: Some(format!("Conceptos centrales de la sesión {i}, aplicados a un caso concreto del curso")),
+            deliverable: format!("Entregable verificable de la sesión {i}"),
+            objective: Some(format!("Aplicar los conceptos clave de la sesión {i} a un caso concreto del curso")),
             interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
         })
         .collect()
@@ -63,6 +63,7 @@ pub(super) fn synth_roadmap_package(profile: &LearnerProfileCard) -> RoadmapSyll
             week,
             title: format!("Semana {week}: avance progresivo"),
             deliverable: "Entregable de la semana".to_string(),
+            weekly_goal: Some("Avanzar un paso concreto hacia la meta declarada".to_string()),
             micromodules: synth_micromodules(profile.weekly_commitment_hours),
         })
         .collect();

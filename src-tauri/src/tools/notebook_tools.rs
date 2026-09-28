@@ -333,6 +333,27 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
         "oneOf": [
             {
                 "properties": {
+                    "blockType": {"const": "spaced_interleaved_retrieval"},
+                    "items": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 2,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "conceptLabel": {"type": "string", "description": "El concepto de una clase ANTERIOR que se reactiva — nunca material nuevo de esta clase"},
+                                "prompt": {"type": "string", "description": "La pregunta de recuperación rápida"},
+                                "expectedAnswer": {"type": "string", "description": "La respuesta esperada — se revela DESPUÉS de que el estudiante recuerde, no es una clave de calificación secreta"}
+                            },
+                            "required": ["conceptLabel", "prompt", "expectedAnswer"]
+                        }
+                    }
+                },
+                "required": ["blockType", "items"],
+                "description": "SOLO como PRIMER bloque de la clase, y SOLO cuando learnerMemory.dueRetrieval del input trae elementos — 1 a 2 preguntas que reactivan conceptos de clases anteriores antes de tocar material nuevo. Nunca un gate: es autocomprobación (el estudiante recuerda, luego revela la respuesta)."
+            },
+            {
+                "properties": {
                     "blockType": {"const": "anchored_micro_theory"},
                     "title": {"type": "string"},
                     "intuitiveHook": {"type": "string", "description": "🎯 Analogía cotidiana, cero términos técnicos"},

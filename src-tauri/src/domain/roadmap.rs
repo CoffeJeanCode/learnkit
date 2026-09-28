@@ -73,26 +73,39 @@ pub struct DiagnosticSummaryCard {
     pub learning_strategy: String,
 }
 
-/// One bounded chunk of a week's workload — the anti-monolith unit. Never
-/// more than ~5 hours (see `syllabus_violations`'s `hours` check): a week
-/// needing more than that MUST be split into 2-3 of these instead of one
-/// undifferentiated block, per Backward Design / Constructive Alignment
-/// (Wiggins & McTighe; Biggs) — each module ends in ITS OWN authentic,
-/// verifiable artifact, not a shared week-level "understand the theory".
+/// One of the week's exactly-2 study sessions — the anti-monolith unit.
+/// Never more than 4 hours (see `syllabus_violations`'s `hours` check): a
+/// week's `paceHoursPerWeek` is always split into EXACTLY two homogeneous
+/// sessions (e.g. 3.5h/3.5h, or 4h/3h — never one 5h block against a lone
+/// 2h one), per Backward Design / Constructive Alignment (Wiggins & McTighe;
+/// Biggs) — each session ends in ITS OWN authentic, verifiable artifact, not
+/// a shared week-level "understand the theory".
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Micromodule {
-    /// e.g. "Módulo 1: Días 1-2".
+    /// The session's title, carrying its day range — e.g. "Días 1-2 —
+    /// Recorrer el árbol sin clonar nodos". Student-facing: never a raw
+    /// internal/methodological term (see `syllabus_violations`'s jargon
+    /// check).
     pub label: String,
     pub hours: f32,
-    /// A concrete, checkable artifact THIS module produces (e.g. "circuito
+    /// A concrete, checkable artifact THIS session produces (e.g. "circuito
     /// simulado de 2 qubits con histograma analizado") — never a vague verb
     /// phrase like "comprender la teoría" (see `syllabus_violations`'s
     /// banned-phrase check).
     pub deliverable: String,
-    /// What the student will be ABLE TO DO once this module is done — one
+    /// The central concepts and cause-effect relationships this session
+    /// explores, landed in the real friction it resolves (e.g. "por qué
+    /// `iter_mut` evita clonar la estructura completa" instead of an
+    /// abstract definition). Distinct from `objective` (the capability
+    /// gained) and from `deliverable` (the artifact handed in). Required for
+    /// every NEW proposal (see `syllabus_violations`); nullable only so
+    /// sessions sealed before this field existed keep deserializing.
+    #[serde(default)]
+    pub focus: Option<String>,
+    /// What the student will be ABLE TO DO once this session is done — one
     /// observable sentence in the infinitive ("Explicar por qué el ciclo
-    /// arranca con acetil-CoA"), answering "¿qué me llevo de este módulo?"
+    /// arranca con acetil-CoA"), answering "¿qué me llevo de esta sesión?"
     /// where `deliverable` answers "¿qué entrego?". Required for every NEW
     /// proposal (see `syllabus_violations`); nullable only so sessions
     /// sealed before this field existed keep deserializing (renders as
@@ -103,6 +116,9 @@ pub struct Micromodule {
     /// `agents::roadmap_agent`'s block catalog and `syllabus_violations`'s
     /// membership check): interactive_visual_anchor | socratic_prediction |
     /// error_audit_challenge | hands_on_mission | metacognitive_closure.
+    /// PURE BACKEND METADATA for `notebook_generator` to orchestrate the
+    /// class's blocks — the student never sees these names; the frontend
+    /// never renders this field.
     pub interactive_blocks: Vec<String>,
 }
 
@@ -115,9 +131,17 @@ pub struct Milestone {
     /// `notebook_service::seal_session`'s `create_milestone` call and the
     /// UI's week header both want a single sentence, not a module list.
     pub deliverable: String,
-    /// The week's real decomposition — 1 to 3 modules (see
-    /// `syllabus_violations`), replacing what used to be a single flat
-    /// `interactive_blocks` list on the week itself.
+    /// Backward Design's weekly goal: the real problem/friction this week
+    /// resolves and the operative capability it unlocks — never a vague
+    /// syllabus-speak line ("familiarizarse con X"). Shown to the student as
+    /// the week's "Meta semanal". Required for every NEW proposal (see
+    /// `syllabus_violations`); nullable only so sessions sealed before this
+    /// field existed keep deserializing.
+    #[serde(default)]
+    pub weekly_goal: Option<String>,
+    /// The week's real decomposition — EXACTLY 2 sessions, homogeneous in
+    /// hours (see `syllabus_violations`), replacing what used to be a single
+    /// flat `interactive_blocks` list on the week itself.
     pub micromodules: Vec<Micromodule>,
 }
 

@@ -3,6 +3,7 @@
     #[test]
     fn block_type_round_trips_through_its_wire_string() {
         for b in [
+            DynamicBlockType::SpacedInterleavedRetrieval,
             DynamicBlockType::AnchoredMicroTheory,
             DynamicBlockType::DeclarativeVisualDiagram,
             DynamicBlockType::BranchingScenarioChallenge,
@@ -211,6 +212,17 @@
                 block.block_type()
             );
         }
+
+        expect(
+            &GeneratedSectionBlock::SpacedInterleavedRetrieval {
+                items: vec![RetrievalPrompt {
+                    concept_label: "Ósmosis".to_string(),
+                    prompt: "¿Hacia dónde se mueve el agua?".to_string(),
+                    expected_answer: "Hacia la mayor concentración de soluto".to_string(),
+                }],
+            },
+            &["blockType", "items"],
+        );
 
         expect(
             &GeneratedSectionBlock::AnchoredMicroTheory {

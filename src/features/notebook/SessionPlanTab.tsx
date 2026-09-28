@@ -158,13 +158,18 @@ export function SessionPlanTab({
         <p className="hint">
           {pkg.syllabus.totalWeeks} semanas · {pkg.syllabus.paceHoursPerWeek} h/semana
         </p>
-        <ul className="dod-list">
+        <ul className="dod-list milestone-list">
           {pkg.syllabus.milestones.map((m) => (
             <li key={m.week} className="done">
               <strong>
                 Semana {m.week}: {m.title}
               </strong>{" "}
               — {m.deliverable}
+              {m.weeklyGoal && (
+                <blockquote className="week-goal">
+                  <strong>Meta semanal:</strong> {m.weeklyGoal}
+                </blockquote>
+              )}
               <ul className="dod-list">
                 {m.micromodules.map((mod, i) => (
                   <MicromoduleItem key={i} mod={mod} className="done" />

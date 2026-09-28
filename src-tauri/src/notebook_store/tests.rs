@@ -415,6 +415,7 @@
         let module = |label: &str, objective: Option<&str>| Micromodule {
             label: label.to_string(),
             hours: 3.0,
+            focus: Some("Conceptos centrales de la sesión".to_string()),
             deliverable: "Artefacto verificable".to_string(),
             objective: objective.map(str::to_string),
             interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
@@ -427,7 +428,8 @@
                 week: 1,
                 title: "Semana 1".to_string(),
                 deliverable: "Entregable".to_string(),
-                micromodules: vec![module("Módulo 1", Some("Explicar el flujo con un ejemplo")), module("Módulo 2", None)],
+                weekly_goal: Some("Avanzar en el tema".to_string()),
+                micromodules: vec![module("Sesión 1", Some("Explicar el flujo con un ejemplo")), module("Sesión 2", None)],
             }],
         };
 

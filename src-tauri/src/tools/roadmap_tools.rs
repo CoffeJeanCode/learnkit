@@ -168,28 +168,37 @@ fn syllabus_json_schema() -> serde_json::Value {
                             "type": "string",
                             "description": "Resumen de UNA frase del hito de la semana — el detalle real va en micromodules."
                         },
+                        "weeklyGoal": {
+                            "type": "string",
+                            "description": "Meta semanal (Backward Design): qué problema/fricción real resuelve esta semana y qué capacidad operativa nueva desbloquea. Nunca una intención vaga (\"familiarizarse con X\")."
+                        },
                         "micromodules": {
                             "type": "array",
-                            "minItems": 1,
-                            "maxItems": 3,
-                            "description": "Desglose obligatorio anti-monolito: ningún módulo supera 5 horas — si la semana necesita más, repártela en 2-3 módulos. La suma de horas debe igualar paceHoursPerWeek.",
+                            "minItems": 2,
+                            "maxItems": 2,
+                            "description": "EXACTAMENTE 2 sesiones homogéneas en horas (diferencia máxima de 1h entre ambas, p. ej. 3.5h/3.5h o 4h/3h) — anti-monolito: ninguna sesión supera 4 horas. La suma de horas debe igualar paceHoursPerWeek.",
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "label": {"type": "string", "description": "p. ej. \"Módulo 1: Días 1-2\""},
-                                    "hours": {"type": "number", "maximum": 5},
+                                    "label": {"type": "string", "description": "p. ej. \"Días 1-2 — Recorrer el árbol sin clonar nodos\""},
+                                    "hours": {"type": "number", "maximum": 4},
+                                    "focus": {
+                                        "type": "string",
+                                        "description": "Conceptos centrales y relación causa-efecto que explora ESTA sesión, aterrizados en la fricción real que resuelve (nunca una definición enciclopédica ni jerga de proceso)."
+                                    },
                                     "deliverable": {
                                         "type": "string",
-                                        "description": "Artefacto concreto y verificable de ESTE módulo (nunca \"comprender la teoría\" o \"leer sobre el tema\")."
+                                        "description": "Artefacto concreto y verificable de ESTA sesión (nunca \"comprender la teoría\" o \"leer sobre el tema\")."
                                     },
                                     "objective": {
                                         "type": "string",
-                                        "description": "Qué sabrá HACER el estudiante al terminar este módulo: una capacidad observable, una sola frase en infinitivo (p. ej. \"Explicar por qué el ciclo se reinicia con oxalacetato\"). NO es el entregable (el artefacto) ni una intención vaga (\"comprender la teoría\")."
+                                        "description": "Qué sabrá HACER el estudiante al terminar esta sesión: una capacidad observable, una sola frase en infinitivo (p. ej. \"Explicar por qué el ciclo se reinicia con oxalacetato\"). NO es el entregable (el artefacto) ni una intención vaga (\"comprender la teoría\")."
                                     },
                                     "interactiveBlocks": {
                                         "type": "array",
                                         "minItems": 3,
                                         "maxItems": 4,
+                                        "description": "Metadata interna para el orquestador de notebooks — el estudiante NUNCA ve estos nombres.",
                                         "items": {
                                             "type": "string",
                                             "enum": [
@@ -202,11 +211,11 @@ fn syllabus_json_schema() -> serde_json::Value {
                                         }
                                     }
                                 },
-                                "required": ["label", "hours", "deliverable", "objective", "interactiveBlocks"]
+                                "required": ["label", "hours", "focus", "deliverable", "objective", "interactiveBlocks"]
                             }
                         }
                     },
-                    "required": ["week", "title", "deliverable", "micromodules"]
+                    "required": ["week", "title", "deliverable", "weeklyGoal", "micromodules"]
                 }
             }
         },
@@ -338,13 +347,25 @@ mod tests {
                     week: 1,
                     title: "Semana 1".to_string(),
                     deliverable: "Entregable".to_string(),
-                    micromodules: vec![Micromodule {
-                        label: "Módulo 1".to_string(),
-                        hours: 3.0,
-                        deliverable: "Artefacto verificable".to_string(),
-                        objective: Some("Explicar el flujo completo del módulo con sus propias palabras".to_string()),
-                        interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
-                    }],
+                    weekly_goal: Some("Dejar de clonar la estructura completa en cada recorrido".to_string()),
+                    micromodules: vec![
+                        Micromodule {
+                            label: "Días 1-2 — Recorrer sin clonar".to_string(),
+                            hours: 1.5,
+                            focus: Some("Por qué iterar por referencia evita copiar la estructura completa".to_string()),
+                            deliverable: "Artefacto verificable".to_string(),
+                            objective: Some("Explicar el flujo completo del módulo con sus propias palabras".to_string()),
+                            interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
+                        },
+                        Micromodule {
+                            label: "Días 3-4 — Casos límite".to_string(),
+                            hours: 1.5,
+                            focus: Some("Qué pasa al recorrer una estructura vacía o circular".to_string()),
+                            deliverable: "Artefacto verificable 2".to_string(),
+                            objective: Some("Depurar un recorrido y dejar sus tests en verde".to_string()),
+                            interactive_blocks: vec!["error_audit_challenge".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
+                        },
+                    ],
                 }],
             },
             closing_question: "¿Te parece adecuada esta distribución?".to_string(),
