@@ -85,9 +85,11 @@ warnings; separate concern), auto-publish on merge.
       (Docker: mounted read-only at `/run/secrets/learnkit.key`); `README.md`
       gained a "Releases and auto-update" section explaining the tag flow and
       the GitHub secret.
-- [ ] T10 Tell the user: add repo secret `TAURI_SIGNING_PRIVATE_KEY` with the
-      CONTENTS of `~/.tauri/learnkit.key` (no password secret needed), then
-      `git tag vX.Y.Z && git push` to publish the first release.
+- [x] T10 Told the user (final report 2026-09-29): add repo secret
+      `TAURI_SIGNING_PRIVATE_KEY` with the CONTENTS of `~/.tauri/learnkit.key`
+      (no password secret needed), then `git tag vX.Y.Z && git push` to publish
+      the first release. Work-unit commits: `21bef53` (answered highlight),
+      `eaae200` (updater + workflow + signing); pushed to origin.
 
 ## Acceptance criteria
 - `bun run build` passes; `cargo check` passes.
@@ -97,9 +99,11 @@ warnings; separate concern), auto-publish on merge.
   header offers the update when one exists and can re-check on demand.
 
 ## Progress
-- T1–T9 done on 2026-09-29 (notes inline in the task list above).
+- T1–T10 done on 2026-09-29 (notes inline in the task list above).
 - Verification of record: `tsc --noEmit` PASS, `bun run build` PASS,
   `check-rendering.tsx` PASS; Rust compiled by the running `tauri dev`
   session after the plugin registration (plain `cargo check`/`cargo test`
   were blocked by that session's target-dir lock).
-- Next step: T10 — user adds the GitHub secret, tags a release.
+- Shipped: `21bef53` + `eaae200` on `feature/theory-selection-popover`, pushed.
+- Remaining (user-side): add the `TAURI_SIGNING_PRIVATE_KEY` secret, tag a
+  `vX.Y.Z` release. Then optionally merge to main.
