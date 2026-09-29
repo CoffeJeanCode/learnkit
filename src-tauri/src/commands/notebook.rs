@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use tauri::State;
 
+use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{BlockUpdate, ClassRecord, ClosureFeedback, Course, DiagnosticBatteryState, GateResult, GateSubmission, NotebookPayload};
 use crate::error::AppResult;
 use crate::state::AppState;
@@ -132,4 +133,12 @@ pub fn save_diagnostic_battery_answers(
     answers: HashMap<String, String>,
 ) -> AppResult<()> {
     state.notebook_service.save_diagnostic_battery_answers(&course_id, &answers)
+}
+
+/// Read-only: the `"local"` learner's cognitive profile — see
+/// `domain::learner_memory`'s module doc for why `"local"` is the only
+/// learner id this single-learner app ever uses.
+#[tauri::command]
+pub fn get_learner_memory(state: State<'_, AppState>) -> AppResult<LearnerCognitiveMemory> {
+    state.notebook_service.get_learner_memory()
 }

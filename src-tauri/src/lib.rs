@@ -87,6 +87,7 @@ pub fn run() {
             commands::notebook::save_notebook_state,
             commands::notebook::get_course_diagnostic_battery,
             commands::notebook::save_diagnostic_battery_answers,
+            commands::notebook::get_learner_memory,
             commands::lexical_assistant::ask_lexical_assistant,
         ])
         .run(tauri::generate_context!())

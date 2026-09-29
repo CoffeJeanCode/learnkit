@@ -24,6 +24,18 @@ const PHASES: { id: RoadmapPhase; label: string }[] = [
   { id: "roadmap", label: "3. Tu plan" },
 ];
 
+// Example goals shown only on the empty "nueva sesión" state — realistic
+// asks a learner might type, covering the shape the mentor needs (topic +
+// timeframe + weekly time budget) without prescribing one exact phrasing.
+// `tone` just picks a distinct chalk color per chip (see `.example-chip-*`)
+// so the row doesn't read as one flat gray block.
+const EXAMPLE_PROMPTS: { text: string; tone: "red" | "green" | "blue" | "gold" }[] = [
+  { text: "Quiero aprender a tocar guitarra desde cero en 3 meses, con 4 horas semanales.", tone: "red" },
+  { text: "Necesito mejorar mi inglés conversacional para un viaje en 6 semanas, 5 horas por semana.", tone: "green" },
+  { text: "Quiero preparar una media maratón en 10 semanas, entrenando 4 horas semanales.", tone: "blue" },
+  { text: "Me gustaría aprender fotografía y edición básica en 2 meses, con 3 horas a la semana.", tone: "gold" },
+];
+
 // Roles rendered as handwritten margin annotations, not system labels.
 const ROLE_LABEL: Record<string, string> = {
   assistant: "mentor ✎",
@@ -126,6 +138,7 @@ export function RoadmapView() {
   } = useRoadmap();
   const { providers, loading: providersLoading, refresh: refreshProviders } = useProviders();
   const [input, setInput] = useState("");
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const openNotebooks = useNotebookNav((s) => s.open);
   const setView = useUi((s) => s.setView);
   const [notebookError, setNotebookError] = useState<string | null>(null);
@@ -228,6 +241,13 @@ export function RoadmapView() {
     if (!input.trim()) return;
     sendOrStart(input);
     setInput("");
+  };
+
+  // Fills the composer without sending — the student can still edit the
+  // example before submitting it as their own request.
+  const pickExample = (text: string) => {
+    setInput(text);
+    composerRef.current?.focus();
   };
 
   // Auto-scroll: new turns (user echo, mentor reply, or the "Pensando…"
@@ -344,11 +364,59 @@ export function RoadmapView() {
 
   return (
     <div className="view roadmap">
-      <h2>Tu ruta de aprendizaje</h2>
-      <p className="muted">
-        Cuéntale a tu mentor sobre tu proyecto. En cuanto tenga lo esencial, arma tu plan y tu
-        primera clase de inmediato — sin pasos de más.
-      </p>
+      {session ? (
+        <>
+          <h2>Tu ruta de aprendizaje</h2>
+          <p className="muted">
+            Cuéntale a tu mentor sobre tu proyecto. En cuanto tenga lo esencial, arma tu plan y tu
+            primera clase de inmediato — sin pasos de más.
+          </p>
+        </>
+      ) : (
+        <div className="empty-hero">
+          <h2>Tu ruta de aprendizaje</h2>
+          <p className="muted">
+            Cuéntale a tu mentor sobre tu proyecto. En cuanto tenga lo esencial, arma tu plan y tu
+            primera clase de inmediato — sin pasos de más.
+          </p>
+          <div className="row composer empty-composer">
+            <textarea
+              ref={composerRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter sends; Shift+Enter keeps its default (a newline) so
+                // longer answers to the mentor can span multiple lines.
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  submit();
+                }
+              }}
+              placeholder="Cuéntale a tu mentor qué quieres lograr…"
+              rows={3}
+              disabled={sending}
+              autoFocus
+            />
+            <button className="btn-primary" onClick={submit} disabled={sending || !input.trim()}>
+              Empezar
+            </button>
+          </div>
+          <p className="hint">O prueba con uno de estos y edítalo antes de enviarlo:</p>
+          <div className="example-prompts">
+            {EXAMPLE_PROMPTS.map((ex) => (
+              <button
+                key={ex.text}
+                type="button"
+                className={`example-chip example-chip-${ex.tone}`}
+                onClick={() => pickExample(ex.text)}
+                disabled={sending || opening}
+              >
+                {ex.text}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {session && (
         <>
@@ -566,30 +634,34 @@ export function RoadmapView() {
         </div>
       )}
 
-      {!sealed && !diagnosticOpen && (
-        // Dock siempre visible: si aún no hay sesión, el primer envío la
-        // crea en el acto — no hay pantalla de "Iniciar sesión". Oculto SOLO
-        // mientras quedan preguntas sin responder (`diagnosticOpen`): esa
-        // espera se resuelve con clics (DiagnosticBatteryStage). Una vez
-        // respondida la batería — incluida toda la etapa de propuesta/ajuste
-        // del plan — el composer vuelve a estar visible, porque confirmar o
-        // pedir cambios es de nuevo texto libre.
+      {session && !sealed && !diagnosticOpen && (
+        // Dock siempre visible durante la conversación. Oculto SOLO mientras
+        // quedan preguntas sin responder (`diagnosticOpen`): esa espera se
+        // resuelve con clics (DiagnosticBatteryStage). Una vez respondida la
+        // batería — incluida toda la etapa de propuesta/ajuste del plan — el
+        // composer vuelve a estar visible, porque confirmar o pedir cambios
+        // es de nuevo texto libre. El primer envío (sin sesión) usa el
+        // composer propio del `empty-hero` de arriba, no este.
         <div className="row composer dock">
-          {!session && !sending && !opening && (
-            <p className="hint dock-hint">
-              ✎ Cuéntale a tu mentor qué quieres lograr — escribe abajo y tu sesión arranca sola.
-            </p>
-          )}
-          <input
+          <textarea
+            ref={composerRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && submit()}
-            placeholder={session ? "Responde al mentor…" : "Cuéntale a tu mentor qué quieres lograr…"}
+            onKeyDown={(e) => {
+              // Enter sends; Shift+Enter keeps its default (a newline) so
+              // longer answers to the mentor can span multiple lines.
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+            placeholder="Responde al mentor…"
+            rows={3}
             disabled={sending}
             autoFocus
           />
           <button className="btn-primary" onClick={submit} disabled={sending || !input.trim()}>
-            {session ? "Enviar" : "Empezar"}
+            Enviar
           </button>
         </div>
       )}

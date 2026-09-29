@@ -1,47 +1,81 @@
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode, RefObject } from "react";
 import { askLexicalAssistant, tauriError } from "../../lib/tauri";
 import type { LexicalTurn } from "../../lib/tauri";
+import { useMarginCommentPosition, useTextSelectionPopover, type SelectionAnchor } from "./useTextSelectionPopover";
+import { RichText } from "./blocks/RichText";
 
 const MAX_HISTORY_TURNS = 4;
 
-/** Small isolated assistant, one per block: a physical "¿Dudas?" button that
- *  opens an anchored dropdown (not a full-screen modal) scoped to THAT
- *  block's own content — `fragmentContext` and `answerBearingStrings` are
- *  derived from this specific block (see `blocks/index.tsx`), so the
- *  assistant actually has enough context to answer well. Answers in 3 layers
- *  (analogía / mecanismo / límite), never the answer to a gate. Keeps a
- *  short in-dropdown memory (last few Q&A) for "explícamelo de otra forma"
- *  follow-ups — cleared whenever it closes, never persisted server-side. See
- *  `LexicalAssistantService::ask` for the isolation + redaction contract. */
+/** The per-block "¿Dudas?" TRIGGER: a physical button in the block's kicker
+ *  row that opens THIS block's shared margin comment (owned by
+ *  `TheorySelectionAssistant` below — one comment slot per block, two
+ *  triggers, design §1). It deliberately carries no ask/history state of its
+ *  own: the thread lives in `useLexicalAssistantThread` inside the unified
+ *  surface, so the request/history/error contract exists in exactly one
+ *  place. The block-scoped context (`fragmentContext` /
+ *  `answerBearingStrings`, from `deriveBlockLexicalContext()` in
+ *  `blocks/index.tsx`) is fed straight into that comment instead. Answers
+ *  stay in 3 layers (analogía / mecanismo / límite), never the answer to a
+ *  gate; the thread is cleared whenever the comment closes and never
+ *  persisted server-side (see `LexicalAssistantService::ask` for the
+ *  isolation + redaction contract). */
 export function BlockLexicalAssistant({
-  term,
-  fragmentContext,
-  keyConcepts,
-  answerBearingStrings,
+  open,
+  onToggle,
+  triggerRef,
 }: {
+  /** Whether this block's comment slot is currently open via the button. */
+  open: boolean;
+  onToggle: () => void;
+  /** Shared with the comment: mousedown on the button must TOGGLE (not be
+   *  treated as an outside click), and the button rect anchors the
+   *  narrow-viewport centering fallback. */
+  triggerRef: RefObject<HTMLButtonElement | null>;
+}) {
+  return (
+    <div className="block-lexical">
+      <button
+        type="button"
+        className="btn-quiet block-lexical-trigger"
+        ref={triggerRef}
+        onClick={onToggle}
+        aria-expanded={open}
+      >
+        ¿Dudas?
+      </button>
+    </div>
+  );
+}
+
+// --- The unified margin comment (both triggers) -----------------------------
+//
+// ONE comment surface per block with two ways to open it: the ¿Dudas?
+// button above (button mode) and a floating comment for whatever the
+// student highlights inside the block (selection mode, see
+// `useTextSelectionPopover`). Both render `LexicalMarginComment`, which
+// keeps the request/history/busy/error state machine in
+// `useLexicalAssistantThread` below, so neither trigger reimplements the
+// `askLexicalAssistant` call, history trimming, or error handling.
+
+/** One isolated lexical-assistant thread: question/history/busy/error state
+ *  plus the `ask()` call itself, used by the unified margin comment for
+ *  BOTH triggers (button and selection), so the request/history/error
+ *  contract lives in exactly one place. */
+function useLexicalAssistantThread(params: {
   term: string;
   fragmentContext: string | null;
   keyConcepts: string[];
   answerBearingStrings: string[];
 }) {
-  const [open, setOpen] = useState(false);
+  const { term, fragmentContext, keyConcepts, answerBearingStrings } = params;
   const [question, setQuestion] = useState("");
   const [history, setHistory] = useState<LexicalTurn[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const rootRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onOutsideClick = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onOutsideClick);
-    return () => document.removeEventListener("mousedown", onOutsideClick);
-  }, [open]);
-
-  const ask = async () => {
-    const q = question.trim();
+  const ask = async (explicitQuestion?: string) => {
+    const q = (explicitQuestion ?? question).trim();
     if (!q || busy) return;
     setBusy(true);
     setError(null);
@@ -63,45 +97,242 @@ export function BlockLexicalAssistant({
     }
   };
 
+  return { question, setQuestion, history, busy, error, ask };
+}
+
+const SELECTION_TERM_MAX_CHARS = 240;
+const SELECTION_QUOTE_PREVIEW_CHARS = 160;
+
+function previewQuote(text: string, max = SELECTION_QUOTE_PREVIEW_CHARS): string {
+  return text.length > max ? `${text.slice(0, max).trimEnd()}…` : text;
+}
+
+/** Owns the ONE margin-comment slot per block (design §1): wraps the
+ *  block's rendered content, watches for a real text selection inside it
+ *  (via `useTextSelectionPopover`), and renders the shared
+ *  `LexicalMarginComment` whenever either trigger opens it — a live
+ *  selection (which always wins) or the block's ¿Dudas? button (whose open
+ *  state arrives as props from `blocks/index.tsx`, the components' common
+ *  parent). Mounted for every block type; its context props come from the
+ *  exhaustive `deriveBlockLexicalContext()` in `blocks/index.tsx`. */
+export function TheorySelectionAssistant({
+  blockRef,
+  triggerRef,
+  buttonOpen,
+  onButtonOpenChange,
+  buttonTerm,
+  fragmentContext,
+  keyConcepts,
+  answerBearingStrings,
+  children,
+}: {
+  /** `section.notebook-block-wrapper` — anchors the margin slot (`right`)
+   *  and the button mode's `y` (block top). */
+  blockRef: RefObject<HTMLElement | null>;
+  /** The ¿Dudas? button — outside-click exemption + narrow fallback. */
+  triggerRef: RefObject<HTMLButtonElement | null>;
+  buttonOpen: boolean;
+  onButtonOpenChange: (open: boolean) => void;
+  /** Block-scoped term used when the button opens the slot (the selection
+   *  mode derives its own term from the selected text). */
+  buttonTerm: string;
+  fragmentContext: string | null;
+  keyConcepts: string[];
+  answerBearingStrings: string[];
+  children: ReactNode;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const { selection, popoverRef, clear } = useTextSelectionPopover(containerRef);
+
+  // The comment is a DOM SIBLING of the tracked content, not a child of
+  // `containerRef` — selecting text inside the comment itself (its quote
+  // preview, a past answer) must NOT re-trigger detection against its own
+  // rendered output, which would remount/destroy the thread mid-selection.
+  //
+  // ONE slot, two contexts: a live selection always wins over an open
+  // button thread (switching resets the thread — design §5, matching today,
+  // where the selection popover effectively took over the screen). `key`
+  // preserves the old semantics exactly: a NEW distinct selection remounts
+  // the comment (fresh thread); the button thread lives under a stable key
+  // for as long as its slot is open, and unmounts when it closes (cleared
+  // on close, as before).
+  const closeSelection = clear;
+  const closeButton = () => onButtonOpenChange(false);
+  const comment =
+    selection || buttonOpen ? (
+      <LexicalMarginComment
+        key={selection ? `selection:${selection.text}` : "button"}
+        selectedText={selection?.text ?? null}
+        anchor={selection?.anchor ?? null}
+        buttonTerm={buttonTerm}
+        blockRef={blockRef}
+        triggerRef={triggerRef}
+        fragmentContext={fragmentContext}
+        keyConcepts={keyConcepts}
+        answerBearingStrings={answerBearingStrings}
+        rootRef={popoverRef}
+        onClose={selection ? closeSelection : closeButton}
+      />
+    ) : null;
+
   return (
-    <div className="block-lexical" ref={rootRef}>
-      <button type="button" className="btn-quiet block-lexical-trigger" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
-        ¿Dudas?
-      </button>
-      {open && (
-        <div className="block-lexical-dropdown card">
-          <div className="lexical-popover-history">
-            {history.length === 0 && !busy && (
-              <p className="hint">Pregunta lo que necesites aclarar sobre este bloque — no te voy a dar la respuesta del ejercicio.</p>
-            )}
-            {history.map((turn, i) => (
-              <div className="lexical-turn" key={i}>
-                <p className="lexical-turn-question">Tú: {turn.question}</p>
-                <p className="lexical-turn-answer">{turn.answer}</p>
-              </div>
-            ))}
-            {busy && <p className="hint">Pensando…</p>}
-          </div>
+    <>
+      <div className="theory-selection-zone" ref={containerRef}>
+        {children}
+      </div>
+      {comment}
+    </>
+  );
+}
 
-          {error && <div className="alert error">{error}</div>}
+/** The unified per-block margin comment: quoted fragment preview + a quick
+ *  "Explicar término" action (selection mode) or the block-scoped hint
+ *  (button mode), the shared history/input from `useLexicalAssistantThread`,
+ *  and `position: fixed` coordinates beside its block computed by
+ *  `useMarginCommentPosition` (margin slot right of the block, near-selection
+ *  fallback, viewport-clamped, re-anchored on scroll/resize/content growth).
+ *  Mounted only while its trigger is open — a NEW distinct selection remounts
+ *  it via `key`, resetting the thread. */
+function LexicalMarginComment({
+  selectedText,
+  anchor,
+  buttonTerm,
+  fragmentContext,
+  keyConcepts,
+  answerBearingStrings,
+  blockRef,
+  triggerRef,
+  rootRef,
+  onClose,
+}: {
+  selectedText: string | null;
+  /** Viewport anchor of the selection, or `null` in button mode. */
+  anchor: SelectionAnchor | null;
+  buttonTerm: string;
+  fragmentContext: string | null;
+  keyConcepts: string[];
+  answerBearingStrings: string[];
+  blockRef: RefObject<HTMLElement | null>;
+  triggerRef: RefObject<HTMLButtonElement | null>;
+  rootRef: RefObject<HTMLDivElement | null>;
+  onClose: () => void;
+}) {
+  const isSelection = selectedText !== null;
+  const term = selectedText !== null ? selectedText.slice(0, SELECTION_TERM_MAX_CHARS) : buttonTerm;
+  const { question, setQuestion, history, busy, error, ask } = useLexicalAssistantThread({
+    term,
+    fragmentContext,
+    keyConcepts,
+    answerBearingStrings,
+  });
+  const { left, top, ready } = useMarginCommentPosition({ blockRef, triggerRef, popoverRef: rootRef, anchor });
+  const historyRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
-          <div className="row lexical-popover-input">
-            <input
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void ask();
-              }}
-              placeholder="¿Qué quieres que te aclare?"
-              disabled={busy}
-              autoFocus
-            />
-            <button className="btn-primary" onClick={() => void ask()} disabled={busy || !question.trim()}>
-              Preguntar
-            </button>
-          </div>
-        </div>
+  // Button mode closes on a mousedown outside the comment — except on its
+  // own trigger, so the button's click still TOGGLES it (a close on mousedown
+  // would flip the toggle back open one event later). Selection mode keeps
+  // the `useTextSelectionPopover` outside-click/Escape rules instead; a
+  // mousedown inside the content zone starts a fresh selection, which the
+  // `selectionchange` handler drives either way.
+  useEffect(() => {
+    if (isSelection) return;
+    const onOutsideClick = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      if (triggerRef.current?.contains(target)) return;
+      onClose();
+    };
+    document.addEventListener("mousedown", onOutsideClick);
+    return () => document.removeEventListener("mousedown", onOutsideClick);
+  }, [isSelection, rootRef, triggerRef, onClose]);
+
+  // Focus the input once the comment is positioned and visible: button mode
+  // autofocused before, but the unified surface stays `visibility: hidden`
+  // until the first measure, which makes mount-time `autoFocus` a no-op.
+  useEffect(() => {
+    if (!isSelection && ready) inputRef.current?.focus();
+  }, [isSelection, ready]);
+
+  // Keep the newest turn (or the "Pensando…" row) visible: the history is a
+  // scroll box, so without this an answer renders below the fold and looks
+  // like it never arrived.
+  useEffect(() => {
+    const el = historyRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [history, busy]);
+
+  return (
+    <div className={`margin-comment card${ready ? " ready" : ""}`} style={{ left, top }} ref={rootRef}>
+      {isSelection && (
+        <button type="button" className="btn-quiet selection-popover-close" onClick={onClose} aria-label="Cerrar">
+          ×
+        </button>
       )}
+      {selectedText !== null && (
+        <p className="selection-quote">
+          {'> "'}
+          {previewQuote(selectedText)}
+          {'"'}
+        </p>
+      )}
+
+      <div className="lexical-popover-history" ref={historyRef}>
+        {history.length === 0 && !busy && isSelection && (
+          <>
+            <p className="hint">Pregunta lo que quieras sobre esto — no te voy a dar la respuesta del ejercicio.</p>
+            <div className="row">
+              <button
+                type="button"
+                className="btn-quiet"
+                onClick={() => void ask("Explícame qué significa esto.")}
+                disabled={busy}
+              >
+                Explicar término
+              </button>
+            </div>
+          </>
+        )}
+        {history.length === 0 && !busy && !isSelection && (
+          <p className="hint">Pregunta lo que necesites aclarar sobre este bloque — no te voy a dar la respuesta del ejercicio.</p>
+        )}
+        {history.map((turn, i) => (
+          <div className="lexical-turn" key={i}>
+            <p className="lexical-turn-question">Tú: {turn.question}</p>
+            <RichText text={turn.answer} className="lexical-turn-answer" />
+          </div>
+        ))}
+        {busy && (
+          <p className="hint lexical-thinking">
+            <svg className="lex-lemniscate" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                className="lex-inf"
+                pathLength={1}
+                d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z"
+              />
+            </svg>
+            Pensando…
+          </p>
+        )}
+      </div>
+
+      {error && <div className="alert error">{error}</div>}
+
+      <div className="row lexical-popover-input">
+        <input
+          ref={inputRef}
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void ask();
+          }}
+          placeholder="¿Qué quieres que te aclare?"
+          disabled={busy}
+        />
+        <button className="btn-primary" onClick={() => void ask()} disabled={busy || !question.trim()}>
+          Preguntar
+        </button>
+      </div>
     </div>
   );
 }

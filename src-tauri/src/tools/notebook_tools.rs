@@ -41,9 +41,49 @@ impl Tool for PublishNotebookBlockTool {
 
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
+        let args = repair_double_escaped(args);
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args);
         Ok(PublishedAck { saved: true })
     }
+}
+
+/// Model-authored arguments occasionally come back double-escaped: the JSON
+/// string carries `\\n` instead of a newline, so once serde decodes it the
+/// field is ONE line full of literal backslashes. Persisted like that, the
+/// notebook shows raw `\n`, its fence detector never sees a newline (no code
+/// block) and the inline-code span runs across half the text — the "cut
+/// text" symptom. Applied to every model-authored tool capture below, so the
+/// repair happens before anything reaches the store. Strings that already
+/// contain a real newline, or that carry neither telltale, pass through
+/// untouched: normal prose and paths like `C:\new` stay byte-identical.
+fn repair_double_escaped<T>(value: T) -> T
+where
+    T: serde::de::DeserializeOwned + Serialize,
+{
+    let Ok(mut json) = serde_json::to_value(&value) else {
+        return value;
+    };
+    repair_escaped_value(&mut json);
+    serde_json::from_value(json).unwrap_or(value)
+}
+
+fn repair_escaped_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::String(s) => *s = repair_escaped_string(s),
+        serde_json::Value::Array(items) => items.iter_mut().for_each(repair_escaped_value),
+        serde_json::Value::Object(map) => map.values_mut().for_each(repair_escaped_value),
+        _ => {}
+    }
+}
+
+fn repair_escaped_string(s: &str) -> String {
+    if s.contains(['\n', '\r']) || !s.contains('\\') {
+        return s.to_string();
+    }
+    if !s.contains("```") && !s.contains("\\\"") {
+        return s.to_string();
+    }
+    s.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\\"", "\"")
 }
 
 /// A remediation hint shown ONLY on a failed gate attempt (1st or 2nd — the
@@ -108,6 +148,7 @@ impl Tool for GradeGateSubmissionTool {
 
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
+        let args = repair_double_escaped(args);
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args);
         Ok(GradedAck { saved: true })
     }
@@ -149,6 +190,7 @@ impl Tool for GradeClosureSubmissionTool {
 
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
+        let args = repair_double_escaped(args);
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args);
         Ok(GradedAck { saved: true })
     }
@@ -206,6 +248,7 @@ impl Tool for SubmitBlockAuditTool {
 
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
+        let args = repair_double_escaped(args);
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args);
         Ok(AuditedAck { saved: true })
     }
@@ -585,5 +628,45 @@ mod tests {
         let stored = capture.lock().unwrap();
         assert!(stored.as_ref().unwrap().passed);
         assert!(!stored.as_ref().unwrap().feedback.is_empty());
+    }
+
+    #[test]
+    fn escape_repair_only_touches_double_escaped_text() {
+        // The real corruption: literal backslash escapes, no real newline,
+        // a fence to prove it was meant to be multiline.
+        let broken = "Lee el programa:\\n\\n```rust\\nfn main() {}\\n```\\n\\n¿Qué imprime?";
+        let repaired = repair_escaped_string(broken);
+        assert!(repaired.contains('\n'), "{repaired:?}");
+        assert!(!repaired.contains("\\n"), "{repaired:?}");
+        assert!(repaired.contains("```rust"), "{repaired:?}");
+
+        // Everything else must stay byte-identical.
+        assert_eq!(repair_escaped_string("C:\\new\\file"), "C:\\new\\file");
+        assert_eq!(repair_escaped_string("ya trae\nsalto real"), "ya trae\nsalto real");
+        assert_eq!(repair_escaped_string("sin escapes ni valla"), "sin escapes ni valla");
+        assert_eq!(repair_escaped_string("una sola\\nlínea sin telltale"), "una sola\\nlínea sin telltale");
+    }
+
+    #[tokio::test]
+    async fn publish_repairs_a_double_escaped_block_before_it_reaches_the_capture() {
+        let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
+        let tool = PublishNotebookBlockTool(capture.clone());
+        let block = GeneratedSectionBlock::InteractivePredictionGate {
+            question: "Lee el programa:\\n\\n```rust\\nfn main() {}\\n```".to_string(),
+            options: vec!["A".to_string(), "B".to_string()],
+            conceptual_feedback_map: [("A".to_string(), "a".to_string()), ("B".to_string(), "b".to_string())]
+                .into_iter()
+                .collect(),
+            correct_option: "B".to_string(),
+            visual_aid: None,
+        };
+        tool.call(&mut ToolContext::new(), block).await.expect("infallible");
+
+        let stored = capture.lock().unwrap();
+        let value = serde_json::to_value(stored.as_ref().unwrap()).expect("serializes");
+        let question = value.get("question").and_then(|q| q.as_str()).expect("question");
+        assert!(question.contains('\n'), "escapes became real newlines: {question:?}");
+        assert!(!question.contains("\\n"), "no backslash-n left: {question:?}");
+        assert!(question.contains("```rust"), "the fence survived: {question:?}");
     }
 }

@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { Header } from "./components/Header";
+import { SessionView } from "./components/SessionView";
 import { ClassNotebookView } from "./features/notebook/ClassNotebookView";
-import { SessionPlanView } from "./features/notebook/SessionPlanView";
+import { LearnerMemoryView } from "./features/learner-memory/LearnerMemoryView";
 import { ProvidersView } from "./features/providers/ProvidersView";
 import { RoadmapView } from "./features/roadmap/RoadmapView";
 import { readActiveSessionId, useRoadmap } from "./stores/roadmap";
@@ -44,10 +45,12 @@ export default function App() {
       <main className="workspace">
         {view === "providers" ? (
           <ProvidersView />
+        ) : view === "learner-memory" ? (
+          <LearnerMemoryView />
         ) : view === "notebook" ? (
           <ClassNotebookView />
-        ) : view === "plan" ? (
-          <SessionPlanView />
+        ) : view === "roadmap" || view === "plan" ? (
+          <SessionView />
         ) : (
           <RoadmapView />
         )}

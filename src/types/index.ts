@@ -67,7 +67,7 @@ export interface AppError {
   message: string;
 }
 
-export type View = "chat" | "agents" | "workflows" | "providers" | "roadmap" | "plan" | "notebook";
+export type View = "chat" | "agents" | "workflows" | "providers" | "roadmap" | "plan" | "notebook" | "learner-memory";
 
 // Roadmap & Syllabus Diagnostic Agent types live in `../lib/schemas` now —
 // they're Zod schemas (the runtime validation boundary for the agent's JSON

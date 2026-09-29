@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::domain::learner_memory::{LearnerCognitiveMemory, LOCAL_LEARNER_ID};
 use crate::domain::notebook::{BlockUpdate, ClassRecord, Course, DiagnosticBatteryState};
 use crate::domain::roadmap::RoadmapSession;
 use crate::error::{AppError, AppResult};
@@ -77,6 +78,13 @@ impl NotebookService {
 
     pub fn save_diagnostic_battery_answers(&self, course_id: &str, answers: &std::collections::HashMap<String, String>) -> AppResult<()> {
         self.store.save_diagnostic_battery_answers(course_id, answers)
+    }
+
+    /// Read-only: the learner-memory viewer's data source. Always
+    /// `LOCAL_LEARNER_ID` — see `domain::learner_memory`'s module doc for why
+    /// this single-learner app has no other id to pass here.
+    pub fn get_learner_memory(&self) -> AppResult<LearnerCognitiveMemory> {
+        self.store.get_learner_memory(LOCAL_LEARNER_ID)
     }
 }
 
