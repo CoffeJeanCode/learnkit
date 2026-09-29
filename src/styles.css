@@ -778,10 +778,11 @@ pre.output, .quickrun pre {
 .prediction-options { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
 .closure-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
 
-/* anchored_micro_theory — 🎯 hook / 📐 rule / ⚠️ error, always separated */
+/* anchored_micro_theory — 🎯 hook / boundary / 📐 rule / ⚠️ error, always separated */
 .theory-part { display: flex; align-items: flex-start; gap: 8px; margin: 0; }
 .theory-part-emoji { flex: none; line-height: 1.3; }
 .theory-hook { font-style: italic; color: var(--chalk-soft); }
+.theory-boundary { font-size: 13px; color: var(--chalk-faint); }
 .theory-error { color: var(--red-chalk); }
 .theory-pause { color: var(--chalk); font-family: var(--font-hand); font-size: 17px; }
 

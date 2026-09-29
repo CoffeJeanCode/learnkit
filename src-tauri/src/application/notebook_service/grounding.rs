@@ -21,6 +21,19 @@ use crate::domain::notebook::{
 /// STRUCTURAL roles that are SUPPOSED to recur across most classes.
 const PRACTICE_BLOCK_FAMILY: [&str; 3] = ["heuristic_error_audit", "hands_on_mission", "branching_scenario_challenge"];
 
+/// Own word ceiling for `anchored_micro_theory`'s `systemRule` (Capa 2, the
+/// causal/mechanism layer) — widened from the old 160-words-combined cap
+/// specifically so this layer alone can be exhaustive about the mechanism
+/// (see the prompt in `agents::block_generator_agent`), independent of how
+/// terse the other 3 layers stay.
+const MAX_SYSTEM_RULE_WORDS: usize = 180;
+
+/// Combined word ceiling for `anchored_micro_theory`'s other 3 layers —
+/// `intuitiveHook`, `analogyBoundary`, `frequentError` — kept terse even
+/// though `systemRule` now has real room, so the block never degrades into
+/// flat encyclopedic text.
+const MAX_OTHER_LAYERS_WORDS: usize = 100;
+
 /// Course-scoped variety check — judges the new block against the OTHER
 /// classes already generated for the same course, not against this
 /// notebook's own blocks. Only kicks in once there's real history to
@@ -175,7 +188,7 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
                 }
             }
         }
-        GeneratedSectionBlock::AnchoredMicroTheory { title, intuitive_hook, system_rule, frequent_error } => {
+        GeneratedSectionBlock::AnchoredMicroTheory { title, intuitive_hook, analogy_boundary, system_rule, frequent_error } => {
             if title.trim().is_empty() {
                 v.push(empty("title"));
             }
@@ -188,13 +201,20 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
             if frequent_error.trim().is_empty() {
                 v.push(empty("frequentError"));
             }
-            let word_count = [intuitive_hook.as_str(), system_rule.as_str(), frequent_error.as_str()]
+            let system_rule_words = system_rule.split_whitespace().count();
+            if system_rule_words > MAX_SYSTEM_RULE_WORDS {
+                v.push(format!(
+                    "bloque {i} (anchored_micro_theory): systemRule tiene {system_rule_words} palabras, máximo {MAX_SYSTEM_RULE_WORDS}"
+                ));
+            }
+            let other_layers_words = [intuitive_hook.as_str(), analogy_boundary.as_deref().unwrap_or(""), frequent_error.as_str()]
                 .iter()
                 .map(|s| s.split_whitespace().count())
                 .sum::<usize>();
-            if word_count > 160 {
+            if other_layers_words > MAX_OTHER_LAYERS_WORDS {
                 v.push(format!(
-                    "bloque {i} (anchored_micro_theory): {word_count} palabras combinadas, máximo 160 — degrada en texto enciclopédico"
+                    "bloque {i} (anchored_micro_theory): intuitiveHook + analogyBoundary + frequentError suman {other_layers_words} palabras, \
+                     máximo {MAX_OTHER_LAYERS_WORDS} combinadas — deben quedarse terse, el detalle técnico vive en systemRule"
                 ));
             }
         }
@@ -410,15 +430,42 @@ mod tests {
     }
 
     #[test]
-    fn flags_word_cap_on_anchored_micro_theory() {
+    fn flags_word_cap_on_anchored_micro_theory_other_layers() {
         let block = GeneratedSectionBlock::AnchoredMicroTheory {
             title: "t".to_string(),
-            intuitive_hook: "palabra ".repeat(161),
+            intuitive_hook: "palabra ".repeat(101),
+            analogy_boundary: None,
             system_rule: "r".to_string(),
             frequent_error: "e".to_string(),
         };
         let v = single_block_violations(&[], &block, 1, false, no_mastery(), false, false);
-        assert!(v.iter().any(|s| s.contains("máximo 160")), "{v:?}");
+        assert!(v.iter().any(|s| s.contains("máximo 100 combinadas")), "{v:?}");
+    }
+
+    #[test]
+    fn flags_word_cap_on_anchored_micro_theory_system_rule() {
+        let block = GeneratedSectionBlock::AnchoredMicroTheory {
+            title: "t".to_string(),
+            intuitive_hook: "h".to_string(),
+            analogy_boundary: None,
+            system_rule: "palabra ".repeat(181),
+            frequent_error: "e".to_string(),
+        };
+        let v = single_block_violations(&[], &block, 1, false, no_mastery(), false, false);
+        assert!(v.iter().any(|s| s.contains("systemRule tiene") && s.contains("máximo 180")), "{v:?}");
+    }
+
+    #[test]
+    fn allows_system_rule_up_to_its_own_180_word_ceiling_even_with_a_near_full_other_layers_budget() {
+        let block = GeneratedSectionBlock::AnchoredMicroTheory {
+            title: "t".to_string(),
+            intuitive_hook: "palabra ".repeat(40).trim().to_string(),
+            analogy_boundary: Some("palabra ".repeat(30).trim().to_string()),
+            system_rule: "palabra ".repeat(180).trim().to_string(),
+            frequent_error: "palabra ".repeat(29).trim().to_string(),
+        };
+        let v = single_block_violations(&[], &block, 1, false, no_mastery(), false, false);
+        assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]

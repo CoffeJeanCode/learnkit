@@ -31,9 +31,12 @@ pub fn block_guardrail_violations(block: &GeneratedSectionBlock) -> Vec<String> 
                 scan_text(&format!("items[{i}].expectedAnswer"), &item.expected_answer, &mut v);
             }
         }
-        GeneratedSectionBlock::AnchoredMicroTheory { title, intuitive_hook, system_rule, frequent_error } => {
+        GeneratedSectionBlock::AnchoredMicroTheory { title, intuitive_hook, analogy_boundary, system_rule, frequent_error } => {
             scan_text("title", title, &mut v);
             scan_text("intuitiveHook", intuitive_hook, &mut v);
+            if let Some(boundary) = analogy_boundary {
+                scan_text("analogyBoundary", boundary, &mut v);
+            }
             scan_text("systemRule", system_rule, &mut v);
             scan_text("frequentError", frequent_error, &mut v);
         }
@@ -274,6 +277,7 @@ mod tests {
         GeneratedSectionBlock::AnchoredMicroTheory {
             title: "La gran imagen".to_string(),
             intuitive_hook: "Piensa en una fábrica circular".to_string(),
+            analogy_boundary: Some("La fábrica no explica qué pasa cuando el buffer se llena".to_string()),
             system_rule: "Explicación breve del tema.".to_string(),
             frequent_error: "Confundir la entrada con la salida".to_string(),
         }
@@ -321,6 +325,7 @@ mod tests {
         let block = GeneratedSectionBlock::AnchoredMicroTheory {
             title: "T".to_string(),
             intuitive_hook: "Calibrando el nivel del estudiante…".to_string(),
+            analogy_boundary: None,
             system_rule: "R".to_string(),
             frequent_error: "E".to_string(),
         };

@@ -356,12 +356,13 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                 "properties": {
                     "blockType": {"const": "anchored_micro_theory"},
                     "title": {"type": "string"},
-                    "intuitiveHook": {"type": "string", "description": "🎯 Analogía cotidiana, cero términos técnicos"},
-                    "systemRule": {"type": "string", "description": "📐 La regla o mecanismo explicado paso a paso"},
-                    "frequentError": {"type": "string", "description": "⚠️ La confusión típica que hace fallar en examen o proyecto"}
+                    "intuitiveHook": {"type": "string", "description": "🎯 Analogía cotidiana, cero términos técnicos, 1-2 líneas"},
+                    "analogyBoundary": {"type": "string", "description": "Dónde deja de aplicar la analogía de intuitiveHook — qué NO cubre técnicamente, 1 línea, para que el estudiante no extienda la metáfora más allá de lo que soporta"},
+                    "systemRule": {"type": "string", "description": "📐 La regla o mecanismo explicado paso a paso, con el detalle técnico completo (hasta 180 palabras)"},
+                    "frequentError": {"type": "string", "description": "⚠️ Contraste explícito entre un caso VÁLIDO y la confusión típica ('esto SÍ / esto NO, porque...'), no solo describir el error en aislamiento"}
                 },
                 "required": ["blockType", "title", "intuitiveHook", "systemRule", "frequentError"],
-                "description": "Máximo 160 palabras combinadas entre las 3 capas — nunca texto enciclopédico plano"
+                "description": "intuitiveHook + analogyBoundary + frequentError suman máximo 100 palabras combinadas (terse); systemRule tiene su propio máximo de 180 palabras — nunca texto enciclopédico plano"
             },
             {
                 "properties": {
@@ -533,6 +534,7 @@ mod tests {
         let block = GeneratedSectionBlock::AnchoredMicroTheory {
             title: "Título".to_string(),
             intuitive_hook: "Hook".to_string(),
+            analogy_boundary: None,
             system_rule: "Regla".to_string(),
             frequent_error: "Error común".to_string(),
         };

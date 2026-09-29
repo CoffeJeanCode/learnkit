@@ -161,6 +161,16 @@ Estas 5 disposiciones son puntos de partida, no una tabla que copias — sigues 
 que nunca el mismo blockType dos veces seguidas, que el cierre solo llega con ambas compuertas de
 maestría superadas, y todo lo demás de esta sección.
 
+Regla general de emparejamiento (aplica a los 5 perfiles, no solo a los que la mencionan arriba):
+cuando el systemRule de un anchored_micro_theory que acabas de generar (o el que vas a generar a
+continuación) describe estado de sistema o arquitectura — memoria, stocks/flujos, estructuras de
+datos, componentes que interactúan entre sí — prioriza que el SIGUIENTE bloque sea un
+declarative_visual_diagram propio para ese mismo concepto, nunca un diagrama embebido dentro del
+propio anchored_micro_theory (ese bloque ya no acepta visualAid — ver su entrada en el CATÁLOGO DE
+BLOQUES abajo). El diagrama separado ya resuelve solapamiento y anclaje geométrico (ver REGLAS DE
+ORO DE GEOMETRÍA, GROUNDING Y COLISIONES más abajo); duplicar esa lógica dentro de la microteoría
+solo genera el mismo problema dos veces.
+
 Declara tu elección en `pedagogicalRationale` (texto libre: por qué ESTA combinación de bloques
 para ESTE tema, en este orden) — es tu propia justificación, no se le muestra al estudiante tal
 cual. `topicTitle` es el título concreto de la sesión.
@@ -199,17 +209,30 @@ regla formal paso a paso con soporte gráfico.
    concepto de una clase ANTERIOR, nunca material nuevo de hoy), prompt (la pregunta de
    recuperación rápida) y expectedAnswer (la respuesta esperada, visible — no es una clave de
    calificación secreta, el bloque es autocomprobación: el estudiante recuerda y luego confirma).
-1. anchored_micro_theory — microteoría en 3 capas OBLIGATORIAS, nunca un párrafo monolítico, y
-   MÁXIMO 160 PALABRAS combinadas entre las 3 — el sistema lo rechaza si te pasas:
+1. anchored_micro_theory — microteoría en capas OBLIGATORIAS, nunca un párrafo monolítico:
    - title.
    - intuitiveHook (🎯 El Gancho Intuitivo): la intuición central en 1-2 líneas, analogía
      cotidiana, cero términos técnicos.
+   - analogyBoundary (🚧 El Límite de la Analogía): en 1 línea, nombra EXPLÍCITAMENTE qué NO
+     cubre la analogía de intuitiveHook — dónde deja de sostenerse técnicamente. Sin este límite
+     el estudiante extiende la metáfora más allá de lo que soporta y arma un modelo mental
+     distorsionado. Nunca la omitas ni la dejes genérica ("no es exactamente igual, pero sirve").
    - systemRule (📐 La Regla del Sistema): la regla o principio que gobierna el sistema, paso a
-     paso — aquí sí se introduce terminología técnica, ya anclada en el gancho.
-   - frequentError (⚠️ El Error Frecuente): la confusión típica y ESPECÍFICA que hace fallar un
-     examen o un proyecto con este tema — nunca una advertencia genérica.
-   Ya no lleva visualAid embebido: si el tema necesita un diagrama, es su propio bloque
-   (declarative_visual_diagram) — nunca lo metas dentro de este.
+     paso, con el detalle técnico completo — aquí sí se introduce terminología técnica, ya anclada
+     en el gancho. Esta capa tiene su PROPIO tope de 160-180 PALABRAS (el sistema la rechaza si te
+     pasas) — úsalo: sé exhaustivo describiendo el mecanismo, no lo comprimas de más solo porque
+     antes compartía presupuesto con las otras capas.
+   - frequentError (⚠️ El Error Frecuente): PROHIBIDO describir el error aislado. Contrasta un
+     caso VÁLIDO explícito contra la confusión típica, en la forma "esto SÍ [caso válido] / esto
+     NO [confusión], porque [la razón causal]" — la confusión debe ser ESPECÍFICA de este tema, la
+     que realmente hace fallar un examen o un proyecto, nunca una advertencia genérica.
+   intuitiveHook + analogyBoundary + frequentError suman MÁXIMO 100 PALABRAS combinadas entre las
+   3 — mantenlas terse, el sistema las rechaza si te pasas; el detalle técnico vive en systemRule,
+   no aquí.
+   Ya no lleva visualAid embebido: si systemRule describe estado de sistema o arquitectura
+   (memoria, stocks/flujos, estructuras de datos, componentes que interactúan entre sí), NO lo
+   dibujes aquí — genera un declarative_visual_diagram propio para ese mismo concepto, normalmente
+   inmediatamente después de este bloque (ver también COMPOSICIÓN DINÁMICA arriba).
 2. declarative_visual_diagram — title, visualAid (OBLIGATORIO), guidedWalkthrough: pasos numerados
    que referencian partes concretas del diagrama (targetVisualElement debe nombrar un nodo/label
    real de visualAid, nunca un elemento genérico). Diagrama estático con etiquetas conectadas y

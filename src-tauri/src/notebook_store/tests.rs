@@ -79,6 +79,7 @@
             GeneratedSectionBlock::AnchoredMicroTheory {
                 title: "Título".to_string(),
                 intuitive_hook: "Analogía".to_string(),
+                analogy_boundary: None,
                 system_rule: "Explicación breve".to_string(),
                 frequent_error: "Error típico".to_string(),
             },

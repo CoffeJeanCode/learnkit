@@ -360,6 +360,13 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
     blockType: z.literal("anchored_micro_theory"),
     title: z.string(),
     intuitiveHook: z.string(),
+    // Optional — only present when the model explicitly names what the
+    // Capa-1 analogy does NOT cover technically. Nullish (not `.optional()`
+    // alone) — Rust's `Option<String>` takes an explicit `null`, matching
+    // the same convention as `visualAid` above — so old persisted
+    // `anchored_micro_theory` blocks generated before this field existed
+    // (which lack the key entirely) still parse, and don't break rendering.
+    analogyBoundary: z.string().nullish(),
     systemRule: z.string(),
     frequentError: z.string(),
   }),

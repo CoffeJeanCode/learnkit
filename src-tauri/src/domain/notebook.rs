@@ -376,20 +376,36 @@ pub enum GeneratedSectionBlock {
     /// `notebook_service::grounding::single_block_violations`).
     #[serde(rename = "spaced_interleaved_retrieval", rename_all = "camelCase")]
     SpacedInterleavedRetrieval { items: Vec<RetrievalPrompt> },
-    /// Layered microtheory in exactly 3 parts (🎯📐⚠️) — never one
-    /// undifferentiated paragraph — and capped at 160 words combined (see
-    /// `notebook_service::notebook_grounding_violations`) so it can never
-    /// degrade into flat encyclopedic text.
+    /// Layered microtheory in exactly 3-4 parts (🎯📐⚠️, plus an optional
+    /// analogy-boundary line) — never one undifferentiated paragraph.
+    /// `systemRule` has its own ~180-word ceiling and the other layers share
+    /// a combined terse ceiling (see
+    /// `notebook_service::grounding::single_block_violations`) so the block
+    /// can never degrade into flat encyclopedic text.
     #[serde(rename = "anchored_micro_theory", rename_all = "camelCase")]
     AnchoredMicroTheory {
         title: String,
         /// 🎯 Everyday analogy, zero technical terms.
         intuitive_hook: String,
+        /// Explicit statement of what the Capa-1 analogy does NOT cover
+        /// technically, so students don't over-extend the metaphor into a
+        /// distorted mental model. OPTIONAL — unlike `visual_aid` elsewhere
+        /// (worth including only situationally), this one is meant to be
+        /// generated on every new block, but stays `Option<String>` +
+        /// `#[serde(default, skip_serializing_if = "Option::is_none")]` (the
+        /// same convention as `visual_aid` below) so blocks persisted
+        /// before this field existed still deserialize and render without
+        /// the "formato inesperado" bug (see `src/lib/schemas.ts`'s
+        /// `.nullish()` counterpart on this same field).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        analogy_boundary: Option<String>,
         /// 📐 The formal rule/mechanism, introduced step by step — this is
         /// where technical terminology is allowed to appear.
         system_rule: String,
         /// ⚠️ The specific misconception that typically causes a wrong
-        /// answer on an exam or a bug in a project — not a generic warning.
+        /// answer on an exam or a bug in a project — not a generic warning,
+        /// and must contrast it against an explicit valid case (see the
+        /// prompt in `block_generator_agent.rs`).
         frequent_error: String,
     },
     /// A standalone static diagram (never embedded inside a theory block) —

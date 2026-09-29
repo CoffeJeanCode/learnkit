@@ -228,6 +228,7 @@
             &GeneratedSectionBlock::AnchoredMicroTheory {
                 title: "t".to_string(),
                 intuitive_hook: "h".to_string(),
+                analogy_boundary: None,
                 system_rule: "r".to_string(),
                 frequent_error: "e".to_string(),
             },
@@ -329,6 +330,53 @@
         };
         let value = serde_json::to_value(&block).expect("serializes");
         assert!(value.get("visualAid").is_some(), "{value:?}");
+    }
+
+    /// Same backward-compat convention, mirrored for `analogyBoundary`:
+    /// omitted (not `null`) when absent — so blocks persisted before this
+    /// field existed still deserialize — and present under the camelCase
+    /// key when the model does supply it.
+    #[test]
+    fn optional_analogy_boundary_is_omitted_when_absent_and_present_under_camel_case_key_when_set() {
+        let without = GeneratedSectionBlock::AnchoredMicroTheory {
+            title: "t".to_string(),
+            intuitive_hook: "h".to_string(),
+            analogy_boundary: None,
+            system_rule: "r".to_string(),
+            frequent_error: "e".to_string(),
+        };
+        let value = serde_json::to_value(&without).expect("serializes");
+        assert!(value.get("analogyBoundary").is_none(), "{value:?}");
+
+        let with = GeneratedSectionBlock::AnchoredMicroTheory {
+            title: "t".to_string(),
+            intuitive_hook: "h".to_string(),
+            analogy_boundary: Some("No explica qué pasa con escritura concurrente".to_string()),
+            system_rule: "r".to_string(),
+            frequent_error: "e".to_string(),
+        };
+        let value = serde_json::to_value(&with).expect("serializes");
+        assert!(value.get("analogyBoundary").is_some(), "{value:?}");
+    }
+
+    /// A block SERIALIZED before `analogyBoundary` existed (no key at all)
+    /// must still DESERIALIZE cleanly — this is the exact bug class the
+    /// `.nullish()`/`Option<T>` + `#[serde(default)]` convention exists to
+    /// prevent (see `analogy_boundary`'s doc comment).
+    #[test]
+    fn anchored_micro_theory_deserializes_when_analogy_boundary_key_is_entirely_absent() {
+        let json = serde_json::json!({
+            "blockType": "anchored_micro_theory",
+            "title": "t",
+            "intuitiveHook": "h",
+            "systemRule": "r",
+            "frequentError": "e"
+        });
+        let block: GeneratedSectionBlock = serde_json::from_value(json).expect("parses pre-existing stored blocks");
+        match block {
+            GeneratedSectionBlock::AnchoredMicroTheory { analogy_boundary, .. } => assert_eq!(analogy_boundary, None),
+            other => panic!("expected AnchoredMicroTheory, got {other:?}"),
+        }
     }
 
     fn note_doc(current_block_index: u32) -> NotebookDocument {
