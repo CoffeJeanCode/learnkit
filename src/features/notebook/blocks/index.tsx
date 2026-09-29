@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { DynamicSectionBlockSchema } from "../../../lib/schemas";
 import type { DynamicSectionBlock, GateResult, GateSubmission, NotebookBlock } from "../../../lib/schemas";
 import { AnchoredMicroTheoryBlock } from "./AnchoredMicroTheoryBlock";
@@ -8,7 +9,7 @@ import { HeuristicErrorAuditBlock } from "./HeuristicErrorAuditBlock";
 import { InteractivePredictionGateBlock } from "./InteractivePredictionGateBlock";
 import { MetacognitiveClosureBlock } from "./MetacognitiveClosureBlock";
 import { SpacedInterleavedRetrievalBlock } from "./SpacedInterleavedRetrievalBlock";
-import { BlockLexicalAssistant } from "../LexicalAssistantPopover";
+import { BlockLexicalAssistant, TheorySelectionAssistant } from "../LexicalAssistantPopover";
 
 const BLOCK_LABEL: Record<string, string> = {
   spaced_interleaved_retrieval: "Repaso rápido",
@@ -43,8 +44,18 @@ function deriveBlockLexicalContext(content: DynamicSectionBlock): { term: string
         fragmentContext: content.items.map((i) => i.prompt).join(" "),
         answerBearing: content.items.map((i) => i.expectedAnswer),
       };
-    case "anchored_micro_theory":
-      return { term: content.title, fragmentContext: `${content.intuitiveHook} ${content.systemRule}`, answerBearing: [] };
+    case "anchored_micro_theory": {
+      // All 4 layers (hook/boundary/rule/error) — `analogyBoundary` is
+      // optional (absent on blocks persisted before it existed), so it's
+      // filtered out rather than joined as an empty/undefined chunk. This
+      // is also what the text-selection popover uses as `fragmentContext`
+      // for a highlighted fragment anywhere in the block (see
+      // `TheorySelectionAssistant` below), not just the hook/rule.
+      const layers = [content.intuitiveHook, content.analogyBoundary, content.systemRule, content.frequentError].filter(
+        (layer): layer is string => Boolean(layer && layer.trim()),
+      );
+      return { term: content.title, fragmentContext: layers.join(" "), answerBearing: [] };
+    }
     case "declarative_visual_diagram":
       return { term: content.title, fragmentContext: content.title, answerBearing: [] };
     case "branching_scenario_challenge":
@@ -98,6 +109,16 @@ export function DynamicNotebookBlock({
   regenerating?: boolean;
   regenerateError?: string | null;
 }) {
+  // One margin-comment slot per block (see `TheorySelectionAssistant`): the
+  // ¿Dudas? trigger lives in the kicker row, the comment itself is owned by
+  // the zone wrapper below — siblings, so their shared open state and the
+  // element refs (block rect → margin position, trigger rect → fallback +
+  // outside-click exemption) are hoisted HERE, before the parse early-return
+  // so the hook order never depends on parse success (a regeneration can
+  // flip it on the same mounted instance).
+  const blockRef = useRef<HTMLElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const [assistantOpen, setAssistantOpen] = useState(false);
   const parsed = DynamicSectionBlockSchema.safeParse(block.content_json);
   if (!parsed.success) {
     return (
@@ -121,45 +142,55 @@ export function DynamicNotebookBlock({
   const lexical = deriveBlockLexicalContext(content);
 
   return (
-    <section className={`notebook-block-wrapper ${content.blockType} status-${block.status}`}>
+    <section className={`notebook-block-wrapper ${content.blockType} status-${block.status}`} ref={blockRef}>
       <div className="block-kicker">
         <span className="block-kicker-label">
           {BLOCK_LABEL[content.blockType] ?? content.blockType}
           {statusLabel && <span className={`badge ${block.status === "passed" ? "ok" : "warn"}`}>{statusLabel}</span>}
         </span>
         <BlockLexicalAssistant
-          term={lexical.term.slice(0, TERM_MAX_CHARS)}
-          fragmentContext={lexical.fragmentContext || null}
-          keyConcepts={lessonKeyConcepts}
-          answerBearingStrings={lexical.answerBearing}
+          open={assistantOpen}
+          onToggle={() => setAssistantOpen((o) => !o)}
+          triggerRef={triggerRef}
         />
       </div>
-      {content.blockType === "spaced_interleaved_retrieval" && <SpacedInterleavedRetrievalBlock content={content} />}
-      {content.blockType === "anchored_micro_theory" && <AnchoredMicroTheoryBlock content={content} />}
-      {content.blockType === "declarative_visual_diagram" && <DeclarativeVisualDiagramBlock content={content} />}
-      {content.blockType === "branching_scenario_challenge" && (
-        <BranchingScenarioChallengeBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} />
-      )}
-      {content.blockType === "heuristic_error_audit" && (
-        <HeuristicErrorAuditBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} />
-      )}
-      {content.blockType === "interactive_prediction_gate" && (
-        <InteractivePredictionGateBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} />
-      )}
-      {content.blockType === "hands_on_mission" && (
-        <HandsOnMissionBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} />
-      )}
-      {content.blockType === "metacognitive_closure" && (
-        <MetacognitiveClosureBlock
-          block={block}
-          content={content}
-          isActive={isActive}
-          onSave={onSave}
-          onRequestFeedback={onRequestClosureFeedback}
-          onContinue={onContinueModule}
-          continueLabel={continueLabel}
-        />
-      )}
+      <TheorySelectionAssistant
+        blockRef={blockRef}
+        triggerRef={triggerRef}
+        buttonOpen={assistantOpen}
+        onButtonOpenChange={setAssistantOpen}
+        buttonTerm={lexical.term.slice(0, TERM_MAX_CHARS)}
+        fragmentContext={lexical.fragmentContext || null}
+        keyConcepts={lessonKeyConcepts}
+        answerBearingStrings={lexical.answerBearing}
+      >
+        {content.blockType === "spaced_interleaved_retrieval" && <SpacedInterleavedRetrievalBlock content={content} />}
+        {content.blockType === "anchored_micro_theory" && <AnchoredMicroTheoryBlock content={content} />}
+        {content.blockType === "declarative_visual_diagram" && <DeclarativeVisualDiagramBlock content={content} />}
+        {content.blockType === "branching_scenario_challenge" && (
+          <BranchingScenarioChallengeBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} />
+        )}
+        {content.blockType === "heuristic_error_audit" && (
+          <HeuristicErrorAuditBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} />
+        )}
+        {content.blockType === "interactive_prediction_gate" && (
+          <InteractivePredictionGateBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} />
+        )}
+        {content.blockType === "hands_on_mission" && (
+          <HandsOnMissionBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} />
+        )}
+        {content.blockType === "metacognitive_closure" && (
+          <MetacognitiveClosureBlock
+            block={block}
+            content={content}
+            isActive={isActive}
+            onSave={onSave}
+            onRequestFeedback={onRequestClosureFeedback}
+            onContinue={onContinueModule}
+            continueLabel={continueLabel}
+          />
+        )}
+      </TheorySelectionAssistant>
     </section>
   );
 }

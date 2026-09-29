@@ -17,12 +17,25 @@
   --red-wash: rgba(185, 28, 28, 0.28);
   --green-chalk: #7bc99a;
   --green-wash: rgba(16, 185, 129, 0.16);
+  --blue-chalk: #7fb0d8;
+  --blue-wash: rgba(37, 99, 235, 0.2);
+  --gold-chalk: #d9b168;
+  --gold-wash: rgba(202, 138, 4, 0.2);
   --marker: rgba(255, 214, 100, 0.28);
   --tape: rgba(110, 92, 62, 0.6);
   --note: #111417;
   --note-text: var(--chalk);
   --font-hand: "Caveat", "Segoe Print", cursive;
   --font-body: "Shantell Sans", "Segoe Print", ui-sans-serif, system-ui, sans-serif;
+  /* Reading prose only (lesson bodies, messages, plan, notes, popover
+     answers). Legible system stack, offline-safe (no CDN) and with symbol
+     fallbacks — Caveat/Shantell don't cover math/arrows, which made glyphs
+     fall back mid-line or render as boxes. Display fonts stay unchanged. */
+  --font-read: system-ui, -apple-system, "Segoe UI", "Noto Sans", Roboto, "Helvetica Neue", Arial,
+    "Segoe UI Symbol", "Noto Sans Symbols 2", sans-serif;
+  /* Reading metrics — tune prose legibility here, in ONE place. */
+  --read-size: 17px;
+  --read-leading: 1.7;
   --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.03 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 
@@ -65,6 +78,30 @@ body {
 .topbar-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .topbar-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .drawer-toggle { padding: 5px 14px; }
+
+/* --- Update: the startup check's result + the header's manual entry ---
+ * The header button is the "menu" way to look for a new version (idle →
+ * checks, ready → installs); the banner is what the automatic check on entry
+ * surfaces so the student doesn't have to go looking. */
+.topbar button.update-ready {
+  border-color: var(--green-chalk);
+  color: var(--green-chalk);
+  font-weight: 700;
+}
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 24px;
+  background: var(--blue-wash);
+  border-bottom: 2px dashed var(--chalk-soft);
+}
+.update-banner-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.update-banner-notes { font-size: 14px; color: var(--chalk-soft); }
+.update-banner-error { font-size: 13px; color: var(--red-chalk); }
+.update-banner-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* The container: names which session the header's sections (Conversación |
  * Plan | Clases) currently belong to. Truncates instead of pushing the tabs
@@ -170,15 +207,67 @@ body {
   text-decoration: underline wavy var(--chalk-faint) 2px;
   text-underline-offset: 6px;
 }
-.muted { color: var(--chalk-soft); font-size: 14px; }
-.hint { color: var(--chalk-soft); font-size: 13px; margin: 4px 0; }
+.muted { color: var(--chalk-soft); font-size: 15px; }
+.hint { color: var(--chalk-soft); font-size: 14px; line-height: 1.5; margin: 4px 0; }
+
+/* Empty "nueva sesión" hero (RoadmapView, no session yet): centered
+   invitation instead of the top-left header, so the first thing the
+   student sees is the ask, not an unstyled blank page. */
+.empty-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 4px;
+  min-height: 46vh;
+  justify-content: center;
+  padding: 24px 0;
+}
+.empty-hero h2 { margin-bottom: 2px; }
+.empty-hero .muted { max-width: 480px; }
+/* Composer lives inline here (not the sticky bottom dock — that one only
+   mounts once a session exists, see RoadmapView) so it reads as the first
+   thing to do, with the examples underneath as a shortcut past it. */
+.empty-composer { width: min(560px, 100%); margin: 10px 0 2px; }
+.example-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 8px;
+  max-width: 660px;
+}
+/* Sentences, so the reading font (readable) rather than the hand-drawn
+   display font used on short labels/badges elsewhere. */
+.example-chip {
+  flex: 0 1 300px;
+  max-width: 300px;
+  text-align: left;
+  white-space: normal;
+  font-family: var(--font-read);
+  font-weight: 400;
+  font-size: 15px;
+  line-height: 1.5;
+  border-radius: 12px 4px 14px 5px / 5px 14px 4px 12px;
+  padding: 8px 14px;
+}
+/* One chalk tone per chip (red/green/blue/gold) instead of a flat gray
+   row — same washed-background-on-hover pattern as `.btn-danger`/`.badge.ok`. */
+.example-chip-red { border-color: var(--red-chalk); color: var(--red-chalk); }
+.example-chip-red:hover:not(:disabled) { background: var(--red-wash); }
+.example-chip-green { border-color: var(--green-chalk); color: var(--green-chalk); }
+.example-chip-green:hover:not(:disabled) { background: var(--green-wash); }
+.example-chip-blue { border-color: var(--blue-chalk); color: var(--blue-chalk); }
+.example-chip-blue:hover:not(:disabled) { background: var(--blue-wash); }
+.example-chip-gold { border-color: var(--gold-chalk); color: var(--gold-chalk); }
+.example-chip-gold:hover:not(:disabled) { background: var(--gold-wash); }
 
 /* Foco / Entregable / Objetivo: one line each under a session, kept visually
    distinct (see `MicromoduleItem`) so the plan reads as a scannable list of
    claims, never a run-on paragraph. `interactiveBlocks` never gets a line —
    it's internal orchestrator metadata the student must never see. */
-.mod-focus, .mod-deliverable { margin: 4px 0 0; color: var(--chalk-soft); font-size: 13px; }
-.mod-objective { margin: 4px 0 0; color: var(--chalk-soft); font-size: 13px; font-style: italic; }
+.mod-focus, .mod-deliverable { margin: 4px 0 0; color: var(--chalk-soft); font-size: 15px; }
+.mod-objective { margin: 4px 0 0; color: var(--chalk-soft); font-size: 15px; font-style: italic; }
 .class-objective { margin-top: -2px; font-style: italic; }
 
 /* Meta semanal: Backward Design's weekly goal, set apart from the deliverable
@@ -189,7 +278,7 @@ body {
   padding: 2px 0 2px 10px;
   border-left: 2px solid var(--chalk-faint);
   color: var(--chalk-soft);
-  font-size: 13px;
+  font-size: 15px;
   font-style: italic;
 }
 .milestone-list > li { margin-bottom: 10px; }
@@ -218,7 +307,15 @@ body {
 .badge.ok { border-color: var(--green-chalk); color: var(--green-chalk); }
 
 /* Gate cards look taped into the journal */
-.learner-profile-card, .diagnostic-card, .final-package { position: relative; margin: 24px 0 14px; }
+.learner-profile-card,
+.diagnostic-card,
+.final-package {
+  position: relative;
+  margin: 24px 0 14px;
+  font-family: var(--font-read);
+  font-size: var(--read-size);
+  line-height: var(--read-leading);
+}
 .learner-profile-card::before, .diagnostic-card::before, .final-package::before {
   content: "";
   position: absolute;
@@ -295,13 +392,16 @@ button:focus-visible, input:focus-visible, select:focus-visible {
        tracker — el activo va relleno con tiza, los inactivos punteados. --- */
 .topbar-tabs, .notebook-tabs { display: flex; gap: 8px; align-items: center; }
 .notebook-tabs { margin-bottom: 14px; }
+/* The in-view Conversación|Plan filter row (`SessionView`): it's a `.view`
+   sibling sitting right above the child view, so it needs the same breathing
+   room the notebook tabs have — `.view h2` resets margin-top to 0. */
+.session-filter { margin-bottom: 14px; }
 .tab {
   font-family: var(--font-hand);
   font-size: 19px;
   font-weight: 600;
   padding: 3px 16px;
   border: 2px dashed var(--chalk-faint);
-  border-radius: 50% 46% 52% 48% / 48% 52% 46% 54%;
   color: var(--chalk-soft);
   transform: rotate(-0.6deg);
 }
@@ -326,7 +426,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   border-radius: 12px 4px 14px 5px / 5px 14px 4px 12px;
   padding: 9px 14px;
   margin: 10px 0;
-  font-size: 14px;
+  font-size: 15px;
   cursor: pointer;
   background: var(--card);
   display: flex;
@@ -365,7 +465,12 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   color: var(--chalk-soft);
   margin-bottom: 2px;
 }
-.msg-body { white-space: pre-wrap; font-size: 15.5px; line-height: 1.65; }
+.msg-body {
+  white-space: pre-wrap;
+  font-size: var(--read-size);
+  line-height: var(--read-leading);
+  font-family: var(--font-read);
+}
 .msg.assistant { transform: rotate(-0.15deg); }
 .msg.assistant .msg-role { color: var(--chalk); }
 .msg.user {
@@ -382,6 +487,20 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 
 .composer input { flex: 1; }
 .composer { align-items: stretch; }
+/* The textarea's height (rows=3) sets the row's cross-axis size; without
+   this the button inherits `align-items: stretch` and grows just as tall. */
+.composer button { align-self: flex-end; }
+/* Bigger, multi-line composer input (was a single-line <input>) — comfortable
+   for both the first ask and longer answers to the mentor mid-conversation.
+   Vertical resize only: horizontal would break the row layout next to the
+   send button. */
+.composer textarea {
+  flex: 1;
+  min-height: 72px;
+  padding: 10px 12px;
+  line-height: 1.45;
+  resize: vertical;
+}
 /* Dock: composer pegado al fondo de la vista activa, siempre a mano. */
 .composer.dock {
   position: sticky;
@@ -390,14 +509,6 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   background: linear-gradient(transparent, var(--paper) 35%);
   z-index: 5;
 }
-/* Mensaje sintético de instrucciones: vive en el dock, sobre el input. */
-.composer.dock .dock-hint {
-  width: 100%;
-  margin: 0 0 6px;
-  font-family: var(--font-hand);
-  font-size: 19px;
-  line-height: 1.4;
-}
 pre.output, .quickrun pre {
   background: var(--note);
   color: var(--note-text);
@@ -405,7 +516,7 @@ pre.output, .quickrun pre {
   border-radius: 8px;
   padding: 12px 14px;
   white-space: pre-wrap;
-  font-size: 13px;
+  font-size: 15px;
 }
 .quickrun { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .form { display: flex; flex-direction: column; gap: 2px; max-width: 640px; }
@@ -427,7 +538,7 @@ pre.output, .quickrun pre {
 .phase-step.done { border-color: var(--green-chalk); color: var(--green-chalk); }
 
 .dod-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.dod-list li { font-size: 14px; color: var(--chalk-soft); }
+.dod-list li { font-size: 15px; color: var(--chalk-soft); }
 .dod-list li::before { content: "▸ "; }
 .dod-list li.done { color: var(--chalk); }
 .dod-list li.done::before { content: "✓ "; }
@@ -456,7 +567,7 @@ pre.output, .quickrun pre {
   color: var(--chalk-soft);
   margin-bottom: 4px;
 }
-.interactive-block p { margin: 4px 0; font-size: 14px; }
+.interactive-block p { margin: 4px 0; font-size: 15px; }
 .interactive-block .block-question { color: var(--chalk); font-weight: 600; }
 .interactive-block.prediction_gate,
 .interactive-block.socratic_audit { border-color: var(--marker); }
@@ -551,6 +662,30 @@ pre.output, .quickrun pre {
   font-size: 22px;
 }
 
+/* Hover/focus-reveal escape hatch for a buffer generation with no error
+   event to catch it — hidden by default since it's a rare-use affordance. */
+.buffer-loader { position: relative; display: inline-flex; align-items: center; }
+.buffer-cancel {
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  margin-left: 10px;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--chalk-faint);
+  color: var(--chalk-soft);
+  font-size: 16px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.buffer-cancel:hover:not(:disabled) { border-color: var(--red-chalk); color: var(--red-chalk); background: transparent; }
+.buffer-loader:hover .buffer-cancel,
+.buffer-cancel:focus-visible { opacity: 1; }
+
 /* --- Thinking figure: a lone spiral that boils while it thinks --- */
 .think-doodle { width: 64px; height: 56px; flex: none; }
 .td-line {
@@ -638,7 +773,7 @@ pre.output, .quickrun pre {
 .gen-sketch { width: 110px; height: 80px; flex: none; }
 .gen-text { display: flex; flex-direction: column; gap: 6px; }
 .gen-stage { font-family: var(--font-hand); font-size: 25px; font-weight: 600; line-height: 1.2; }
-.gen-tip { font-size: 13px; color: var(--chalk-soft); }
+.gen-tip { font-size: 14px; color: var(--chalk-soft); }
 
 /* --- Class Notebook (dynamic pedagogical blocks) ------------------------ */
 
@@ -655,7 +790,14 @@ pre.output, .quickrun pre {
 
 /* Plan tab (session page): the sealed roadmap seen from inside the
    notebook — meta + diagnóstico + plan + cómo va la ruta. */
-.plan-tab { display: flex; flex-direction: column; gap: 14px; }
+.plan-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-family: var(--font-read);
+  font-size: var(--read-size);
+  line-height: var(--read-leading);
+}
 .plan-tab-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .plan-tab-head .row { margin-top: 0; align-items: center; }
 
@@ -663,7 +805,12 @@ pre.output, .quickrun pre {
 
 /* Compact roadmap summary riding along in the sidebar while reading a
  * class — the plan stays visible without a trip back to the chat view. */
-.side-note { transform: rotate(-0.6deg); }
+.side-note {
+  transform: rotate(-0.6deg);
+  font-family: var(--font-read);
+  font-size: var(--read-size);
+  line-height: var(--read-leading);
+}
 .side-note .card-head h3 { font-size: 21px; }
 
 /* Sequential class path (Duolingo-style): a vertical line of dots, past
@@ -753,18 +900,25 @@ pre.output, .quickrun pre {
   font-size: 18px;
   color: var(--chalk-soft);
 }
-.notebook-block-body { display: flex; flex-direction: column; gap: 8px; }
+.notebook-block-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-family: var(--font-read);
+  font-size: var(--read-size);
+  line-height: var(--read-leading);
+}
 .notebook-block-body h3 { margin: 0; font-family: var(--font-hand); font-size: 22px; font-weight: 600; }
 .notebook-block-body .block-hook { font-style: italic; color: var(--chalk-soft); }
 
 /* Static visuals (mermaid / declarative_svg / conceptual_matrix) */
 .static-visual { margin: 6px 0; }
-.static-visual figcaption { font-size: 13px; color: var(--chalk-soft); margin-top: 6px; text-align: center; }
+.static-visual figcaption { font-size: 15px; color: var(--chalk-soft); margin-top: 6px; text-align: center; }
 .mermaid-visual { background: var(--paper-deep); border-radius: 10px; padding: 8px; overflow-x: auto; }
 .mermaid-visual svg { max-width: 100%; }
 .declarative-svg-visual { width: 100%; max-height: 360px; background: var(--paper-deep); border-radius: 10px; }
 .svg-pedagogical-focus { font-family: var(--font-hand); font-size: 15px; color: var(--chalk-soft); margin: 8px 0 0; text-align: center; }
-.conceptual-matrix-visual { width: 100%; border-collapse: collapse; font-size: 13px; }
+.conceptual-matrix-visual { width: 100%; border-collapse: collapse; font-size: 15px; }
 .conceptual-matrix-visual th, .conceptual-matrix-visual td {
   border: 1px solid var(--chalk-faint);
   padding: 6px 10px;
@@ -773,15 +927,16 @@ pre.output, .quickrun pre {
 .conceptual-matrix-visual th { color: var(--chalk); font-family: var(--font-hand); font-weight: 600; }
 
 .walkthrough-list { margin: 4px 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
-.walkthrough-list li { font-size: 14px; }
+.walkthrough-list li { font-size: 15px; }
 
 .prediction-options { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
 .closure-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
 
-/* anchored_micro_theory — 🎯 hook / 📐 rule / ⚠️ error, always separated */
+/* anchored_micro_theory — 🎯 hook / boundary / 📐 rule / ⚠️ error, always separated */
 .theory-part { display: flex; align-items: flex-start; gap: 8px; margin: 0; }
 .theory-part-emoji { flex: none; line-height: 1.3; }
 .theory-hook { font-style: italic; color: var(--chalk-soft); }
+.theory-boundary { font-size: 15px; color: var(--chalk-faint); }
 .theory-error { color: var(--red-chalk); }
 .theory-pause { color: var(--chalk); font-family: var(--font-hand); font-size: 17px; }
 
@@ -826,7 +981,7 @@ pre.output, .quickrun pre {
   border: 2px solid var(--red-chalk);
   border-radius: 8px;
   padding: 10px 12px;
-  font-size: 13px;
+  font-size: 15px;
   white-space: pre-wrap;
   overflow-x: auto;
 }
@@ -834,6 +989,11 @@ pre.output, .quickrun pre {
 /* Fenced code blocks + inline `code` inside model-authored prose (RichText.tsx).
    Without these, a ```rust fence in `question`/`instruction` renders as raw
    backticks inside a paragraph. */
+.rich-text {
+  font-family: var(--font-read);
+  font-size: var(--read-size);
+  line-height: var(--read-leading);
+}
 .rich-text-p { white-space: pre-line; margin: 0 0 8px; }
 .rich-text > :last-child { margin-bottom: 0; }
 .code-block {
@@ -842,8 +1002,8 @@ pre.output, .quickrun pre {
   border-radius: 8px;
   padding: 10px 12px;
   margin: 8px 0;
-  font-size: 13px;
-  line-height: 1.55;
+  font-size: 15px;
+  line-height: 1.6;
   white-space: pre;
   overflow-x: auto;
 }
@@ -857,7 +1017,11 @@ pre.output, .quickrun pre {
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 4px;
   padding: 1px 5px;
-  font-size: 0.92em;
+  /* Prose now uses `--font-read` (system-ui family, normal x-height), so
+     ui-monospace no longer out-grows its words the way it did under
+     Shantell/Segoe Print — 0.85em would now read SMALLER than the prose.
+     0.95em keeps code visually level with the text around it. */
+  font-size: 0.95em;
   color: var(--chalk);
 }
 
@@ -880,29 +1044,124 @@ pre.output, .quickrun pre {
   gap: 4px;
 }
 
-/* Per-block popover lexical assistant — a physical button anchored to each
-   block's kicker row, opening a dropdown scoped to that block (not a
-   full-screen modal). */
+/* Per-block ¿Dudas? trigger — the button only. Clicking it opens the block's
+   SHARED margin comment (see `.margin-comment` below): fixed beside the
+   block instead of anchored as an absolute dropdown off this wrapper. */
 .block-lexical { position: relative; }
 .block-lexical-trigger { font-size: 12px; padding: 2px 10px; }
-.block-lexical-dropdown {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  width: min(360px, 80vw);
-  max-height: 60vh;
+.lexical-popover-history { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 10px; }
+.lexical-turn { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lexical-turn-question { font-family: var(--font-hand); font-size: 15px; color: var(--chalk-soft); margin: 0; overflow-wrap: anywhere; }
+.lexical-turn-answer {
+  font-size: 15px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  margin: 0;
+}
+/* Answers render through RichText (a <div>, never nested in a <p>), whose
+   `.rich-text-p` would otherwise override `pre-wrap` with `pre-line` and
+   collapse the answer's runs of spaces. */
+.lexical-turn-answer .rich-text-p { white-space: pre-wrap; }
+.lexical-popover-input { gap: 8px; flex: none; }
+.lexical-popover-input input { flex: 1; min-width: 0; }
+
+/* Thinking state: a lemniscate that draws itself and gently wobbles, same
+   sketch language as the `.td-spiral` doodle (pathLength=1 + dash 0→1). */
+.lexical-thinking { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.lex-lemniscate { width: 34px; height: 20px; flex: none; }
+.lex-inf {
+  fill: none;
+  stroke: var(--chalk);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: lex-inf-draw 1.9s ease-in-out infinite, lex-inf-wobble 2.8s ease-in-out infinite;
+}
+@keyframes lex-inf-draw {
+  0% { stroke-dashoffset: 1; }
+  55% { stroke-dashoffset: 0; }
+  78% { stroke-dashoffset: 0; }
+  100% { stroke-dashoffset: -1; }
+}
+@keyframes lex-inf-wobble {
+  0%, 100% { transform: rotate(-5deg); }
+  50% { transform: rotate(5deg); }
+}
+
+/* Text-selection zone — ANY block type (the wrapper is mounted for every
+   block in `blocks/index.tsx`) — and the host of this block's ONE margin
+   comment (both triggers; `LexicalMarginComment` in
+   `LexicalAssistantPopover.tsx` renders it as a SIBLING of the zone, so
+   selections inside the comment itself never re-trigger detection). Reuses
+   `.card`/`.lexical-popover-history`/`.lexical-turn*`/`.lexical-popover-input`
+   for the shared history/input look (and their overflow/min-width fixes)
+   — only what's genuinely new to this surface lives in `.margin-comment`
+   below. */
+.theory-selection-zone { position: relative; }
+/* Native drag selection: same chalk-on-paper pair as the marker. */
+.theory-selection-zone ::selection { background: var(--red-chalk); color: var(--paper-deep); }
+/* Persisted Custom Highlight (same colors): keeps the fragment painted while
+   the popover is open, after the document selection itself collapses (focus
+   moved into the popover's input). Name must match `SELECTION_HIGHLIGHT_NAME`
+   in `useTextSelectionPopover.ts`; browsers without the API ignore this rule
+   and just lose the persistent highlight. */
+::highlight(popover-selection) { background: var(--red-chalk); color: var(--paper-deep); }
+/* "Already answered" mark: left behind when the popover closes over a
+   fragment the assistant already helped with, so the student can find the
+   help again. Deliberately SOFTER than the live selection (blue wash keeps
+   the text's own colour) — red means "you are selecting this right now",
+   blue means "the help for this is saved". Name must match
+   `SAVED_HIGHLIGHT_NAME` in `useTextSelectionPopover.ts`. */
+::highlight(popover-selection-saved) {
+  background: var(--blue-wash);
+  color: inherit;
+}
+/* The unified margin comment (¿Dudas? button + selection): `position:
+   fixed`, parked BESIDE its block by `useMarginCommentPosition` — margin
+   slot at `blockRect.right + 12` over the grid gap + sticky sidebar
+   (z-index 40 paints above it), near-selection centered fallback when the
+   viewport can't fit that slot, always clamped inside the viewport. Out of
+   flow by definition, so it can't affect the block or the sidebar's sticky
+   behavior; the width caps 10px short of both viewport edges at any size. */
+.margin-comment {
+  position: fixed;
+  width: min(360px, calc(100vw - 20px));
+  max-height: min(70vh, 560px);
   display: flex;
   flex-direction: column;
   gap: 10px;
-  z-index: 30;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  z-index: 40;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  /* Positioned only after the first measured layout pass (see
+     `useMarginCommentPosition`'s `useLayoutEffect`) so it never flashes at
+     an unmeasured point before being pulled into place. */
+  visibility: hidden;
 }
-.lexical-popover-history { overflow-y: auto; display: flex; flex-direction: column; gap: 10px; max-height: 40vh; }
-.lexical-turn { display: flex; flex-direction: column; gap: 2px; }
-.lexical-turn-question { font-family: var(--font-hand); font-size: 15px; color: var(--chalk-soft); margin: 0; }
-.lexical-turn-answer { font-size: 14px; white-space: pre-wrap; margin: 0; }
-.lexical-popover-input { gap: 8px; }
-.lexical-popover-input input { flex: 1; }
+.margin-comment.ready { visibility: visible; }
+/* The error row must never be squeezed by the scrollable history above. */
+.margin-comment > .alert { flex: none; }
+.selection-popover-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 7px;
+}
+.selection-quote {
+  font-family: var(--font-hand);
+  font-size: 16px;
+  color: var(--chalk-soft);
+  border-left: 3px solid var(--red-chalk);
+  padding: 2px 0 2px 10px;
+  margin: 0 22px 0 0;
+  overflow-wrap: anywhere;
+}
 
 /* Reduced motion: kill sketch animations AND the micro-rotations, so the
    theme reads as flat hand strokes instead of moving ink. */
@@ -912,5 +1171,6 @@ pre.output, .quickrun pre {
   .td-spiral { stroke-dashoffset: 0; }
   .thinking-sketch .td-label { transform: none; }
   .drawer { animation: none; }
+  .lex-lemniscate * { animation: none; stroke-dashoffset: 0; }
   .brand, .badge, .msg, .msg.user, .msg.assistant, .phase-step, .side-note { transform: none; }
 }

@@ -7,7 +7,7 @@
 SHELL := bash
 MANIFEST := src-tauri/Cargo.toml
 
-.PHONY: help setup check run build test typecheck clean clean-all
+.PHONY: help setup check run build test typecheck dist dist-linux clean clean-all
 
 help: ## show this help
 	@grep -E '^[a-z0-9-]+:[^#]*## ' Makefile | sed -E 's/^([a-z0-9-]+):[^#]*## /\1\t/'
@@ -28,6 +28,24 @@ build: ## typecheck + production frontend build + cargo build
 
 typecheck: ## tsc --noEmit
 	bunx tsc --noEmit
+
+dist: ## Windows installer + MSI (NSIS + WiX) — run on Windows
+	@if [ -n "$${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then \
+		bun run tauri build; \
+	else \
+		key="$$HOME/.tauri/learnkit.key"; \
+		if [ ! -f "$$key" ]; then \
+			echo "error: signing key not found at $$key"; \
+			echo "       generate it: bunx tauri signer generate -w ~/.tauri/learnkit.key"; \
+			echo "       (bundle.createUpdaterArtifacts cannot be disabled, so every"; \
+			echo "        release build needs a private key to sign the updater bundle)"; \
+			exit 1; \
+		fi; \
+		TAURI_SIGNING_PRIVATE_KEY="$$key" bun run tauri build; \
+	fi
+
+dist-linux: ## Linux .deb + AppImage inside Docker (Tauri cannot cross-compile)
+	bash scripts/build-linux.sh
 
 test: typecheck ## tsc --noEmit + UI render checks + cargo test
 	bun run scripts/check-rendering.tsx

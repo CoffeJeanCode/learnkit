@@ -185,6 +185,17 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
     }
   };
 
+  /** Never calls the backend: a hung generation is abandoned in place, not
+   *  cancelled. It only flips local state into the existing error branch, so
+   *  the student's "Reintentar" reuses `retryPendingBlock`'s already-safe
+   *  path — `insert_block_if_count` discards the abandoned generation's
+   *  late insert as having "lost the race" once the retry's own lands.
+   */
+  const cancelBuffer = () => {
+    setBufferState("error");
+    setBufferError("Cancelado. Toca «Reintentar» para seguir con la clase.");
+  };
+
   return {
     document,
     blocks,
@@ -195,6 +206,7 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
     stage,
     submitGate,
     retryPendingBlock,
+    cancelBuffer,
     regenerateBlock,
     regeneratingBlockId,
   };

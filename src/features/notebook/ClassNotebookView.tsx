@@ -111,6 +111,7 @@ export function ClassNotebookView() {
     stage,
     submitGate,
     retryPendingBlock,
+    cancelBuffer,
     regenerateBlock,
     regeneratingBlockId,
   } = useClassNotebookSession(classId, reloadToken);
@@ -345,7 +346,18 @@ export function ClassNotebookView() {
                     </button>
                   </div>
                 ) : lastVisible && lastVisible.block_type !== "metacognitive_closure" ? (
-                  <ThinkingSketch label="Preparando el siguiente paso…" />
+                  <div className="buffer-loader">
+                    <ThinkingSketch label="Preparando el siguiente paso…" />
+                    <button
+                      type="button"
+                      className="buffer-cancel"
+                      title="Cancelar y reintentar"
+                      aria-label="Cancelar y reintentar"
+                      onClick={() => cancelBuffer()}
+                    >
+                      ×
+                    </button>
+                  </div>
                 ) : null)}
             </div>
           )}

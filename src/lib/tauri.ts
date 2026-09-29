@@ -237,6 +237,46 @@ export const getCourseDiagnosticBattery = (course_id: string) =>
 export const saveDiagnosticBatteryAnswers = (course_id: string, answers: Record<string, string>) =>
   invoke<void>("save_diagnostic_battery_answers", { courseId: course_id, answers });
 
+// --- Learner cognitive memory ------------------------------------------------
+//
+// Single-learner app: this always describes learner id "local" — see the
+// Rust `domain::learner_memory` module doc for why. Read-only viewer data.
+
+export type CalibratedBaseline = "novice_zero" | "novice_intuitive" | "intermediate" | "advanced";
+export type AbstractionLevel = "visual_analogy" | "causal_mechanics" | "formal_symbolic";
+export type FrictionTolerance = "low_frustration" | "resilient";
+
+export interface CognitiveMetrics {
+  predictionAccuracyRate: number;
+  errorAuditDetectionRate: number;
+  preferredAbstractionLevel: AbstractionLevel;
+  cognitiveFrictionTolerance: FrictionTolerance;
+}
+
+export interface RecurringMisconception {
+  domainConcept: string;
+  identifiedErrorPattern: string;
+  lastEncounteredDate: string;
+  resolved: boolean;
+}
+
+export interface SpacedRetrievalItem {
+  conceptId: string;
+  conceptLabel: string;
+  masteryLevel: number;
+  nextDueAtMs: number;
+}
+
+export interface LearnerCognitiveMemory {
+  learnerId: string;
+  calibratedBaseline: CalibratedBaseline;
+  cognitiveMetrics: CognitiveMetrics;
+  recurringMisconceptions: RecurringMisconception[];
+  retrievalSpacedQueue: SpacedRetrievalItem[];
+}
+
+export const getLearnerMemory = () => invoke<LearnerCognitiveMemory>("get_learner_memory");
+
 // --- Lexical assistant (popover) --------------------------------------------
 //
 // One isolated question at a time: only `term`/`fragmentContext`/

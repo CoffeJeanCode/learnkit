@@ -1,0 +1,20 @@
+# Linux bundles (.deb + AppImage) built on Linux — Tauri cannot cross-compile
+# from Windows, so this image exists so `scripts/build-linux.sh` can run the
+# exact same `bun run tauri build` on a Linux toolchain.
+FROM rust:1-bookworm
+
+# Tauri's Linux system dependencies (webkit2gtk-4.1 + bundler tools:
+# fakeroot/patchelf for .deb/AppImage; rpm is intentionally not installed —
+# scripts/build-linux.sh asks for `deb,appimage` only).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential curl wget file patchelf pkg-config \
+    libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+    libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
+    fakeroot \
+ && rm -rf /var/lib/apt/lists/*
+
+# bun is the package manager and the runner for `bun run tauri build`.
+COPY --from=oven/bun:1 /usr/local/bin/bun /usr/local/bin/bun
+RUN ln -sf /usr/local/bin/bun /usr/local/bin/bunx
+
+WORKDIR /app

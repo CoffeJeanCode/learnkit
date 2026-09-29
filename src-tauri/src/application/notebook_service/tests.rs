@@ -71,6 +71,7 @@
         GeneratedSectionBlock::AnchoredMicroTheory {
             title: "La gran imagen".to_string(),
             intuitive_hook: "Piensa en una fábrica circular".to_string(),
+            analogy_boundary: Some("La fábrica no explica qué pasa cuando el buffer se llena".to_string()),
             system_rule: "Explicación breve del tema.".to_string(),
             frequent_error: "Confundir la entrada con la salida".to_string(),
         }

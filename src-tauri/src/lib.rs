@@ -25,6 +25,11 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
+        // Updater + relaunch: the frontend checks `plugins.updater.endpoints`
+        // on startup and on demand, downloads the signed artifact and asks
+        // the process plugin to restart into the new version.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -87,6 +92,7 @@ pub fn run() {
             commands::notebook::save_notebook_state,
             commands::notebook::get_course_diagnostic_battery,
             commands::notebook::save_diagnostic_battery_answers,
+            commands::notebook::get_learner_memory,
             commands::lexical_assistant::ask_lexical_assistant,
         ])
         .run(tauri::generate_context!())

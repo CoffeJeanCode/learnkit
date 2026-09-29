@@ -1,11 +1,14 @@
 import { useEffect } from "react";
 import { Header } from "./components/Header";
+import { SessionView } from "./components/SessionView";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { ClassNotebookView } from "./features/notebook/ClassNotebookView";
-import { SessionPlanView } from "./features/notebook/SessionPlanView";
+import { LearnerMemoryView } from "./features/learner-memory/LearnerMemoryView";
 import { ProvidersView } from "./features/providers/ProvidersView";
 import { RoadmapView } from "./features/roadmap/RoadmapView";
 import { readActiveSessionId, useRoadmap } from "./stores/roadmap";
 import { useUi } from "./stores/ui";
+import { useUpdater } from "./stores/updater";
 import "./styles.css";
 
 // Single-column layout: top bar (brand + the active session's section tabs)
@@ -21,6 +24,13 @@ export default function App() {
   const view = useUi((s) => s.view);
   const setView = useUi((s) => s.setView);
   const openSession = useRoadmap((s) => s.openSession);
+  const checkOnStartup = useUpdater((s) => s.checkOnStartup);
+
+  // Check for a new version once on entry. Silent by design: no release
+  // published yet, or starting offline, must not surface anything.
+  useEffect(() => {
+    void checkOnStartup();
+  }, [checkOnStartup]);
 
   useEffect(() => {
     let cancelled = false;
@@ -41,13 +51,16 @@ export default function App() {
   return (
     <div className="app">
       <Header />
+      <UpdateBanner />
       <main className="workspace">
         {view === "providers" ? (
           <ProvidersView />
+        ) : view === "learner-memory" ? (
+          <LearnerMemoryView />
         ) : view === "notebook" ? (
           <ClassNotebookView />
-        ) : view === "plan" ? (
-          <SessionPlanView />
+        ) : view === "roadmap" || view === "plan" ? (
+          <SessionView />
         ) : (
           <RoadmapView />
         )}

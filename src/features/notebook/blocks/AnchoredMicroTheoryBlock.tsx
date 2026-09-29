@@ -3,10 +3,15 @@ import { InlineText } from "./RichText";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "anchored_micro_theory" }>;
 
-// Layered microtheory in exactly 3 parts — never one undifferentiated
-// paragraph, and capped at 160 words combined (see `notebook_service`'s
-// grounding check). Diagrams are their own block now
-// (declarative_visual_diagram), never embedded here.
+// Layered microtheory in 3-4 parts — never one undifferentiated paragraph.
+// `systemRule` has its own ~180-word ceiling and the other layers share a
+// combined terse ceiling (see `notebook_service::grounding`). Diagrams are
+// their own block now (declarative_visual_diagram), never embedded here.
+//
+// `analogyBoundary` is optional: absent/null on blocks persisted before the
+// field existed (see `DynamicSectionBlockSchema` in `src/lib/schemas.ts` —
+// `.nullish()` mirrors Rust's `Option<String>`), so it renders nothing for
+// those, never a crash or a "formato inesperado" error.
 //
 // The emoji on the left is OUR structural marker; the model often prefixes
 // the same emoji into the text itself (it mirrors the prompt's examples).
@@ -33,6 +38,12 @@ export function AnchoredMicroTheoryBlock({ content }: { content: Content }) {
         <span className="theory-part-emoji" aria-hidden="true">🎯</span>
         <InlineText text={withoutLeadingMarker(content.intuitiveHook, "🎯")} />
       </p>
+      {content.analogyBoundary ? (
+        <p className="theory-part theory-boundary">
+          <span className="theory-part-emoji" aria-hidden="true">🚧</span>
+          <InlineText text={withoutLeadingMarker(content.analogyBoundary, "🚧")} />
+        </p>
+      ) : null}
       <p className="theory-part theory-rule">
         <span className="theory-part-emoji" aria-hidden="true">📐</span>
         <InlineText text={withoutLeadingMarker(content.systemRule, "📐")} />

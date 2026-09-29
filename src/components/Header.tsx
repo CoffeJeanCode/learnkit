@@ -2,14 +2,17 @@ import { useState } from "react";
 import { useNotebookNav } from "../stores/notebook";
 import { displaySessionTitle, useRoadmap } from "../stores/roadmap";
 import { useUi } from "../stores/ui";
+import { useUpdater } from "../stores/updater";
 import { SessionsDrawer } from "./SessionsDrawer";
 
-// Top bar replacing the old sidebar: brand + the ACTIVE SESSION's three
-// sections (Conversación | Plan | Clases) on the left, session + settings
-// actions on the right. The session is the container: its chip names it, and
-// the tabs only exist for sections that session actually has — "Clases" only
-// once it owns a course (i.e. it's sealed), so a deleted session can't leave
-// a tab pointing at classes that are already gone.
+// Top bar replacing the old sidebar: brand + the ACTIVE SESSION's two
+// sections (Sesión | Clases) on the left, session + settings actions on the
+// right. "Sesión" is the merged Conversación/Plan section — its internal
+// Conversación|Plan filter lives inside `SessionView`, not here. The session
+// is the container: its chip names it, and the tabs only exist for sections
+// that session actually has — "Clases" only once it owns a course (i.e. it's
+// sealed), so a deleted session can't leave a tab pointing at classes that
+// are already gone.
 //
 // "Nueva sesión" only RESETS the draft state and goes home — it never
 // persists anything (a session is created in the DB when the first message
@@ -24,8 +27,14 @@ export function Header() {
   const [openingClasses, setOpeningClasses] = useState(false);
 
   const inSettings = view === "providers";
-  const inConversation = view === "roadmap";
-  const inPlan = view === "plan";
+  const inMemory = view === "learner-memory";
+  // Both settings and the learner-memory viewer are full-screen overlays
+  // over the active session — neither shows the session chip/tabs.
+  const inOverlay = inSettings || inMemory;
+  // One merged tab for both session sections: the Conversación|Plan filter
+  // now lives INSIDE `SessionView`, so the header only tracks whether we're
+  // in the session view at all.
+  const inSession = view === "roadmap" || view === "plan";
   const inNotebook = view === "notebook";
   const hasSession = session !== null;
   const courseId = session?.imported_course_id ?? null;
@@ -34,8 +43,34 @@ export function Header() {
   const hasClasses = courseId !== null;
   const chipTitle = displaySessionTitle(session);
 
-  const openConversation = () => setView("roadmap");
-  const openPlan = () => setView("plan");
+  // Update "menu": idle → looks for a new version; ready → installs it.
+  const updaterStatus = useUpdater((s) => s.status);
+  const update = useUpdater((s) => s.update);
+  const updaterError = useUpdater((s) => s.error);
+  const checkNow = useUpdater((s) => s.checkNow);
+  const install = useUpdater((s) => s.install);
+  const updaterBusy = updaterStatus === "checking" || updaterStatus === "installing";
+  const updateLabel =
+    updaterStatus === "available" && update
+      ? `⬆ Actualizar v${update.version}`
+      : updaterStatus === "checking"
+        ? "Buscando…"
+        : updaterStatus === "installing"
+          ? "Instalando…"
+          : "🔄 Actualizaciones";
+  const updateTitle =
+    updaterStatus === "error" && updaterError
+      ? `No se pudo comprobar la versión: ${updaterError}`
+      : updaterStatus === "available" && update
+        ? (update.body ?? `Hay una versión nueva: ${update.version}`)
+        : "Busca si hay una versión nueva de LearnKit";
+
+  const openSession = () => {
+    // Already inside the session view → keep whichever filter is showing;
+    // from anywhere else (Clases, ajustes) resume the last session section.
+    if (inSession) return;
+    setView(lastMainView === "plan" ? "plan" : "roadmap");
+  };
   const openClasses = async () => {
     if (!courseId || openingClasses) return;
     setOpeningClasses(true);
@@ -46,7 +81,7 @@ export function Header() {
       setView("notebook");
     } catch {
       // Leave the student where they are rather than landing on an empty
-      // notebook; the Plan/Conversación tabs stay usable.
+      // notebook; the Sesión tab stays usable.
     } finally {
       setOpeningClasses(false);
     }
@@ -56,35 +91,26 @@ export function Header() {
     <>
       <header className="topbar">
         <div className="topbar-left">
-          {!inSettings && (
+          {!inOverlay && (
             <button className="drawer-toggle" onClick={() => setDrawerOpen(true)} title="Ver sesiones guardadas">
               ☰
             </button>
           )}
           <div className="brand">LearnKit</div>
-          {hasSession && chipTitle && !inSettings && (
+          {hasSession && chipTitle && !inOverlay && (
             <span className="session-chip" title={chipTitle}>
               {chipTitle}
             </span>
           )}
-          {!inSettings && (
+          {!inOverlay && (
             <nav className="topbar-tabs" aria-label="Secciones de la sesión">
               <button
-                className={"tab" + (inConversation ? " active" : "")}
-                onClick={openConversation}
-                aria-current={inConversation ? "page" : undefined}
+                className={"tab" + (inSession ? " active" : "")}
+                onClick={openSession}
+                aria-current={inSession ? "page" : undefined}
               >
-                Conversación
+                Sesión
               </button>
-              {hasSession && (
-                <button
-                  className={"tab" + (inPlan ? " active" : "")}
-                  onClick={openPlan}
-                  aria-current={inPlan ? "page" : undefined}
-                >
-                  Plan
-                </button>
-              )}
               {hasClasses && (
                 <button
                   className={"tab" + (inNotebook ? " active" : "")}
@@ -99,11 +125,22 @@ export function Header() {
           )}
         </div>
         <div className="topbar-actions">
-          {!inSettings && (
+          {!inOverlay && (
             <button onClick={() => { reset(); setView("roadmap"); }} title="Empieza una conversación nueva">
               Nueva sesión
             </button>
           )}
+          <button
+            className={updaterStatus === "available" ? "update-ready" : undefined}
+            onClick={() => void (updaterStatus === "available" ? install() : checkNow())}
+            disabled={updaterBusy}
+            title={updateTitle}
+          >
+            {updateLabel}
+          </button>
+          <button onClick={() => setView(inMemory ? lastMainView : "learner-memory")}>
+            {inMemory ? "← Volver" : "🧠 Memoria"}
+          </button>
           <button onClick={() => setView(inSettings ? lastMainView : "providers")}>
             {inSettings ? "← Volver" : "⚙ Proveedores"}
           </button>
