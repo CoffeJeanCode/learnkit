@@ -24,6 +24,24 @@ echo "==> building the Linux toolchain image"
 docker build -f scripts/docker/Dockerfile.linux -t learnkit-linux-builder scripts/docker
 
 echo "==> installing JS deps + building bundles (.deb, AppImage)"
+# The updater signs release bundles (`createUpdaterArtifacts` cannot be
+# disabled), so the container needs the same private key a local `make dist`
+# would use. The key is mounted read-only at /run/secrets — never copied into
+# the image or the repo. If TAURI_SIGNING_PRIVATE_KEY already carries the key
+# content (e.g. in CI), the caller wins and nothing is mounted.
+SIGN_ARGS=()
+if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+  if [ -f "$HOME/.tauri/learnkit.key" ]; then
+    KEY_PATH="$HOME/.tauri/learnkit.key"
+    # Git Bash would hand Docker a /c/... path; it wants C:/...
+    if command -v cygpath >/dev/null 2>&1; then KEY_PATH=$(cygpath -m "$KEY_PATH"); fi
+    SIGN_ARGS=(-v "$KEY_PATH:/run/secrets/learnkit.key:ro" -e TAURI_SIGNING_PRIVATE_KEY=/run/secrets/learnkit.key)
+    echo "==> signing key: $HOME/.tauri/learnkit.key (mounted read-only)"
+  else
+    echo "warning: no signing key at $HOME/.tauri/learnkit.key — the build will fail."
+    echo "         generate one: bunx tauri signer generate -w ~/.tauri/learnkit.key"
+  fi
+fi
 # Named volumes keep cargo's registry and git checkouts between runs — without
 # them every invocation recompiles the whole Rust dependency tree.
 #
@@ -37,6 +55,9 @@ else
     -v "$HOST_DIR:/app" \
     -v learnkit-cargo-registry:/usr/local/cargo/registry \
     -v learnkit-cargo-git:/usr/local/cargo/git \
+    # `${arr[@]+"${arr[@]}"}` keeps `set -u` happy on an empty array under
+    # bash 3.2 (macOS), where a bare "${arr[@]}" is an unbound-variable error.
+    ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} \
     -w /app \
     learnkit-linux-builder \
     bash -c "bun install --frozen-lockfile && bun run tauri -- build --bundles deb,appimage"

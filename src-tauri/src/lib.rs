@@ -25,6 +25,11 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
+        // Updater + relaunch: the frontend checks `plugins.updater.endpoints`
+        // on startup and on demand, downloads the signed artifact and asks
+        // the process plugin to restart into the new version.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let data_dir = app
                 .path()

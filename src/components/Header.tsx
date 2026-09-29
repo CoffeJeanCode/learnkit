@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNotebookNav } from "../stores/notebook";
 import { displaySessionTitle, useRoadmap } from "../stores/roadmap";
 import { useUi } from "../stores/ui";
+import { useUpdater } from "../stores/updater";
 import { SessionsDrawer } from "./SessionsDrawer";
 
 // Top bar replacing the old sidebar: brand + the ACTIVE SESSION's two
@@ -41,6 +42,28 @@ export function Header() {
   // "this session has classes" signal even before they're loaded.
   const hasClasses = courseId !== null;
   const chipTitle = displaySessionTitle(session);
+
+  // Update "menu": idle → looks for a new version; ready → installs it.
+  const updaterStatus = useUpdater((s) => s.status);
+  const update = useUpdater((s) => s.update);
+  const updaterError = useUpdater((s) => s.error);
+  const checkNow = useUpdater((s) => s.checkNow);
+  const install = useUpdater((s) => s.install);
+  const updaterBusy = updaterStatus === "checking" || updaterStatus === "installing";
+  const updateLabel =
+    updaterStatus === "available" && update
+      ? `⬆ Actualizar v${update.version}`
+      : updaterStatus === "checking"
+        ? "Buscando…"
+        : updaterStatus === "installing"
+          ? "Instalando…"
+          : "🔄 Actualizaciones";
+  const updateTitle =
+    updaterStatus === "error" && updaterError
+      ? `No se pudo comprobar la versión: ${updaterError}`
+      : updaterStatus === "available" && update
+        ? (update.body ?? `Hay una versión nueva: ${update.version}`)
+        : "Busca si hay una versión nueva de LearnKit";
 
   const openSession = () => {
     // Already inside the session view → keep whichever filter is showing;
@@ -107,6 +130,14 @@ export function Header() {
               Nueva sesión
             </button>
           )}
+          <button
+            className={updaterStatus === "available" ? "update-ready" : undefined}
+            onClick={() => void (updaterStatus === "available" ? install() : checkNow())}
+            disabled={updaterBusy}
+            title={updateTitle}
+          >
+            {updateLabel}
+          </button>
           <button onClick={() => setView(inMemory ? lastMainView : "learner-memory")}>
             {inMemory ? "← Volver" : "🧠 Memoria"}
           </button>

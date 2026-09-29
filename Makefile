@@ -30,7 +30,19 @@ typecheck: ## tsc --noEmit
 	bunx tsc --noEmit
 
 dist: ## Windows installer + MSI (NSIS + WiX) — run on Windows
-	bun run tauri build
+	@if [ -n "$${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then \
+		bun run tauri build; \
+	else \
+		key="$$HOME/.tauri/learnkit.key"; \
+		if [ ! -f "$$key" ]; then \
+			echo "error: signing key not found at $$key"; \
+			echo "       generate it: bunx tauri signer generate -w ~/.tauri/learnkit.key"; \
+			echo "       (bundle.createUpdaterArtifacts cannot be disabled, so every"; \
+			echo "        release build needs a private key to sign the updater bundle)"; \
+			exit 1; \
+		fi; \
+		TAURI_SIGNING_PRIVATE_KEY="$$key" bun run tauri build; \
+	fi
 
 dist-linux: ## Linux .deb + AppImage inside Docker (Tauri cannot cross-compile)
 	bash scripts/build-linux.sh

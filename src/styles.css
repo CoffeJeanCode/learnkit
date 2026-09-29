@@ -79,6 +79,30 @@ body {
 .topbar-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .drawer-toggle { padding: 5px 14px; }
 
+/* --- Update: the startup check's result + the header's manual entry ---
+ * The header button is the "menu" way to look for a new version (idle →
+ * checks, ready → installs); the banner is what the automatic check on entry
+ * surfaces so the student doesn't have to go looking. */
+.topbar button.update-ready {
+  border-color: var(--green-chalk);
+  color: var(--green-chalk);
+  font-weight: 700;
+}
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 24px;
+  background: var(--blue-wash);
+  border-bottom: 2px dashed var(--chalk-soft);
+}
+.update-banner-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.update-banner-notes { font-size: 14px; color: var(--chalk-soft); }
+.update-banner-error { font-size: 13px; color: var(--red-chalk); }
+.update-banner-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
 /* The container: names which session the header's sections (Conversación |
  * Plan | Clases) currently belong to. Truncates instead of pushing the tabs
  * off the bar on a long course title. */

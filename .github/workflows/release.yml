@@ -1,0 +1,77 @@
+name: Release
+
+# Build every platform and publish one GitHub Release per tag. The release
+# carries the installers AND the `latest.json` manifest the in-app updater
+# polls (`plugins.updater.endpoints` in tauri.conf.json), so pushing a tag is
+# the only step needed to ship — and the only way users get an update.
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ubuntu-latest, windows-latest, macos-latest]
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install frontend dependencies
+        run: bun install
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      # Tauri links against webkit2gtk; Ubuntu runners ship without it.
+      - name: Install Linux system dependencies
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            pkg-config \
+            patchelf
+
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the updater artifacts. The public half lives in
+          # src-tauri/tauri.conf.json (plugins.updater.pubkey); the private
+          # half must be added as a repository secret named
+          # TAURI_SIGNING_PRIVATE_KEY. Our key has no password, so the
+          # optional _PASSWORD secret may stay unset.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "LearnKit ${{ github.ref_name }}"
+          releaseBody: >-
+            Instaladores de LearnKit ${{ github.ref_name }}.
+            Desde la app: 🔄 Actualizaciones en la barra superior, o el aviso
+            que aparece al abrirla.
+          # Published, not draft: `releases/latest/download/latest.json` only
+          # resolves for a published release, and that is exactly the endpoint
+          # the updater polls.
+          releaseDraft: false
+          prerelease: false

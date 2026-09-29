@@ -241,6 +241,37 @@ sudo apt-get install -y build-essential curl wget file patchelf pkg-config \
 bun install && bun run tauri build -- --bundles deb,appimage
 ```
 
+## Releases and auto-update
+
+Releases ship from a tag: pushing a `vX.Y.Z` tag runs
+`.github/workflows/release.yml`, which builds all three platforms and
+publishes a GitHub Release with the installers **and** the updater
+manifest (`latest.json`). Inside the app, students see a new version in
+two places: the non-blocking "Nueva versión" banner on startup and the
+update button in the top bar.
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0   # ← publishes the release
+```
+
+### Updater signing key
+
+`bundle.createUpdaterArtifacts` is enabled, so every release build signs
+an updater bundle — which needs the private key (`.env` files do NOT work;
+the key comes from `TAURI_SIGNING_PRIVATE_KEY`). The public half lives in
+`src-tauri/tauri.conf.json` (`plugins.updater.pubkey`) and is safe to
+commit; the private half is never in the repo:
+
+- **CI**: add the *contents* of the private key file as the repo secret
+  `TAURI_SIGNING_PRIVATE_KEY` (Settings → Secrets and variables → Actions).
+- **Local builds** (`make dist`, `make dist-linux`): generate it once with
+  `bunx tauri signer generate -w ~/.tauri/learnkit.key`; both targets pick
+  it up automatically (or set `TAURI_SIGNING_PRIVATE_KEY` to the key's
+  contents for a custom location).
+
+Treat the private key as irreplaceable: if it is lost, no update can ever
+be published for copies that already have the app installed.
+
 ## Running tests
 
 ```bash
