@@ -212,6 +212,35 @@ bun run tauri dev
 Then: Providers → save one key → Agents (demos `researcher`/`writer` are seeded) →
 Chats → select agent → Run. Or try Workflows › Research → Draft.
 
+## Packaging
+
+**Windows** — run on Windows; produces the NSIS installer and the MSI:
+
+```bash
+bun run tauri build   # or: make dist
+# src-tauri/target/release/bundle/nsis/LearnKit_0.1.0_x64-setup.exe
+# src-tauri/target/release/bundle/msi/LearnKit_0.1.0_x64_en-US.msi
+```
+
+**Linux** (.deb + AppImage) — Tauri cannot cross-compile, so the build has to
+run on Linux. From any OS, Docker does it:
+
+```bash
+make dist-linux   # scripts/build-linux.sh: builds scripts/docker/Dockerfile.linux,
+                  # then bun install + tauri build --bundles deb,appimage inside it
+# src-tauri/target/release/bundle/deb/
+# src-tauri/target/release/bundle/appimage/
+```
+
+Native Debian/Ubuntu instead of Docker:
+
+```bash
+sudo apt-get install -y build-essential curl wget file patchelf pkg-config \
+  libssl-dev libgtk-3-dev libwebkit2gtk-4.1-dev \
+  libayatana-appindicator3-dev librsvg2-dev libxdo-dev fakeroot
+bun install && bun run tauri build -- --bundles deb,appimage
+```
+
 ## Running tests
 
 ```bash
