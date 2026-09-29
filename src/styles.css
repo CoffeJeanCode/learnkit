@@ -1087,6 +1087,16 @@ pre.output, .quickrun pre {
    in `useTextSelectionPopover.ts`; browsers without the API ignore this rule
    and just lose the persistent highlight. */
 ::highlight(popover-selection) { background: var(--red-chalk); color: var(--paper-deep); }
+/* "Already answered" mark: left behind when the popover closes over a
+   fragment the assistant already helped with, so the student can find the
+   help again. Deliberately SOFTER than the live selection (blue wash keeps
+   the text's own colour) — red means "you are selecting this right now",
+   blue means "the help for this is saved". Name must match
+   `SAVED_HIGHLIGHT_NAME` in `useTextSelectionPopover.ts`. */
+::highlight(popover-selection-saved) {
+  background: var(--blue-wash);
+  color: inherit;
+}
 /* The unified margin comment (¿Dudas? button + selection): `position:
    fixed`, parked BESIDE its block by `useMarginCommentPosition` — margin
    slot at `blockRect.right + 12` over the grid gap + sticky sidebar

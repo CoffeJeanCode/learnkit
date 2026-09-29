@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode, RefObject } from "react";
 import { askLexicalAssistant, tauriError } from "../../lib/tauri";
 import type { LexicalTurn } from "../../lib/tauri";
@@ -17,9 +17,11 @@ const MAX_HISTORY_TURNS = 4;
  *  `answerBearingStrings`, from `deriveBlockLexicalContext()` in
  *  `blocks/index.tsx`) is fed straight into that comment instead. Answers
  *  stay in 3 layers (analogía / mecanismo / límite), never the answer to a
- *  gate; the thread is cleared whenever the comment closes and never
- *  persisted server-side (see `LexicalAssistantService::ask` for the
- *  isolation + redaction contract). */
+ *  gate. The thread is cleared when the comment closes UNLESS the student
+ *  already got an answer for that fragment — then the turns are snapshotted
+ *  into `TheorySelectionAssistant`'s `savedThreadRef` and the highlight stays,
+ *  so clicking the mark brings the help back (never persisted server-side; see
+ *  `LexicalAssistantService::ask` for the isolation + redaction contract). */
 export function BlockLexicalAssistant({
   open,
   onToggle,
@@ -67,12 +69,24 @@ function useLexicalAssistantThread(params: {
   fragmentContext: string | null;
   keyConcepts: string[];
   answerBearingStrings: string[];
+  /** Turns the comment remounts with — how an already-answered fragment gets
+   *  its help back after the popover closed over it (see `savedThreadRef` in
+   *  `TheorySelectionAssistant`). */
+  initialHistory?: LexicalTurn[];
+  /** Reports every history change so the owner can snapshot it BEFORE the
+   *  comment unmounts: closing the comment is otherwise the moment the turns
+   *  would be lost, and they have to outlive it to be reviewable. */
+  onHistoryChange?: (history: LexicalTurn[]) => void;
 }) {
-  const { term, fragmentContext, keyConcepts, answerBearingStrings } = params;
+  const { term, fragmentContext, keyConcepts, answerBearingStrings, initialHistory, onHistoryChange } = params;
   const [question, setQuestion] = useState("");
-  const [history, setHistory] = useState<LexicalTurn[]>([]);
+  const [history, setHistory] = useState<LexicalTurn[]>(() => initialHistory ?? []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    onHistoryChange?.(history);
+  }, [history, onHistoryChange]);
 
   const ask = async (explicitQuestion?: string) => {
     const q = (explicitQuestion ?? question).trim();
@@ -142,7 +156,33 @@ export function TheorySelectionAssistant({
   children: ReactNode;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const { selection, popoverRef, clear } = useTextSelectionPopover(containerRef);
+  // Snapshot of the thread belonging to the fragment the student last got
+  // help with. It has to live HERE, above `LexicalMarginComment`: the comment
+  // unmounts on close (its `key` is the selected text), so its own state dies
+  // with it, and the whole point of keeping the highlight is that the answer
+  // is still readable when the student clicks the mark again.
+  const savedThreadRef = useRef<{ text: string; history: LexicalTurn[] } | null>(null);
+  const savedThread = savedThreadRef.current;
+  const { selection, popoverRef, clear } = useTextSelectionPopover(containerRef, {
+    // Keep the mark only for a fragment that actually produced an answer —
+    // a selection the student never asked about closes without leaving a
+    // misleading "help is here" highlight behind. Reads the REF, not a
+    // captured copy: the history lands in that ref from a child effect, which
+    // never re-renders the parent, so a captured value would be stale for
+    // exactly the close this rule exists to protect.
+    keepOnClose: () => {
+      const thread = savedThreadRef.current;
+      return selection !== null && thread !== null && thread.text === selection.text && thread.history.length > 0;
+    },
+  });
+  // Same text ⇒ same thread: the saved turns seed the remounting comment.
+  // Safe to snapshot here — `initialHistory` is only ever consumed on the
+  // mount triggered by a selection change, and that change re-renders us.
+  const initialHistory = selection !== null && savedThread !== null && savedThread.text === selection.text ? savedThread.history : [];
+  const onHistoryChange = useCallback((turns: LexicalTurn[]) => {
+    const text = selection?.text;
+    if (text) savedThreadRef.current = { text, history: turns };
+  }, [selection]);
 
   // The comment is a DOM SIBLING of the tracked content, not a child of
   // `containerRef` — selecting text inside the comment itself (its quote
@@ -171,6 +211,8 @@ export function TheorySelectionAssistant({
         keyConcepts={keyConcepts}
         answerBearingStrings={answerBearingStrings}
         rootRef={popoverRef}
+        initialHistory={initialHistory}
+        onHistoryChange={onHistoryChange}
         onClose={selection ? closeSelection : closeButton}
       />
     ) : null;
@@ -203,6 +245,8 @@ function LexicalMarginComment({
   blockRef,
   triggerRef,
   rootRef,
+  initialHistory,
+  onHistoryChange,
   onClose,
 }: {
   selectedText: string | null;
@@ -215,6 +259,11 @@ function LexicalMarginComment({
   blockRef: RefObject<HTMLElement | null>;
   triggerRef: RefObject<HTMLButtonElement | null>;
   rootRef: RefObject<HTMLDivElement | null>;
+  /** Turns this thread starts from — non-empty only when the comment is
+   *  remounting an already-answered fragment. */
+  initialHistory: LexicalTurn[];
+  /** Feeds the owner's `savedThreadRef` so the turns outlive this mount. */
+  onHistoryChange: (history: LexicalTurn[]) => void;
   onClose: () => void;
 }) {
   const isSelection = selectedText !== null;
@@ -224,6 +273,8 @@ function LexicalMarginComment({
     fragmentContext,
     keyConcepts,
     answerBearingStrings,
+    initialHistory,
+    onHistoryChange,
   });
   const { left, top, ready } = useMarginCommentPosition({ blockRef, triggerRef, popoverRef: rootRef, anchor });
   const historyRef = useRef<HTMLDivElement | null>(null);

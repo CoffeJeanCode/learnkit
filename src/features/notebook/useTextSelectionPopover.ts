@@ -23,6 +23,21 @@ export interface DetectedSelection {
  *  popover selection (registering a new one replaces the previous). */
 const SELECTION_HIGHLIGHT_NAME = "popover-selection";
 
+/** Registry key for the "already answered" mark left behind when the popover
+ *  closes over a fragment the assistant has already helped with — MUST match
+ *  `::highlight(popover-selection-saved)` in `styles.css`. Kept in a SEPARATE
+ *  name so the live selection and the saved mark never fight for one slot. */
+const SAVED_HIGHLIGHT_NAME = "popover-selection-saved";
+
+/** Caller-supplied behaviour the hook cannot infer on its own. */
+export interface TextSelectionPopoverOptions {
+  /** Asked on every close path: should this fragment's highlight survive the
+   *  close? The caller answers "yes" only while the assistant already has an
+   *  answer for it, which is what turns the mark into "help is here" instead
+   *  of a stray highlight. */
+  keepOnClose?: () => boolean;
+}
+
 function readContainedSelection(container: HTMLDivElement | null): DetectedSelection | null {
   if (!container) return null;
   const sel = window.getSelection();
@@ -59,14 +74,44 @@ function readContainedSelection(container: HTMLDivElement | null): DetectedSelec
  *  student can keep typing and copy the answer). Recomputes (rather than
  *  going stale) on scroll, since the selection's bounding rect moves with
  *  the page — but a scroll alone never closes it. */
-export function useTextSelectionPopover(containerRef: RefObject<HTMLDivElement | null>) {
+export function useTextSelectionPopover(
+  containerRef: RefObject<HTMLDivElement | null>,
+  options: TextSelectionPopoverOptions = {},
+) {
   const [selection, setSelection] = useState<DetectedSelection | null>(null);
+  /** A fragment the student already got help with, kept after the popover
+   *  closed so its mark — and a click on that mark — can bring the help back.
+   *  Only ever written by `closeSelection`, so it is either `null` or the
+   *  fragment that just went away: never two at once, never alongside a live
+   *  `selection`. */
+  const [saved, setSaved] = useState<DetectedSelection | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
+  // Options are read from inside long-lived listeners whose effect deps never
+  // include them — a plain closure would call the FIRST `keepOnClose` forever.
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
   // Where the last pointer press landed: the collapsed-selection rule below
   // needs to tell "the student clicked the popover (its input — that
   // collapses the document selection, the popover must stay open)" from a
   // click on the rest of the page (which must still close it).
   const lastPointerDownRef = useRef<Node | null>(null);
+  // Mirror of `selection` for the event handlers: `closeSelection` is a stable
+  // callback (its listeners are registered once), so it cannot read state.
+  const selectionRef = useRef<DetectedSelection | null>(null);
+
+  /** The single close path. Leaves the fragment highlighted (and stored for a
+   *  click-to-reopen) when the caller says the student already has an answer
+   *  for it; otherwise drops the mark exactly as before. */
+  const closeSelection = useCallback(() => {
+    const current = selectionRef.current;
+    if (!current) return;
+    if (optionsRef.current.keepOnClose?.()) setSaved(current);
+    setSelection(null);
+  }, []);
+
+  useEffect(() => {
+    selectionRef.current = selection;
+  }, [selection]);
 
   useEffect(() => {
     const onPointerDown = (e: PointerEvent) => {
@@ -86,11 +131,18 @@ export function useTextSelectionPopover(containerRef: RefObject<HTMLDivElement |
         // `containerRef`, so `readContainedSelection` would return null and
         // close the popover mid-copy without this rule.
         if (popover?.contains(sel.getRangeAt(0).commonAncestorContainer)) return;
-        // (2)/(3) A fresh selection inside the container updates the state;
-        // a non-collapsed selection ANYWHERE else resolves to null (that is
-        // exactly what `readContainedSelection` scopes out) and closes it —
-        // some other block/content took the selection over.
-        setSelection(readContainedSelection(containerRef.current));
+        // (2) A fresh selection inside the container replaces BOTH the live
+        // popover and any saved mark — one mark per block, newest wins.
+        const next = readContainedSelection(containerRef.current);
+        if (next) {
+          setSaved(null);
+          setSelection(next);
+          return;
+        }
+        // (3) A non-collapsed selection ANYWHERE else took the selection over
+        // (another block, another pane) — close, but a fragment this block
+        // already answered keeps its mark.
+        closeSelection();
         return;
       }
       // (4) Collapsed or no selection at all: keep it ONLY when the
@@ -99,17 +151,20 @@ export function useTextSelectionPopover(containerRef: RefObject<HTMLDivElement |
       // other collapse closes the popover, as it always did.
       const active = document.activeElement;
       if (popover && (popover.contains(lastPointerDownRef.current) || popover.contains(active))) return;
-      setSelection(null);
+      closeSelection();
     };
     document.addEventListener("selectionchange", onSelectionChange);
     return () => document.removeEventListener("selectionchange", onSelectionChange);
-  }, [containerRef]);
+  }, [containerRef, closeSelection]);
 
   useEffect(() => {
-    if (!selection) return;
-    const close = () => setSelection(null);
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key !== "Escape") return;
+      // Popover open → close it (keeping the mark when it was already
+      // answered); nothing open but a mark left behind → drop the mark, the
+      // student is backing out.
+      if (selection) closeSelection();
+      else setSaved(null);
     };
     const onPointerDown = (e: MouseEvent) => {
       const target = e.target as Node;
@@ -118,7 +173,7 @@ export function useTextSelectionPopover(containerRef: RefObject<HTMLDivElement |
       // left alone here — the resulting `selectionchange` (empty during the
       // drag, then the new selection on mouseup) drives the state instead.
       if (containerRef.current?.contains(target)) return;
-      close();
+      closeSelection();
     };
     // Scroll must NEVER close: only refresh the anchor when the selection
     // is still readable inside the container. A collapsed selection with the
@@ -135,7 +190,39 @@ export function useTextSelectionPopover(containerRef: RefObject<HTMLDivElement |
       document.removeEventListener("mousedown", onPointerDown);
       window.removeEventListener("scroll", onScroll, true);
     };
-  }, [selection, containerRef]);
+  }, [selection, containerRef, closeSelection]);
+
+  // Reopen a saved mark. The Custom Highlight paints over the text but is NOT
+  // hit-testable, while the underlying text nodes still take the click — so
+  // membership is decided against the stored range's client rects. The default
+  // action (placing a caret / starting a drag) is cancelled, which is also
+  // what stops the `selectionchange` a caret would fire from closing the
+  // popover one tick after it reopens.
+  useEffect(() => {
+    if (!saved || selection) return;
+    const containsPoint = (x: number, y: number) =>
+      Array.from(saved.range.getClientRects()).some((r) => x >= r.left && x <= r.right && y >= r.top && y <= r.bottom);
+    const onSavedMouseDown = (e: MouseEvent) => {
+      if (!containsPoint(e.clientX, e.clientY)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setSelection(saved);
+      setSaved(null);
+    };
+    // Affordance: the mark itself is the only clue the help is still there,
+    // so the pointer changes over it instead of making the student guess.
+    const onSavedMouseMove = (e: MouseEvent) => {
+      const over = containsPoint(e.clientX, e.clientY);
+      if (over !== (document.body.style.cursor === "pointer")) document.body.style.cursor = over ? "pointer" : "";
+    };
+    document.addEventListener("mousedown", onSavedMouseDown, true);
+    document.addEventListener("mousemove", onSavedMouseMove);
+    return () => {
+      document.removeEventListener("mousedown", onSavedMouseDown, true);
+      document.removeEventListener("mousemove", onSavedMouseMove);
+      document.body.style.cursor = "";
+    };
+  }, [saved, selection]);
 
   // Keep the highlight painted while the popover is open, even after the
   // document selection itself collapses (focusing the input, selecting text
@@ -143,22 +230,27 @@ export function useTextSelectionPopover(containerRef: RefObject<HTMLDivElement |
   // normal selection rendering; the native `::selection` rule still covers
   // the live drag. Every access is guarded — a browser without the API just
   // loses the persistent highlight exactly as before, and never throws.
+  // The SAVED mark uses its own registry slot and its own CSS rule so it
+  // survives the popover closing instead of dying with `selection`.
   // NOTE: TS 5.8's lib.dom types `HighlightRegistry` with only `forEach`,
   // so the `set`/`delete` methods are cast to their real signatures.
   useEffect(() => {
-    if (!selection) return;
     if (typeof CSS === "undefined" || !CSS.highlights || typeof Highlight === "undefined") return;
     const registry = CSS.highlights as unknown as {
       set(name: string, value: Highlight): void;
       delete(name: string): boolean;
     };
-    registry.set(SELECTION_HIGHLIGHT_NAME, new Highlight(selection.range));
+    if (selection) registry.set(SELECTION_HIGHLIGHT_NAME, new Highlight(selection.range));
+    else registry.delete(SELECTION_HIGHLIGHT_NAME);
+    if (saved) registry.set(SAVED_HIGHLIGHT_NAME, new Highlight(saved.range));
+    else registry.delete(SAVED_HIGHLIGHT_NAME);
     return () => {
       registry.delete(SELECTION_HIGHLIGHT_NAME);
+      registry.delete(SAVED_HIGHLIGHT_NAME);
     };
-  }, [selection]);
+  }, [selection, saved]);
 
-  return { selection, popoverRef, clear: () => setSelection(null) };
+  return { selection, saved, popoverRef, clear: closeSelection };
 }
 
 // --- Margin-comment positioning (both triggers) ----------------------------
