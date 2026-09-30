@@ -18,7 +18,8 @@ NO generas contenido. Tu ÚNICO trabajo es llamar UNA vez a la herramienta submi
 
 # QUÉ RECIBES
 - El tema de la clase y la meta terminal del curso (targetGoal).
-- Los tipos de bloque ya emitidos en esta clase (blocksSoFar) y el tipo del bloque a revisar.
+- Los bloques COMPLETOS ya emitidos en esta clase (blocksSoFar, con su contenido real, no solo
+  su tipo) y el tipo del bloque a revisar.
 - El bloque completo, en JSON.
 
 # QUÉ EVALÚAS (según blockType)
@@ -40,6 +41,10 @@ branching_scenario_challenge:
 Coherencia transversal:
 - El bloque enseña algo que la clase (topic + targetGoal) realmente necesita y que no repite lo
   que blocksSoFar ya cubrió — si el tipo de bloque no encaja con la naturaleza del tema, dilo.
+- Compara el CONTENIDO de este bloque (no solo su tipo) contra el contenido real de cada bloque
+  en blocksSoFar. Si otro bloque anterior — del mismo tipo o de uno distinto — ya explicó
+  esencialmente la misma regla, analogía o concepto con otras palabras, es RECHAZO: nombra
+  cuál bloque anterior se repite y qué información nueva falta.
 
 # VEREDICTO
 - `accepted: true` y `feedback: []` si el bloque cumple todo lo anterior.

@@ -36,7 +36,8 @@ pub const NOTEBOOK_AGENT_ID: &str = "notebook_generator";
 /// chain fits its profile) that a bare sequence can't carry.
 const SYSTEM_PROMPT: &str = r##"Recibes el contexto de UNA clase (curso con targetGoal, semana del
 temario — milestone.weekNumber — y la clase específica) y el progreso YA HECHO en su notebook
-(`blocksSoFar`: los tipos de bloque ya generados, en orden; `lastGateOutcome`, si el bloque
+(`blocksSoFar`: los tipos de bloque ya generados, en orden; `contentSoFar`: lo que cada uno de esos
+bloques REALMENTE enseñó, con su contenido; `lastGateOutcome`, si el bloque
 anterior era una compuerta que el estudiante ACABA de superar). NO conversas. Tu ÚNICO trabajo es
 llamar UNA vez a la herramienta publish_notebook_block con el SIGUIENTE bloque — nunca la clase
 completa, nunca más de un bloque por llamada.
@@ -178,6 +179,15 @@ propio anchored_micro_theory (ese bloque ya no acepta visualAid — ver su entra
 BLOQUES abajo). El diagrama separado ya resuelve solapamiento y anclaje geométrico (ver REGLAS DE
 ORO DE GEOMETRÍA, GROUNDING Y COLISIONES más abajo); duplicar esa lógica dentro de la microteoría
 solo genera el mismo problema dos veces.
+
+## PROHIBIDO re-explicar lo ya enseñado
+Antes de redactar, lee `contentSoFar`. Si un bloque anterior — de cualquier tipo — ya explicó una
+regla, analogía, mecanismo o ejemplo, NO lo vuelvas a explicar con otras palabras: eso gasta la
+clase sin enseñar nada nuevo y el crítico pedagógico lo rechaza. Un segundo anchored_micro_theory
+solo es válido si introduce un concepto DISTINTO (el siguiente paso, un caso límite, una
+excepción), y puede referirse al anterior en una frase ("como viste antes, …") en vez de
+repetirlo. Si lo que falta no es teoría nueva sino comprobar o practicar lo ya explicado, el
+siguiente bloque es una compuerta o una práctica, no otra teoría.
 
 Declara tu elección en `pedagogicalRationale` (texto libre: por qué ESTA combinación de bloques
 para ESTE tema, en este orden) — es tu propia justificación, no se le muestra al estudiante tal

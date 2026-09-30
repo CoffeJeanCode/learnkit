@@ -11,6 +11,28 @@ use crate::notebook_store::ClassGenerationContext;
 
 use super::grounding::MasteryProgress;
 
+/// What each prior block of this class actually TAUGHT, not just which slot
+/// it filled: `{blockType, content}` per block, in order, with `visualAid`
+/// stripped (its SVG geometry is the bulk of a block's bytes and carries no
+/// prose the model could accidentally repeat). Both the generator and the
+/// critic need this — a bare list of type names says nothing about WHAT was
+/// explained, so the generator would re-explain the same rule in new words
+/// and the critic could not tell. A class caps at
+/// `grounding::MAX_TOTAL_BLOCKS` (20) and each block's text is word-capped,
+/// so this stays small.
+fn prior_blocks_content(existing_blocks: &[NotebookBlock]) -> Vec<serde_json::Value> {
+    existing_blocks
+        .iter()
+        .map(|b| {
+            let mut content = b.content_json.clone();
+            if let Some(obj) = content.as_object_mut() {
+                obj.remove("visualAid");
+            }
+            serde_json::json!({ "blockType": b.block_type.as_str(), "content": content })
+        })
+        .collect()
+}
+
 /// Reduces `LearnerCognitiveMemory` down to exactly what ONE block-generation
 /// call needs to see — never the raw store row (timestamps, EMA internals):
 /// due retrieval items already resolved to a boolean-shaped list, relevant
@@ -94,6 +116,7 @@ pub(super) fn render_next_block_input(
             "allocatedHours": ctx.class.hours,
         },
         "blocksSoFar": existing_blocks.iter().map(|b| b.block_type.as_str()).collect::<Vec<_>>(),
+        "contentSoFar": prior_blocks_content(existing_blocks),
         "initialPrediction": initial_prediction.unwrap_or("(el estudiante aún no ha registrado una predicción inicial en esta clase)"),
         "finalResultSoFar": final_result_so_far,
         "masteryStatus": {
@@ -235,7 +258,7 @@ pub(super) fn render_block_audit_input(
         "topic": ctx.class.title,
         "targetGoal": ctx.course.target_goal,
         "blockType": block.block_type().as_str(),
-        "blocksSoFar": existing_blocks.iter().map(|b| b.block_type.as_str()).collect::<Vec<_>>(),
+        "blocksSoFar": prior_blocks_content(existing_blocks),
         "block": block,
     });
     format!(
@@ -259,5 +282,48 @@ pub(super) fn synthesize_final_result_so_far(existing_blocks: &[NotebookBlock]) 
         "El estudiante todavía no ha superado ninguna compuerta en esta clase.".to_string()
     } else {
         format!("Compuertas superadas hasta ahora en esta clase: {}.", passed.join(", "))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::notebook::DynamicBlockType;
+
+    fn block(order_index: u32, block_type: DynamicBlockType, content_json: serde_json::Value) -> NotebookBlock {
+        NotebookBlock {
+            id: format!("b{order_index}"),
+            document_id: "doc".to_string(),
+            block_type,
+            content_json,
+            order_index,
+            status: BlockStatus::Ready,
+            attempt_count: 0,
+            last_feedback: None,
+        }
+    }
+
+    #[test]
+    fn prior_blocks_content_keeps_what_was_taught_and_drops_visual_geometry() {
+        let blocks = [
+            block(
+                0,
+                DynamicBlockType::AnchoredMicroTheory,
+                serde_json::json!({ "title": "Pila", "systemRule": "LIFO: el último en entrar sale primero." }),
+            ),
+            block(
+                1,
+                DynamicBlockType::DeclarativeVisualDiagram,
+                serde_json::json!({ "title": "Mapa de la pila", "visualAid": { "svg": "<svg/>" } }),
+            ),
+        ];
+
+        let digest = prior_blocks_content(&blocks);
+
+        assert_eq!(digest.len(), 2);
+        assert_eq!(digest[0]["blockType"], "anchored_micro_theory");
+        assert_eq!(digest[0]["content"]["systemRule"], "LIFO: el último en entrar sale primero.");
+        assert_eq!(digest[1]["content"]["title"], "Mapa de la pila");
+        assert!(digest[1]["content"].get("visualAid").is_none());
     }
 }
