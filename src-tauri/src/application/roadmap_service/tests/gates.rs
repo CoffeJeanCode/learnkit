@@ -9,6 +9,7 @@ use super::*;
             assessment: Some(full_assessment("Ciclo de Krebs", 4, 3.0, EntryLevel::TheoreticalFoundations)),
             diagnostic_battery: Some(battery.clone()),
             propose_syllabus_plan: None,
+            propose_capstone_project: None,
             confirm_syllabus_plan: None,
         };
         let step2 = full_propose_step(
@@ -78,6 +79,7 @@ use super::*;
             assessment: Some(full_assessment("Ciclo de Krebs", 4, 3.0, EntryLevel::TheoreticalFoundations)),
             diagnostic_battery: Some(battery.clone()),
             propose_syllabus_plan: None,
+            propose_capstone_project: None,
             confirm_syllabus_plan: None,
         };
         let step2 = full_propose_step(

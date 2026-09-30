@@ -46,7 +46,7 @@ fn pick_onboarding_message(session_id: &str) -> &'static str {
 /// autonomous, tool-calling orchestrator (see `agents::roadmap_agent`) that
 /// still avoids confirmation steps EXCEPT the one place they're genuinely
 /// required: confirming the plan before it's persisted. A Strict Gated Flow,
-/// one agent, 4 tools:
+/// one agent, 5 tools:
 ///
 /// 1. **Capture** (Gate 1) — `submit_diagnostic_assessment` the instant
 ///    topic, goal, timeframe and weekly hours are known, AND the student has
@@ -61,10 +61,13 @@ fn pick_onboarding_message(session_id: &str) -> &'static str {
 ///    deterministic grading against `correctOption`.
 /// 3. **Propose** (Gate 3a) — the instant Gate 2 finishes (last answer,
 ///    skip, or the `absolute_zero` bypass), `propose_syllabus_plan` runs
-///    automatically: the diagnostic consolidation + syllabus, calibrated by
-///    the CONCRETE results instead of the vague self-reported level alone.
-///    Nothing is persisted yet — it's a proposal, shown to the student with
-///    a closing question.
+///    automatically: the diagnostic consolidation + syllabus milestones,
+///    calibrated by the CONCRETE results instead of the vague self-reported
+///    level alone — immediately followed, in the SAME turn, by
+///    `propose_capstone_project` (the terminal transfer project, split into
+///    its own tool call so the combined payload stays under a provider's
+///    output-token cap). Nothing is persisted yet — it's a proposal, shown to
+///    the student with a closing question.
 /// 4. **Confirm** (Gate 3b) — the student's free-text reply flows through a
 ///    normal chat turn. Confirming calls `confirm_syllabus_plan` (no
 ///    payload — the syllabus is already agreed on), which seals the session

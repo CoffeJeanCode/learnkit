@@ -311,6 +311,22 @@ pub struct ProposeSyllabusPlanArgs {
     pub closing_question: String,
 }
 
+/// Args for the `propose_capstone_project` tool call — split out of
+/// `propose_syllabus_plan`'s own JSON payload (Gate 3a) so DeepSeek's fixed
+/// 8192-output-token cap (see `providers::factory::output_budget`) isn't
+/// spent emitting the full syllabus AND the capstone in one completion. Wraps
+/// the existing [`CapstoneProject`] rather than redefining its fields:
+/// `#[serde(flatten)]` means the tool's own JSON args ARE the capstone object
+/// directly (`title`/`description`/`verifiableEvidence`), matching its own
+/// schema (`tools::roadmap_tools::capstone_project_json_schema`). Called in
+/// the SAME turn as `propose_syllabus_plan`, immediately after it — see
+/// `tools::roadmap_tools::ProposeCapstoneProjectTool`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapstoneProjectArgs {
+    #[serde(flatten)]
+    pub capstone_project: CapstoneProject,
+}
+
 /// What Gate 3a actually stores while awaiting the student's confirmation —
 /// see `RoadmapSession::proposed_plan`. `None` once Gate 3b (`confirm_
 /// syllabus_plan`) seals the session; the syllabus/diagnostic summary then

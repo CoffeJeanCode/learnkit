@@ -84,8 +84,13 @@ impl RoadmapService {
     /// (`assessment`) and Gate 2 (`diagnostic_battery`) are expected to
     /// chain in the SAME turn — UNLESS `entryLevel` is `AbsoluteZero`, in
     /// which case `assessment` chains with `propose_syllabus_plan` directly
-    /// instead (Gate 2 skipped). `confirm_syllabus_plan` is never expected
-    /// alongside any of the above — it only arrives once a proposal exists.
+    /// instead (Gate 2 skipped). `propose_syllabus_plan` itself always
+    /// expects `propose_capstone_project` in that SAME turn too (split apart
+    /// purely to keep each completion small — see `tools::roadmap_tools::
+    /// ProposeCapstoneProjectTool`); missing one without the other is treated
+    /// as a grounding failure below, not a silent pass-through.
+    /// `confirm_syllabus_plan` is never expected alongside any of the above —
+    /// it only arrives once a proposal exists.
     ///
     /// BUG FIXED HERE (kept from the earlier one-shot design): this used to
     /// gate `turn_count_in_phase` on a local `acted` flag that went true the
@@ -179,48 +184,83 @@ impl RoadmapService {
         }
 
         if let Some(mut propose) = capture.propose_syllabus_plan {
+            let capstone = capture.propose_capstone_project;
             match session.learner_profile_card.clone() {
                 Some(profile) if battery_satisfied(&profile, &session.pending_diagnostic_battery) => {
-                    // `paceHoursPerWeek` is never trusted from the model: it's
-                    // arithmetically determined by `weeklyCommitmentHours`
-                    // (Gate 1, already grounded) — same class of bug
-                    // `build_profile_card`'s `total_available_hours` comment
-                    // describes ("recurring bug when it was a model-supplied
-                    // value"). Overwriting it here means the model only has
-                    // ONE number to get right per week (the micromodule-hours
-                    // sum), not two independent ones that must agree with
-                    // each other AND with the diagnostic.
-                    propose.syllabus.pace_hours_per_week = profile.weekly_commitment_hours;
-                    let mut violations = syllabus_violations(&profile, &propose.syllabus);
-                    if propose.core_focus.trim().is_empty() {
-                        violations.push("coreFocus está vacío".to_string());
-                    }
-                    if propose.identified_needs.is_empty() {
-                        violations.push("identifiedNeeds está vacío".to_string());
-                    }
-                    if propose.learning_strategy.trim().is_empty() {
-                        violations.push("learningStrategy está vacío".to_string());
-                    }
-                    if propose.closing_question.trim().is_empty() {
-                        violations.push("closingQuestion está vacío".to_string());
-                    }
-                    if violations.is_empty() {
-                        let diagnostic_summary = DiagnosticSummaryCard {
-                            core_focus: propose.core_focus,
-                            identified_needs: propose.identified_needs,
-                            learning_strategy: propose.learning_strategy,
-                        };
-                        session.diagnostic_summary_card = Some(diagnostic_summary.clone());
-                        session.proposed_plan = Some(ProposedPlan {
-                            diagnostic_summary,
-                            syllabus: propose.syllabus,
-                            closing_question: propose.closing_question,
-                        });
-                        session.last_rejection_reasons.clear();
-                    } else {
-                        tracing::warn!(session_id = %session.session_id, ?violations, "propose_syllabus_plan failed grounding");
-                        session.last_rejection_reasons = violations;
-                        had_violation = true;
+                    match capstone {
+                        Some(capstone) => {
+                            // `paceHoursPerWeek` is never trusted from the model: it's
+                            // arithmetically determined by `weeklyCommitmentHours`
+                            // (Gate 1, already grounded) — same class of bug
+                            // `build_profile_card`'s `total_available_hours` comment
+                            // describes ("recurring bug when it was a model-supplied
+                            // value"). Overwriting it here means the model only has
+                            // ONE number to get right per week (the micromodule-hours
+                            // sum), not two independent ones that must agree with
+                            // each other AND with the diagnostic.
+                            propose.syllabus.pace_hours_per_week = profile.weekly_commitment_hours;
+                            // `capstoneProject` no longer arrives on `propose`'s own
+                            // JSON payload (see `tools::roadmap_tools::
+                            // syllabus_json_schema` — it was split out into its own
+                            // `propose_capstone_project` tool call to keep this
+                            // completion small enough for DeepSeek's output-token
+                            // cap). Merge the separately-captured value in HERE,
+                            // before grounding runs, so `syllabus_violations`'s
+                            // `capstone_project_violations` check sees the real
+                            // thing exactly like it always has.
+                            propose.syllabus.capstone_project = capstone.capstone_project;
+                            let mut violations = syllabus_violations(&profile, &propose.syllabus);
+                            if propose.core_focus.trim().is_empty() {
+                                violations.push("coreFocus está vacío".to_string());
+                            }
+                            if propose.identified_needs.is_empty() {
+                                violations.push("identifiedNeeds está vacío".to_string());
+                            }
+                            if propose.learning_strategy.trim().is_empty() {
+                                violations.push("learningStrategy está vacío".to_string());
+                            }
+                            if propose.closing_question.trim().is_empty() {
+                                violations.push("closingQuestion está vacío".to_string());
+                            }
+                            if violations.is_empty() {
+                                let diagnostic_summary = DiagnosticSummaryCard {
+                                    core_focus: propose.core_focus,
+                                    identified_needs: propose.identified_needs,
+                                    learning_strategy: propose.learning_strategy,
+                                };
+                                session.diagnostic_summary_card = Some(diagnostic_summary.clone());
+                                session.proposed_plan = Some(ProposedPlan {
+                                    diagnostic_summary,
+                                    syllabus: propose.syllabus,
+                                    closing_question: propose.closing_question,
+                                });
+                                session.last_rejection_reasons.clear();
+                            } else {
+                                tracing::warn!(session_id = %session.session_id, ?violations, "propose_syllabus_plan failed grounding");
+                                session.last_rejection_reasons = violations;
+                                had_violation = true;
+                            }
+                        }
+                        None => {
+                            // Defensive: the prompt tells the model to call
+                            // propose_capstone_project immediately after
+                            // propose_syllabus_plan, in the SAME turn — but never
+                            // silently pass through a default/empty capstone if
+                            // that didn't happen. Treated as a grounding failure
+                            // so the normal retry mechanism (MAX_GROUNDING_RETRIES)
+                            // corrects it instead of persisting an incomplete plan.
+                            tracing::warn!(
+                                session_id = %session.session_id,
+                                "propose_syllabus_plan called without a matching propose_capstone_project in the same turn"
+                            );
+                            session.last_rejection_reasons = vec![
+                                "propose_syllabus_plan se llamó sin propose_capstone_project en el mismo turno — ambas \
+                                 herramientas deben llamarse juntas: primero propose_syllabus_plan y de inmediato después \
+                                 propose_capstone_project, antes de terminar el turno."
+                                    .to_string(),
+                            ];
+                            had_violation = true;
+                        }
                     }
                 }
                 Some(_) => {

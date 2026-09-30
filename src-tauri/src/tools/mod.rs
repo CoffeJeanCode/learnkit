@@ -16,8 +16,8 @@ pub use notebook_tools::{
 };
 pub use registry::{ToolInfo, is_known_tool, list_tools};
 pub use roadmap_tools::{
-    ConfirmSyllabusPlanTool, DiagnosticToolScope, PresentDiagnosticBatteryTool, ProposeSyllabusPlanTool, RoadmapCapture,
-    SharedRoadmapCapture, SubmitDiagnosticAssessmentTool,
+    ConfirmSyllabusPlanTool, DiagnosticToolScope, PresentDiagnosticBatteryTool, ProposeCapstoneProjectTool, ProposeSyllabusPlanTool,
+    RoadmapCapture, SharedRoadmapCapture, SubmitDiagnosticAssessmentTool,
 };
 
 /// The app handle, registered once at setup. Tool implementations run deep

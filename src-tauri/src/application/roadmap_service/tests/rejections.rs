@@ -129,6 +129,7 @@ use super::*;
                 syllabus: monolithic_syllabus,
                 closing_question: "¿Todo bien?".to_string(),
             }),
+            propose_capstone_project: Some(full_capstone_args()),
             ..Default::default()
         };
         // step2 queued twice: `finish_diagnostic_stage`'s in-turn grounding
@@ -208,6 +209,7 @@ use super::*;
                 syllabus: objectiveless_syllabus,
                 closing_question: "¿Todo bien?".to_string(),
             }),
+            propose_capstone_project: Some(full_capstone_args()),
             ..Default::default()
         };
         // Queued twice so the in-turn grounding retry can't self-heal it —
@@ -263,6 +265,7 @@ use super::*;
                 syllabus: short_other_syllabus,
                 closing_question: "¿Todo bien?".to_string(),
             }),
+            propose_capstone_project: Some(full_capstone_args()),
             ..Default::default()
         };
         // Queued twice so the in-turn grounding retry can't self-heal it —
@@ -301,12 +304,15 @@ use super::*;
         };
         // Well-formed syllabus EXCEPT the capstone's verifiableEvidence, so
         // the only violation the grounding pass can report is the capstone
-        // itself.
-        let mut capstoneless_syllabus = full_syllabus(1, 3.0, "Tema");
-        capstoneless_syllabus.capstone_project = CapstoneProject {
-            title: "Proyecto terminal".to_string(),
-            description: "Integrar lo aprendido en un escenario real de transferencia".to_string(),
-            verifiable_evidence: String::new(),
+        // itself. The capstone now arrives via its own `propose_capstone_
+        // project` capture (see `flow.rs`'s merge), not the syllabus's own
+        // nested field — that field only survives for legacy deserialization.
+        let evidenceless_capstone = CapstoneProjectArgs {
+            capstone_project: CapstoneProject {
+                title: "Proyecto terminal".to_string(),
+                description: "Integrar lo aprendido en un escenario real de transferencia".to_string(),
+                verifiable_evidence: String::new(),
+            },
         };
         let step2 = ScriptedStep {
             text: "..".to_string(),
@@ -314,9 +320,10 @@ use super::*;
                 core_focus: "Lo esencial".to_string(),
                 identified_needs: vec!["Entender el flujo".to_string()],
                 learning_strategy: "Guiado".to_string(),
-                syllabus: capstoneless_syllabus,
+                syllabus: full_syllabus(1, 3.0, "Tema"),
                 closing_question: "¿Todo bien?".to_string(),
             }),
+            propose_capstone_project: Some(evidenceless_capstone),
             ..Default::default()
         };
         // Queued twice so the in-turn grounding retry can't self-heal it —

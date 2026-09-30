@@ -4,16 +4,21 @@ use super::*;
     /// or calls one/more tools. `assessment`/`diagnostic_battery` are
     /// expected to chain in the SAME step (Gate 1 + Gate 2) — or
     /// `assessment`/`propose_syllabus_plan` chain instead for the
-    /// `absolute_zero` skip path. `propose_syllabus_plan` alone is Gate 3a
-    /// (triggered by `answer_diagnostic_question`/`skip_diagnostic_battery`,
-    /// not a normal chat turn); `confirm_syllabus_plan` alone is Gate 3b
-    /// (a normal chat turn, once a proposal is pending).
+    /// `absolute_zero` skip path. `propose_syllabus_plan` always expects
+    /// `propose_capstone_project` alongside it in the SAME step (see
+    /// `tools::roadmap_tools::ProposeCapstoneProjectTool` — split apart only
+    /// to keep each completion small, both still fire together); a step
+    /// missing one while carrying the other is exactly how the
+    /// "capstone omitted" rejection test drives that scenario.
+    /// `confirm_syllabus_plan` alone is Gate 3b (a normal chat turn, once a
+    /// proposal is pending).
     #[derive(Clone, Default)]
     pub(super) struct ScriptedStep {
         pub(super) text: String,
         pub(super) assessment: Option<DiagnosticAssessmentArgs>,
         pub(super) diagnostic_battery: Option<DiagnosticBattery>,
         pub(super) propose_syllabus_plan: Option<ProposeSyllabusPlanArgs>,
+        pub(super) propose_capstone_project: Option<CapstoneProjectArgs>,
         pub(super) confirm_syllabus_plan: Option<ConfirmSyllabusPlanArgs>,
     }
 
@@ -56,6 +61,7 @@ use super::*;
             c.assessment = step.assessment;
             c.diagnostic_battery = step.diagnostic_battery;
             c.propose_syllabus_plan = step.propose_syllabus_plan;
+            c.propose_capstone_project = step.propose_capstone_project;
             c.confirm_syllabus_plan = step.confirm_syllabus_plan;
             Ok(PromptOutput { text: step.text, tool_calls: vec![] })
         }
@@ -169,10 +175,23 @@ use super::*;
         }
     }
 
-    /// A scripted step carrying ONLY `propose_syllabus_plan` — what Gate 3a
-    /// (triggered by `answer_diagnostic_question`/`skip_diagnostic_battery`,
-    /// or chained with `assessment` for the `absolute_zero` skip path)
-    /// expects.
+    /// A valid capstone args value — what `propose_capstone_project` is
+    /// expected to carry alongside `propose_syllabus_plan` in the SAME step
+    /// (see `ScriptedStep`'s doc comment).
+    pub(super) fn full_capstone_args() -> CapstoneProjectArgs {
+        CapstoneProjectArgs {
+            capstone_project: CapstoneProject {
+                title: "Proyecto terminal".to_string(),
+                description: "Integrar lo aprendido en un escenario real de transferencia".to_string(),
+                verifiable_evidence: "Repositorio con la app corriendo + demo grabada".to_string(),
+            },
+        }
+    }
+
+    /// A scripted step carrying `propose_syllabus_plan` + `propose_capstone_project`
+    /// together — what Gate 3a (triggered by
+    /// `answer_diagnostic_question`/`skip_diagnostic_battery`, or chained
+    /// with `assessment` for the `absolute_zero` skip path) expects.
     pub(super) fn full_propose_step(text: &str, weeks: u16, hours: f32, topic: &str) -> ScriptedStep {
         ScriptedStep {
             text: text.to_string(),
@@ -185,6 +204,7 @@ use super::*;
                 syllabus: full_syllabus(weeks, hours, topic),
                 closing_question: "¿Te parece adecuada esta distribución?".to_string(),
             }),
+            propose_capstone_project: Some(full_capstone_args()),
             confirm_syllabus_plan: None,
         }
     }
@@ -197,6 +217,7 @@ use super::*;
             assessment: None,
             diagnostic_battery: None,
             propose_syllabus_plan: None,
+            propose_capstone_project: None,
             confirm_syllabus_plan: Some(ConfirmSyllabusPlanArgs {}),
         }
     }
@@ -255,6 +276,7 @@ use super::*;
                 c.assessment = step.assessment;
                 c.diagnostic_battery = step.diagnostic_battery;
                 c.propose_syllabus_plan = step.propose_syllabus_plan;
+                c.propose_capstone_project = step.propose_capstone_project;
                 c.confirm_syllabus_plan = step.confirm_syllabus_plan;
                 return Ok(PromptOutput { text: step.text, tool_calls: vec![] });
             }
@@ -298,6 +320,7 @@ use super::*;
             c.assessment = self.step.assessment.clone();
             c.diagnostic_battery = self.step.diagnostic_battery.clone();
             c.propose_syllabus_plan = self.step.propose_syllabus_plan.clone();
+            c.propose_capstone_project = self.step.propose_capstone_project.clone();
             c.confirm_syllabus_plan = self.step.confirm_syllabus_plan.clone();
             Ok(PromptOutput { text: self.step.text.clone(), tool_calls: vec![] })
         }
@@ -356,6 +379,7 @@ use super::*;
             c.assessment = step.assessment;
             c.diagnostic_battery = step.diagnostic_battery;
             c.propose_syllabus_plan = step.propose_syllabus_plan;
+            c.propose_capstone_project = step.propose_capstone_project;
             c.confirm_syllabus_plan = step.confirm_syllabus_plan;
             Ok(PromptOutput { text: step.text, tool_calls: vec![] })
         }

@@ -8,8 +8,8 @@ use crate::error::{AppError, AppResult};
 use crate::tools::{
     BlockAuditCapture, ClosureFeedbackCapture, ConfirmSyllabusPlanTool, DiagnosticToolScope, EchoTool, GateGradingCapture,
     GradeClosureSubmissionTool, GradeGateSubmissionTool, NotebookBlockCapture, PresentDiagnosticBatteryTool,
-    ProposeSyllabusPlanTool, PublishNotebookBlockTool, SharedRoadmapCapture, SubmitBlockAuditTool, SubmitDiagnosticAssessmentTool,
-    is_known_tool,
+    ProposeCapstoneProjectTool, ProposeSyllabusPlanTool, PublishNotebookBlockTool, SharedRoadmapCapture, SubmitBlockAuditTool,
+    SubmitDiagnosticAssessmentTool, is_known_tool,
 };
 
 /// Límite para una llamada al LLM: sin esto, una red colgada o un proveedor
@@ -261,23 +261,28 @@ impl ProviderFactory {
         let agent = match scope {
             DiagnosticToolScope::Assessment => base.tool(SubmitDiagnosticAssessmentTool(capture)).build(),
             DiagnosticToolScope::Battery => base.tool(PresentDiagnosticBatteryTool(capture)).build(),
-            DiagnosticToolScope::Propose => base.tool(ProposeSyllabusPlanTool(capture)).build(),
+            DiagnosticToolScope::Propose => {
+                base.tool(ProposeSyllabusPlanTool(capture.clone())).tool(ProposeCapstoneProjectTool(capture)).build()
+            }
             DiagnosticToolScope::All => base
                 .tool(SubmitDiagnosticAssessmentTool(capture.clone()))
                 .tool(PresentDiagnosticBatteryTool(capture.clone()))
                 .tool(ProposeSyllabusPlanTool(capture.clone()))
+                .tool(ProposeCapstoneProjectTool(capture.clone()))
                 .tool(ConfirmSyllabusPlanTool(capture))
                 .build(),
         };
         // Rig's implicit budget is ONE model call — enough for a single tool
         // call at most. This agent may chain up to 2 SEQUENTIAL tool calls in
         // one turn (submit_diagnostic_assessment + present_diagnostic_battery,
-        // OR submit_diagnostic_assessment + propose_syllabus_plan for the
-        // absolute_zero skip path — propose/confirm are never chained with
-        // the first two otherwise, see `RoadmapCapture`'s doc comment) — each
-        // consumes at least one turn, since the model sees each result before
-        // deciding the next call — plus a final turn, or Rig aborts with
-        // `MaxTurnsError` before the 2nd call ever happens.
+        // propose_syllabus_plan + propose_capstone_project, OR — for the
+        // absolute_zero skip path — submit_diagnostic_assessment +
+        // propose_syllabus_plan + propose_capstone_project, 3 in a row —
+        // confirm_syllabus_plan is never chained with any of the above, see
+        // `RoadmapCapture`'s doc comment) — each consumes at least one turn,
+        // since the model sees each result before deciding the next call —
+        // plus a final turn, or Rig aborts with `MaxTurnsError` before the
+        // last call ever happens.
         const DIAGNOSTIC_MAX_TURNS: usize = 6;
         let text = tokio::time::timeout(
             std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),

@@ -43,6 +43,7 @@ use super::*;
                 syllabus: full_syllabus(4, 3.0, "Ciclo de Krebs"),
                 closing_question: "¿Arrancamos así?".to_string(),
             }),
+            propose_capstone_project: Some(full_capstone_args()),
             confirm_syllabus_plan: None,
         };
         let step2 = full_confirm_step("listo");
@@ -192,6 +193,7 @@ use super::*;
                 syllabus: full_syllabus(4, 3.0, "Ciclo de Krebs"),
                 closing_question: "¿Arrancamos así?".to_string(),
             }),
+            propose_capstone_project: Some(full_capstone_args()),
             confirm_syllabus_plan: None,
         };
         let step2 = full_confirm_step("listo");

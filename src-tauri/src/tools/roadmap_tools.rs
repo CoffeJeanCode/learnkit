@@ -5,25 +5,30 @@ use rig_agent::tool::{Tool, ToolContext};
 use serde::Serialize;
 
 use crate::domain::notebook::DiagnosticBattery;
-use crate::domain::roadmap::{ConfirmSyllabusPlanArgs, DiagnosticAssessmentArgs, ProposeSyllabusPlanArgs};
+use crate::domain::roadmap::{CapstoneProjectArgs, ConfirmSyllabusPlanArgs, DiagnosticAssessmentArgs, ProposeSyllabusPlanArgs};
 use crate::tools::notebook_tools::diagnostic_battery_json_schema;
 
-/// What the 4 roadmap tools write to as they're called — read back by
+/// What the 5 roadmap tools write to as they're called — read back by
 /// `RoadmapService::apply_capture` once a tool-calling turn completes.
 /// `submit_diagnostic_assessment` and `present_diagnostic_battery` are
 /// expected to chain in the SAME turn (both derivable from context already
 /// known, no new information needed from the student — UNLESS entryLevel is
 /// absolute_zero, in which case the battery is skipped and
 /// `propose_syllabus_plan` chains instead). `propose_syllabus_plan` and
-/// `confirm_syllabus_plan` are each their OWN turn, separated by the
-/// student's real answers/confirmation — never expected alongside the first
-/// two. See `agents::roadmap_agent`'s 4-gate flow (Capture -> Battery ->
-/// Propose -> Confirm).
+/// `propose_capstone_project` are ALSO expected to chain in the SAME turn as
+/// each other (see `ProposeCapstoneProjectTool`'s doc comment) — split into 2
+/// tool calls purely to keep each single completion small enough to fit
+/// DeepSeek's fixed output-token cap, not because they're independent events.
+/// `confirm_syllabus_plan` is its OWN turn, separated by the student's real
+/// confirmation — never expected alongside any of the above. See
+/// `agents::roadmap_agent`'s gate flow (Capture -> Battery -> Propose ->
+/// Confirm).
 #[derive(Debug, Default, Clone)]
 pub struct RoadmapCapture {
     pub assessment: Option<DiagnosticAssessmentArgs>,
     pub diagnostic_battery: Option<DiagnosticBattery>,
     pub propose_syllabus_plan: Option<ProposeSyllabusPlanArgs>,
+    pub propose_capstone_project: Option<CapstoneProjectArgs>,
     pub confirm_syllabus_plan: Option<ConfirmSyllabusPlanArgs>,
 }
 
@@ -229,34 +234,47 @@ fn syllabus_json_schema() -> serde_json::Value {
                     },
                     "required": ["week", "title", "deliverable", "weeklyGoal", "micromodules"]
                 }
-            },
-            "capstoneProject": {
-                "type": "object",
-                "description": "El proyecto de transferencia terminal (Backward Design): el mismo punto de llegada desde el que se diseñó todo el temario hacia atrás — distinto del deliverable del último milestone.",
-                "properties": {
-                    "title": {"type": "string", "description": "Nombre corto y directo del proyecto terminal."},
-                    "description": {
-                        "type": "string",
-                        "description": "Escenario o problema real que integra capacidades de varias semanas (nunca una lista de temas)."
-                    },
-                    "verifiableEvidence": {
-                        "type": "string",
-                        "description": "Artefacto tangible que certifica el cierre — qué se entrega o demuestra (nunca \"dominio del tema\")."
-                    }
-                },
-                "required": ["title", "description", "verifiableEvidence"]
             }
         },
-        "required": ["courseTitle", "totalWeeks", "paceHoursPerWeek", "milestones", "capstoneProject"]
+        "required": ["courseTitle", "totalWeeks", "paceHoursPerWeek", "milestones"]
+    })
+}
+
+/// The terminal capstone project's own schema — extracted out of
+/// `syllabus_json_schema()` (it used to be embedded there as the
+/// `capstoneProject` property) so `propose_capstone_project` can reuse it
+/// verbatim as its OWN top-level args schema, instead of duplicating it by
+/// hand. See `domain::roadmap::CapstoneProjectArgs` and
+/// `ProposeCapstoneProjectTool`.
+fn capstone_project_json_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "description": "El proyecto de transferencia terminal (Backward Design): el mismo punto de llegada desde el que se diseñó todo el temario hacia atrás — distinto del deliverable del último milestone.",
+        "properties": {
+            "title": {"type": "string", "description": "Nombre corto y directo del proyecto terminal."},
+            "description": {
+                "type": "string",
+                "description": "Escenario o problema real que integra capacidades de varias semanas (nunca una lista de temas)."
+            },
+            "verifiableEvidence": {
+                "type": "string",
+                "description": "Artefacto tangible que certifica el cierre — qué se entrega o demuestra (nunca \"dominio del tema\")."
+            }
+        },
+        "required": ["title", "description", "verifiableEvidence"]
     })
 }
 
 /// Gate 3a — PROPOSE. Consolidates the diagnostic (from the battery's
 /// results, or directly from the declared level if it was skipped) and
-/// proposes the syllabus — a PROPOSAL only, nothing is persisted and no
-/// first-class notebook is generated yet. Call this the instant Gate 2
+/// proposes the syllabus's milestones — a PROPOSAL only, nothing is persisted
+/// and no first-class notebook is generated yet. Call this the instant Gate 2
 /// finishes (battery fully answered, OR entryLevel was absolute_zero and
-/// the battery was skipped). End your accompanying text with the
+/// the battery was skipped), then IMMEDIATELY call `propose_capstone_project`
+/// in the SAME turn — the capstone used to be embedded in this tool's own
+/// `syllabus` payload, but was split out into its own call so the combined
+/// completion doesn't risk exceeding a provider's output-token cap (see
+/// `ProposeCapstoneProjectTool`). End your accompanying text with the
 /// `closingQuestion` — do not call `confirm_syllabus_plan` in this same
 /// turn; that only happens after the student replies.
 pub struct ProposeSyllabusPlanTool(pub SharedRoadmapCapture);
@@ -268,9 +286,10 @@ impl Tool for ProposeSyllabusPlanTool {
     type Error = Infallible;
 
     fn description(&self) -> String {
-        "Propone (sin persistir nada todavía) el diagnóstico consolidado y el temario completo, \
-         calibrados por los resultados reales del diagnóstico (batería respondida, o el nivel \
-         absolute_zero declarado si la batería se omitió). Termina con closingQuestion. NO genera \
+        "Propone (sin persistir nada todavía) el diagnóstico consolidado y las semanas del \
+         temario, calibrados por los resultados reales del diagnóstico (batería respondida, o el \
+         nivel absolute_zero declarado si la batería se omitió). Llama propose_capstone_project \
+         DE INMEDIATO después, en el MISMO turno, antes de terminar con closingQuestion. NO genera \
          el notebook de la primera clase ni guarda el curso — eso ocurre solo si el estudiante \
          confirma (confirm_syllabus_plan)."
             .to_string()
@@ -293,6 +312,46 @@ impl Tool for ProposeSyllabusPlanTool {
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
         self.0.lock().unwrap_or_else(|e| e.into_inner()).propose_syllabus_plan = Some(args);
+        Ok(SavedAck { saved: true })
+    }
+}
+
+/// Gate 3a (continued) — CAPSTONE. Carries the terminal transfer project on
+/// its own, split out of `propose_syllabus_plan`'s payload so the biggest
+/// single completion (the milestones array, now carrying structured
+/// deliverables + 3-4 interactiveBlocks per session) doesn't ALSO have to
+/// emit the capstone in the same output-token budget — DeepSeek's fixed
+/// provider-side cap (8192, see `providers::factory::output_budget`) was
+/// being exceeded by the combined payload in production
+/// (`finish_reason=Length`). Call this INSTEAD of embedding `capstoneProject`
+/// inside `syllabus` — immediately after `propose_syllabus_plan`, in the SAME
+/// turn, never before it and never in a later turn. If it doesn't arrive in
+/// the same turn, the proposal is rejected on grounding just like any other
+/// incomplete Gate 3a call (see `RoadmapService::apply_capture`).
+pub struct ProposeCapstoneProjectTool(pub SharedRoadmapCapture);
+
+impl Tool for ProposeCapstoneProjectTool {
+    const NAME: &'static str = "propose_capstone_project";
+    type Args = CapstoneProjectArgs;
+    type Output = SavedAck;
+    type Error = Infallible;
+
+    fn description(&self) -> String {
+        "Propone el proyecto de transferencia terminal (Backward Design) del temario: el mismo \
+         punto de llegada desde el que se diseñó todo el temario hacia atrás. Llámala \
+         INMEDIATAMENTE después de propose_syllabus_plan, en el MISMO turno — nunca antes, nunca \
+         en un turno separado. title, description y verifiableEvidence van en el nivel superior \
+         de los argumentos, igual que capstoneProject solía ir dentro de syllabus."
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        capstone_project_json_schema()
+    }
+
+    async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        crate::tools::emit_tool_event(Self::NAME);
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).propose_capstone_project = Some(args);
         Ok(SavedAck { saved: true })
     }
 }
@@ -338,7 +397,10 @@ impl Tool for ConfirmSyllabusPlanTool {
 mod tests {
     use super::*;
     use crate::domain::notebook::{DiagnosticBattery, DiagnosticDimension, DiagnosticQuestion};
-    use crate::domain::roadmap::{CapstoneProject, Deliverable, DeliverableArtifactType, EntryLevel, Micromodule, Milestone, RoadmapSyllabusPackage};
+    use crate::domain::roadmap::{
+        CapstoneProject, CapstoneProjectArgs, Deliverable, DeliverableArtifactType, EntryLevel, Micromodule, Milestone,
+        RoadmapSyllabusPackage,
+    };
 
     fn sample_assessment() -> DiagnosticAssessmentArgs {
         DiagnosticAssessmentArgs {
@@ -439,5 +501,53 @@ mod tests {
         let ack = tool.call(&mut ToolContext::new(), battery).await.expect("infallible");
         assert!(ack.saved);
         assert_eq!(capture.lock().unwrap().diagnostic_battery.as_ref().unwrap().questions.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn propose_capstone_project_writes_into_the_shared_capture() {
+        let capture: SharedRoadmapCapture = Arc::new(Mutex::new(RoadmapCapture::default()));
+        let tool = ProposeCapstoneProjectTool(capture.clone());
+        let args = CapstoneProjectArgs {
+            capstone_project: CapstoneProject {
+                title: "Proyecto terminal".to_string(),
+                description: "Integrar lo aprendido en un escenario real de transferencia".to_string(),
+                verifiable_evidence: "Repositorio con la app corriendo + demo grabada".to_string(),
+            },
+        };
+        let ack = tool.call(&mut ToolContext::new(), args).await.expect("infallible");
+        assert!(ack.saved);
+        assert_eq!(capture.lock().unwrap().propose_capstone_project.as_ref().unwrap().capstone_project.title, "Proyecto terminal");
+    }
+
+    /// The exact bug this whole change fixes: the combined syllabus +
+    /// capstone JSON payload could exceed DeepSeek's fixed 8192-output-token
+    /// cap (`finish_reason=Length`, observed in production). Splitting
+    /// `capstoneProject` into its own tool call shrinks `propose_syllabus_plan`'s
+    /// own schema — proving it here means the biggest single completion
+    /// (the milestones array) no longer also carries the capstone.
+    #[test]
+    fn propose_syllabus_plan_schema_no_longer_embeds_capstone_project() {
+        let schema = syllabus_json_schema();
+        assert!(
+            schema.get("properties").and_then(|p| p.get("capstoneProject")).is_none(),
+            "syllabus_json_schema must no longer declare capstoneProject as a property: {schema}"
+        );
+        let required = schema.get("required").and_then(|r| r.as_array()).expect("required array");
+        assert!(
+            !required.iter().any(|v| v == "capstoneProject"),
+            "syllabus_json_schema's required list must no longer include capstoneProject: {required:?}"
+        );
+    }
+
+    /// `propose_capstone_project`'s own schema is exactly the extracted
+    /// capstone object — same 3 required fields as before, just its own
+    /// top-level tool now instead of a nested `syllabus` property.
+    #[test]
+    fn capstone_project_schema_requires_its_3_fields() {
+        let schema = capstone_project_json_schema();
+        let required = schema.get("required").and_then(|r| r.as_array()).expect("required array");
+        for field in ["title", "description", "verifiableEvidence"] {
+            assert!(required.iter().any(|v| v == field), "capstone_project_json_schema must require {field}: {required:?}");
+        }
     }
 }
