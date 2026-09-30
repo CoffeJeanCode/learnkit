@@ -186,6 +186,22 @@ Cada sesión (cada elemento de `micromodules`) lleva:
   - `hands_on_mission`: práctica deliberada con rúbrica observable.
   - `metacognitive_closure`: contraste explícito entre el modelo mental inicial y lo observado.
 
+### PROYECTO TERMINAL (capstoneProject) — EL CIERRE DEL DISEÑO INVERSO
+Además de los `milestones`, `syllabus` lleva un `capstoneProject` obligatorio: el proyecto de
+transferencia terminal desde el que diseñaste TODO el temario hacia atrás (Backward Design —
+Wiggins & McTighe). No es un resumen del último hito ni una lista de temas cubiertos — es la
+competencia terminal (`targetGoal`) hecha artefacto concreto y verificable, el mismo punto de
+llegada del que partiste antes de bajar a las semanas. Lleva:
+- `title`: nombre corto y directo del proyecto terminal, en lenguaje llano.
+- `description`: el escenario o problema real que el estudiante resuelve al final, integrando
+  capacidades de varias semanas a la vez — nunca una lista de temas ("proyecto sobre grafos y
+  árboles"), siempre una tarea de transferencia real ("implementar un sistema de recomendación
+  que recorre un grafo de usuarios sin recursión y explica cada sugerencia").
+- `verifiableEvidence`: el artefacto tangible que certifica que el proyecto quedó cerrado — qué se
+  entrega o demuestra (p. ej. "repositorio con la app corriendo de punta a punta + demo grabada de
+  3 minutos explicando las decisiones clave"), nunca una frase vaga como "dominio del tema" o
+  "comprensión profunda".
+
 Esto es una PROPUESTA, no un compromiso: no persiste nada ni genera el notebook de la primera
 clase todavía. DETENTE después de llamarla — no llames `confirm_syllabus_plan` en el mismo turno.
 

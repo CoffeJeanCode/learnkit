@@ -145,6 +145,32 @@ pub struct Milestone {
     pub micromodules: Vec<Micromodule>,
 }
 
+/// The terminal transfer project the whole roadmap builds toward, per
+/// Backward Design (Wiggins & McTighe) — distinct from the last week's
+/// `Milestone`, which is still just that week's rollup. This is the single
+/// authentic artifact that certifies the course's `targetGoal` was actually
+/// reached, not merely covered week by week. Required on every NEW proposal
+/// (see `syllabus_violations`'s capstone check). `Default` exists ONLY so
+/// `RoadmapSyllabusPackage::capstone_project` can carry `#[serde(default)]`
+/// for sessions sealed before this field existed — mirrors the nullable
+/// back-compat pattern used by `Milestone::weekly_goal`/`Micromodule::focus`/
+/// `Micromodule::objective`, just applied to a whole nested struct instead of
+/// an `Option<String>`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapstoneProject {
+    /// Short, student-facing name for the terminal project.
+    pub title: String,
+    /// The real transfer task the student performs at the end — a concrete
+    /// scenario/problem that integrates the course's capabilities, never a
+    /// bare topic list ("proyecto final sobre grafos").
+    pub description: String,
+    /// The tangible artifact(s) that certify closure — what gets handed in
+    /// or demonstrated (e.g. "repositorio con la app funcionando + demo en
+    /// video de 3 min"), never a vague "dominio del tema".
+    pub verifiable_evidence: String,
+}
+
 /// The syllabus exactly as the model must emit it — no ids or timestamps,
 /// those are backend bookkeeping the model should never be asked to invent.
 /// See [`SealedRoadmap`] for the persisted superset.
@@ -155,6 +181,16 @@ pub struct RoadmapSyllabusPackage {
     pub total_weeks: u16,
     pub pace_hours_per_week: f32,
     pub milestones: Vec<Milestone>,
+    /// The terminal competency/transfer project — required so the roadmap
+    /// has an explicit, verifiable closing deliverable distinct from the
+    /// last milestone (see `CapstoneProject`). Every NEW proposal must supply
+    /// it (enforced by the tool's JSON schema `required` list and by
+    /// `syllabus_violations`'s capstone check); `#[serde(default)]` only
+    /// keeps sessions sealed before this field existed deserializing, same
+    /// as `Milestone::weekly_goal`/`Micromodule::focus`/`Micromodule::
+    /// objective` do for their own back-compat gap.
+    #[serde(default)]
+    pub capstone_project: CapstoneProject,
 }
 
 /// Args for the `submit_diagnostic_assessment` tool call (see
@@ -506,7 +542,12 @@ mod tests {
                         "deliverable": "Artefacto verificable",
                         "interactiveBlocks": ["socratic_prediction", "hands_on_mission", "metacognitive_closure"]
                     }]
-                }]
+                }],
+                "capstoneProject": {
+                    "title": "Proyecto terminal",
+                    "description": "Integrar lo aprendido en un escenario real de transferencia",
+                    "verifiableEvidence": "Repositorio con la app corriendo + demo grabada"
+                }
             },
             "closingQuestion": "¿Te parece adecuada esta distribución?"
         });

@@ -67,7 +67,18 @@ pub(super) fn synth_roadmap_package(profile: &LearnerProfileCard) -> RoadmapSyll
             micromodules: synth_micromodules(profile.weekly_commitment_hours),
         })
         .collect();
-    RoadmapSyllabusPackage { course_title: profile.topic.clone(), total_weeks, pace_hours_per_week: profile.weekly_commitment_hours, milestones }
+    let capstone_project = CapstoneProject {
+        title: format!("Proyecto terminal: {}", profile.topic),
+        description: format!("Aplicar lo aprendido en un escenario real que demuestre {}", profile.target_goal),
+        verifiable_evidence: "Artefacto final entregado y revisado contra la meta declarada".to_string(),
+    };
+    RoadmapSyllabusPackage {
+        course_title: profile.topic.clone(),
+        total_weeks,
+        pace_hours_per_week: profile.weekly_commitment_hours,
+        milestones,
+        capstone_project,
+    }
 }
 
 /// Fallback battery for the force-close path — generated alongside the

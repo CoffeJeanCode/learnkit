@@ -255,6 +255,43 @@ pub(super) fn syllabus_violations(profile: &LearnerProfileCard, syllabus: &Roadm
     if weeks != expected {
         v.push(format!("los números de semana de milestones ({weeks:?}) no son 1..totalWeeks consecutivos"));
     }
+    v.extend(capstone_project_violations(&syllabus.capstone_project));
+    v
+}
+
+/// The terminal transfer project's own content-level grounding — same
+/// "explicit, verifiable artifact" bar as a `Micromodule.deliverable`, but
+/// applied to the whole-roadmap capstone instead of a single session (see
+/// `domain::roadmap::CapstoneProject`). Distinct from the last milestone's
+/// `deliverable`: this must exist and be non-vague on its own, never
+/// derived from it.
+pub(super) fn capstone_project_violations(capstone: &CapstoneProject) -> Vec<String> {
+    let mut v = Vec::new();
+    if capstone.title.trim().is_empty() {
+        v.push("capstoneProject.title está vacío".to_string());
+    } else {
+        check_student_facing_text(&mut v, "capstoneProject.title", &capstone.title);
+    }
+    if capstone.description.trim().is_empty() {
+        v.push("capstoneProject.description está vacío".to_string());
+    } else if is_vague_deliverable(&capstone.description) {
+        v.push(format!(
+            "capstoneProject.description (\"{}\") es vago — debe ser un proyecto de transferencia real, no una lista de temas",
+            capstone.description
+        ));
+    } else {
+        check_student_facing_text(&mut v, "capstoneProject.description", &capstone.description);
+    }
+    if capstone.verifiable_evidence.trim().is_empty() {
+        v.push("capstoneProject.verifiableEvidence está vacío".to_string());
+    } else if is_vague_deliverable(&capstone.verifiable_evidence) {
+        v.push(format!(
+            "capstoneProject.verifiableEvidence (\"{}\") es vago — debe ser un artefacto tangible que certifique el cierre",
+            capstone.verifiable_evidence
+        ));
+    } else {
+        check_student_facing_text(&mut v, "capstoneProject.verifiableEvidence", &capstone.verifiable_evidence);
+    }
     v
 }
 

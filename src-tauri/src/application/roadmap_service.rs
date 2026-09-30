@@ -4,8 +4,9 @@ use uuid::Uuid;
 
 use crate::domain::notebook::{DiagnosticBattery, DiagnosticBatteryState, DiagnosticDimension, DiagnosticQuestion};
 use crate::domain::roadmap::{
-    ChatTurn, DiagnosticAssessmentArgs, DiagnosticSummaryCard, EntryLevel, LearnerProfileCard, Micromodule, Milestone,
-    ProposedPlan, RoadmapPhase, RoadmapSession, RoadmapSessionSummary, RoadmapSyllabusPackage, SealedRoadmap, SessionStatus,
+    CapstoneProject, ChatTurn, DiagnosticAssessmentArgs, DiagnosticSummaryCard, EntryLevel, LearnerProfileCard, Micromodule,
+    Milestone, ProposedPlan, RoadmapPhase, RoadmapSession, RoadmapSessionSummary, RoadmapSyllabusPackage, SealedRoadmap,
+    SessionStatus,
 };
 use crate::error::{AppError, AppResult};
 use crate::notebook_store::NotebookStore;

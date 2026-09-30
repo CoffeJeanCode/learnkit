@@ -7,7 +7,7 @@
     use super::*;
     use crate::agents::AgentRegistry;
     use crate::domain::notebook::{BlockStatus, DynamicBlockType, GateSubmission, GeneratedSectionBlock, PredictionComparison};
-    use crate::domain::roadmap::{EntryLevel, LearnerProfileCard, Micromodule, Milestone, RoadmapSyllabusPackage, SealedRoadmap, SessionStatus};
+    use crate::domain::roadmap::{CapstoneProject, EntryLevel, LearnerProfileCard, Micromodule, Milestone, RoadmapSyllabusPackage, SealedRoadmap, SessionStatus};
     use crate::orchestration::PromptRunner;
     use crate::providers::factory::PromptOutput;
     use crate::tools::{BlockAuditCapture, BlockAuditResult, ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult, GateScaffold, NotebookBlockCapture, ScaffoldType};
@@ -61,6 +61,11 @@
                         },
                     ],
                 }],
+                capstone_project: CapstoneProject {
+                    title: "Proyecto terminal".to_string(),
+                    description: "Integrar lo aprendido en un escenario real de transferencia".to_string(),
+                    verifiable_evidence: "Repositorio con la app corriendo + demo grabada".to_string(),
+                },
             },
             diagnostic_battery: None,
         });

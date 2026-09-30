@@ -217,9 +217,25 @@ fn syllabus_json_schema() -> serde_json::Value {
                     },
                     "required": ["week", "title", "deliverable", "weeklyGoal", "micromodules"]
                 }
+            },
+            "capstoneProject": {
+                "type": "object",
+                "description": "El proyecto de transferencia terminal (Backward Design): el mismo punto de llegada desde el que se diseñó todo el temario hacia atrás — distinto del deliverable del último milestone.",
+                "properties": {
+                    "title": {"type": "string", "description": "Nombre corto y directo del proyecto terminal."},
+                    "description": {
+                        "type": "string",
+                        "description": "Escenario o problema real que integra capacidades de varias semanas (nunca una lista de temas)."
+                    },
+                    "verifiableEvidence": {
+                        "type": "string",
+                        "description": "Artefacto tangible que certifica el cierre — qué se entrega o demuestra (nunca \"dominio del tema\")."
+                    }
+                },
+                "required": ["title", "description", "verifiableEvidence"]
             }
         },
-        "required": ["courseTitle", "totalWeeks", "paceHoursPerWeek", "milestones"]
+        "required": ["courseTitle", "totalWeeks", "paceHoursPerWeek", "milestones", "capstoneProject"]
     })
 }
 
@@ -310,7 +326,7 @@ impl Tool for ConfirmSyllabusPlanTool {
 mod tests {
     use super::*;
     use crate::domain::notebook::{DiagnosticBattery, DiagnosticDimension, DiagnosticQuestion};
-    use crate::domain::roadmap::{EntryLevel, Micromodule, Milestone, RoadmapSyllabusPackage};
+    use crate::domain::roadmap::{CapstoneProject, EntryLevel, Micromodule, Milestone, RoadmapSyllabusPackage};
 
     fn sample_assessment() -> DiagnosticAssessmentArgs {
         DiagnosticAssessmentArgs {
@@ -367,6 +383,11 @@ mod tests {
                         },
                     ],
                 }],
+                capstone_project: CapstoneProject {
+                    title: "Proyecto terminal".to_string(),
+                    description: "Integrar lo aprendido en un escenario real de transferencia".to_string(),
+                    verifiable_evidence: "Repositorio con la app corriendo + demo grabada".to_string(),
+                },
             },
             closing_question: "¿Te parece adecuada esta distribución?".to_string(),
         };

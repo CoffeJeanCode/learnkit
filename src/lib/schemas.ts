@@ -74,12 +74,23 @@ export const MilestoneSchema = z.object({
   micromodules: z.array(MicromoduleSchema),
 });
 
+// The terminal transfer project the whole roadmap builds toward, per
+// Backward Design (Wiggins & McTighe) — distinct from the last week's
+// `Milestone`, which is still just that week's rollup (see `CapstoneProject`
+// in `src-tauri/src/domain/roadmap.rs`).
+export const CapstoneProjectSchema = z.object({
+  title: z.string(),
+  description: z.string(),
+  verifiableEvidence: z.string(),
+});
+
 // Exactly what the model emits at Gate 3 — no ids or timestamps.
 export const RoadmapSyllabusPackageSchema = z.object({
   courseTitle: z.string(),
   totalWeeks: z.number(),
   paceHoursPerWeek: z.number(),
   milestones: z.array(MilestoneSchema),
+  capstoneProject: CapstoneProjectSchema,
 });
 
 // --- Diagnostic battery ----------------------------------------------------
@@ -239,6 +250,7 @@ export type DiagnosticSummaryCard = z.infer<typeof DiagnosticSummaryCardSchema>;
 export type RoadmapSyllabusPackage = z.infer<typeof RoadmapSyllabusPackageSchema>;
 export type Milestone = z.infer<typeof MilestoneSchema>;
 export type Micromodule = z.infer<typeof MicromoduleSchema>;
+export type CapstoneProject = z.infer<typeof CapstoneProjectSchema>;
 export type SealedRoadmap = z.infer<typeof SealedRoadmapSchema>;
 export type ProposedPlan = z.infer<typeof ProposedPlanSchema>;
 export type ChatTurn = z.infer<typeof ChatTurnSchema>;
