@@ -26,6 +26,14 @@ pub const NOTEBOOK_AGENT_ID: &str = "notebook_generator";
 /// how many blocks it takes to get there. A generous safety ceiling
 /// (`grounding::MAX_TOTAL_BLOCKS`) forces an honest closure if that never
 /// happens, so a class can never run away forever.
+/// The 5 epistemological profiles and their suggested block chains described
+/// in prose below (search "COMPOSICIÓN DINÁMICA") are mirrored as typed,
+/// unit-tested data in `domain::lesson_composition` (`DisciplineProfile` +
+/// `suggested_sequence`) — that module is the canonical, inspectable source
+/// of truth for what this prose says; keep both in sync if either changes.
+/// The prompt text itself stays natural language on purpose: the model reads
+/// prose, not a table, and still needs the surrounding rationale (why each
+/// chain fits its profile) that a bare sequence can't carry.
 const SYSTEM_PROMPT: &str = r##"Recibes el contexto de UNA clase (curso con targetGoal, semana del
 temario — milestone.weekNumber — y la clase específica) y el progreso YA HECHO en su notebook
 (`blocksSoFar`: los tipos de bloque ya generados, en orden; `lastGateOutcome`, si el bloque

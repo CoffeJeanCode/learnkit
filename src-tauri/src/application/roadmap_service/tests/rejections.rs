@@ -106,11 +106,19 @@ use super::*;
                     label: "Sesión única".to_string(),
                     hours: 14.0,
                     focus: Some("Todo el tema de una vez".to_string()),
-                    deliverable: "Artefacto verificable".to_string(),
+                    deliverable: Deliverable {
+                        artifact_type: DeliverableArtifactType::TestsPassing,
+                        description: "Artefacto verificable".to_string(),
+                    },
                     objective: Some("Explicar el flujo completo del ciclo".to_string()),
                     interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
                 }],
             }],
+            capstone_project: CapstoneProject {
+                title: "Proyecto terminal".to_string(),
+                description: "Integrar lo aprendido en un escenario real de transferencia".to_string(),
+                verifiable_evidence: "Repositorio con la app corriendo + demo grabada".to_string(),
+            },
         };
         let step2 = ScriptedStep {
             text: "..".to_string(),
@@ -160,7 +168,10 @@ use super::*;
             label: label.to_string(),
             hours,
             focus: Some("Conceptos centrales de la sesión".to_string()),
-            deliverable: "Artefacto verificable".to_string(),
+            deliverable: Deliverable {
+                artifact_type: DeliverableArtifactType::TestsPassing,
+                description: "Artefacto verificable".to_string(),
+            },
             objective: objective.map(str::to_string),
             interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
         };
@@ -182,6 +193,11 @@ use super::*;
                     module("Sesión 2", 1.5, Some("comprender la teoría")), // vague = still rejected
                 ],
             }],
+            capstone_project: CapstoneProject {
+                title: "Proyecto terminal".to_string(),
+                description: "Integrar lo aprendido en un escenario real de transferencia".to_string(),
+                verifiable_evidence: "Repositorio con la app corriendo + demo grabada".to_string(),
+            },
         };
         let step2 = ScriptedStep {
             text: "..".to_string(),
@@ -208,6 +224,115 @@ use super::*;
         assert!(
             result.session.last_rejection_reasons.iter().any(|r| r.contains("objective")),
             "rejection must name the missing objective: {:?}",
+            result.session.last_rejection_reasons
+        );
+        let _ = std::fs::remove_dir_all(&harness.dir);
+    }
+
+    /// The typed `{artifactType, description}` deliverable (gaps #4/#5 of
+    /// the pedagogical audit) closes the "vague but not on the denylist"
+    /// hole a pure phrase-denylist left open: `artifactType: "other"` is the
+    /// one escape hatch that isn't already self-describing, so it alone is
+    /// held to a stricter minimum description length. A proposal that uses
+    /// "other" with a description too short to actually describe anything
+    /// is rejected, even though the text itself isn't on the vague-phrase
+    /// denylist.
+    #[tokio::test]
+    async fn a_micromodule_deliverable_with_other_type_and_a_too_short_description_is_rejected() {
+        let battery = full_battery();
+        let step1 = ScriptedStep {
+            text: "..".to_string(),
+            assessment: Some(full_assessment("Tema", 1, 3.0, EntryLevel::TheoreticalFoundations)),
+            diagnostic_battery: Some(battery.clone()),
+            ..Default::default()
+        };
+        // Well-formed syllabus EXCEPT the first micromodule's deliverable:
+        // not a denylisted vague phrase, but `artifactType: other` with a
+        // description too short to actually describe an artifact.
+        let mut short_other_syllabus = full_syllabus(1, 3.0, "Tema");
+        short_other_syllabus.milestones[0].micromodules[0].deliverable = Deliverable {
+            artifact_type: DeliverableArtifactType::Other,
+            description: "Algo distinto".to_string(),
+        };
+        let step2 = ScriptedStep {
+            text: "..".to_string(),
+            propose_syllabus_plan: Some(ProposeSyllabusPlanArgs {
+                core_focus: "Lo esencial".to_string(),
+                identified_needs: vec!["Entender el flujo".to_string()],
+                learning_strategy: "Guiado".to_string(),
+                syllabus: short_other_syllabus,
+                closing_question: "¿Todo bien?".to_string(),
+            }),
+            ..Default::default()
+        };
+        // Queued twice so the in-turn grounding retry can't self-heal it —
+        // the point is that the rejection names the too-short "other"
+        // deliverable.
+        let harness = service_with_runner(Arc::new(ScriptedRunner::new(vec![step1, step2.clone(), step2])));
+        let r0 = harness.service.start_session(None).await.expect("start ok");
+        let sid = r0.session.session_id.clone();
+        harness.service.send_message(None, &sid, "Hazlo").await.expect("turn ok");
+
+        let result = answer_all_questions(&harness, &sid, &battery).await;
+
+        assert_eq!(result.session.status, SessionStatus::Active, "a too-short \"other\" deliverable must be rejected");
+        assert!(result.session.proposed_plan.is_none(), "no proposal stored while grounding fails");
+        assert!(
+            result.session.last_rejection_reasons.iter().any(|r| r.contains("artifactType \"other\"")),
+            "rejection must name the too-short other deliverable: {:?}",
+            result.session.last_rejection_reasons
+        );
+        let _ = std::fs::remove_dir_all(&harness.dir);
+    }
+
+    /// The terminal capstone project (gap #2 of the pedagogical audit) must
+    /// carry an explicit, non-vague `description` and `verifiableEvidence` —
+    /// distinct from the last milestone's own `deliverable`. A proposal that
+    /// leaves either blank is rejected by the grounding pass, same as any
+    /// other vague/empty content check.
+    #[tokio::test]
+    async fn a_capstone_project_missing_verifiable_evidence_is_rejected() {
+        let battery = full_battery();
+        let step1 = ScriptedStep {
+            text: "..".to_string(),
+            assessment: Some(full_assessment("Tema", 1, 3.0, EntryLevel::TheoreticalFoundations)),
+            diagnostic_battery: Some(battery.clone()),
+            ..Default::default()
+        };
+        // Well-formed syllabus EXCEPT the capstone's verifiableEvidence, so
+        // the only violation the grounding pass can report is the capstone
+        // itself.
+        let mut capstoneless_syllabus = full_syllabus(1, 3.0, "Tema");
+        capstoneless_syllabus.capstone_project = CapstoneProject {
+            title: "Proyecto terminal".to_string(),
+            description: "Integrar lo aprendido en un escenario real de transferencia".to_string(),
+            verifiable_evidence: String::new(),
+        };
+        let step2 = ScriptedStep {
+            text: "..".to_string(),
+            propose_syllabus_plan: Some(ProposeSyllabusPlanArgs {
+                core_focus: "Lo esencial".to_string(),
+                identified_needs: vec!["Entender el flujo".to_string()],
+                learning_strategy: "Guiado".to_string(),
+                syllabus: capstoneless_syllabus,
+                closing_question: "¿Todo bien?".to_string(),
+            }),
+            ..Default::default()
+        };
+        // Queued twice so the in-turn grounding retry can't self-heal it —
+        // the point is that the rejection names the missing capstone evidence.
+        let harness = service_with_runner(Arc::new(ScriptedRunner::new(vec![step1, step2.clone(), step2])));
+        let r0 = harness.service.start_session(None).await.expect("start ok");
+        let sid = r0.session.session_id.clone();
+        harness.service.send_message(None, &sid, "Hazlo").await.expect("turn ok");
+
+        let result = answer_all_questions(&harness, &sid, &battery).await;
+
+        assert_eq!(result.session.status, SessionStatus::Active, "a proposal missing capstone evidence must be rejected");
+        assert!(result.session.proposed_plan.is_none(), "no proposal stored while grounding fails");
+        assert!(
+            result.session.last_rejection_reasons.iter().any(|r| r.contains("capstoneProject.verifiableEvidence")),
+            "rejection must name the missing capstone evidence: {:?}",
             result.session.last_rejection_reasons
         );
         let _ = std::fs::remove_dir_all(&harness.dir);

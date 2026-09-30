@@ -86,7 +86,7 @@ pub(super) fn render_next_block_input(
         "milestone": {
             "weekNumber": ctx.milestone.week_number,
             "title": ctx.milestone.title,
-            "deliverableGoal": ctx.milestone.deliverable_goal,
+            "deliverable": ctx.milestone.deliverable,
         },
         "class": {
             "title": ctx.class.title,

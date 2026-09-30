@@ -73,6 +73,84 @@ pub struct DiagnosticSummaryCard {
     pub learning_strategy: String,
 }
 
+/// Closed taxonomy for WHAT KIND of artifact a `Micromodule::deliverable`
+/// actually is. Replaces a denylist-only check (`grounding::
+/// VAGUE_DELIVERABLE_PHRASES`) that could only reject phrasing it already
+/// knew about, letting anything else equally vague through unnoticed.
+/// Naming the shape up front makes "just a vague sentence" structurally
+/// impossible for the 5 self-describing variants; `Other` is the deliberate
+/// escape hatch for a real deliverable that genuinely doesn't fit any named
+/// bucket, so it alone is held to a stricter minimum `description` length
+/// (see `grounding::deliverable_violations`) — the one place a vague
+/// one-liner could otherwise hide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliverableArtifactType {
+    TestsPassing,
+    FormalDiagram,
+    FunctionalCli,
+    DiagnosticMatrix,
+    WorkingDemo,
+    Other,
+}
+
+/// A session's concrete, checkable artifact — see `Micromodule::deliverable`.
+/// Distinct from `Milestone::deliverable` (still a plain-text week-rollup
+/// sentence, deliberately NOT restructured — see that field's own doc
+/// comment) and from `CapstoneProject` (the terminal project, already its
+/// own struct).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Deliverable {
+    pub artifact_type: DeliverableArtifactType,
+    /// The concrete description of THIS artifact (e.g. "circuito simulado de
+    /// 2 qubits con histograma analizado") — never a vague verb phrase like
+    /// "comprender la teoría" (see `grounding::deliverable_violations`).
+    /// Required non-empty for every `artifactType`; when `artifactType` is
+    /// `other` (the only bucket that isn't already self-describing) it must
+    /// also clear a higher minimum length, so "otro" can't be the whole
+    /// answer.
+    pub description: String,
+}
+
+impl<'de> Deserialize<'de> for Deliverable {
+    /// Manual impl (rather than `#[derive]`) so a `RoadmapSession` persisted
+    /// before this field became a struct — when `Micromodule::deliverable`
+    /// was still a plain `String` — keeps deserializing instead of breaking
+    /// resumption of in-flight roadmap creation. A bare legacy string maps to
+    /// `artifactType: Other` (the closed taxonomy's own escape hatch) with
+    /// that string as `description`.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Legacy(String),
+            #[serde(rename_all = "camelCase")]
+            Structured {
+                artifact_type: DeliverableArtifactType,
+                description: String,
+            },
+        }
+
+        match Repr::deserialize(deserializer)? {
+            Repr::Legacy(description) => Ok(Deliverable {
+                artifact_type: DeliverableArtifactType::Other,
+                description,
+            }),
+            Repr::Structured {
+                artifact_type,
+                description,
+            } => Ok(Deliverable {
+                artifact_type,
+                description,
+            }),
+        }
+    }
+}
+
 /// One of the week's exactly-2 study sessions — the anti-monolith unit.
 /// Never more than 4 hours (see `syllabus_violations`'s `hours` check): a
 /// week's `paceHoursPerWeek` is always split into EXACTLY two homogeneous
@@ -89,11 +167,12 @@ pub struct Micromodule {
     /// check).
     pub label: String,
     pub hours: f32,
-    /// A concrete, checkable artifact THIS session produces (e.g. "circuito
-    /// simulado de 2 qubits con histograma analizado") — never a vague verb
-    /// phrase like "comprender la teoría" (see `syllabus_violations`'s
-    /// banned-phrase check).
-    pub deliverable: String,
+    /// A concrete, checkable artifact THIS session produces — a typed
+    /// `{artifactType, description}` pair (see `Deliverable`), not free text:
+    /// a denylist alone let anything not already on the list through
+    /// unchecked. Never a vague verb phrase like "comprender la teoría" (see
+    /// `grounding::deliverable_violations`).
+    pub deliverable: Deliverable,
     /// The central concepts and cause-effect relationships this session
     /// explores, landed in the real friction it resolves (e.g. "por qué
     /// `iter_mut` evita clonar la estructura completa" instead of an
@@ -145,6 +224,32 @@ pub struct Milestone {
     pub micromodules: Vec<Micromodule>,
 }
 
+/// The terminal transfer project the whole roadmap builds toward, per
+/// Backward Design (Wiggins & McTighe) — distinct from the last week's
+/// `Milestone`, which is still just that week's rollup. This is the single
+/// authentic artifact that certifies the course's `targetGoal` was actually
+/// reached, not merely covered week by week. Required on every NEW proposal
+/// (see `syllabus_violations`'s capstone check). `Default` exists ONLY so
+/// `RoadmapSyllabusPackage::capstone_project` can carry `#[serde(default)]`
+/// for sessions sealed before this field existed — mirrors the nullable
+/// back-compat pattern used by `Milestone::weekly_goal`/`Micromodule::focus`/
+/// `Micromodule::objective`, just applied to a whole nested struct instead of
+/// an `Option<String>`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapstoneProject {
+    /// Short, student-facing name for the terminal project.
+    pub title: String,
+    /// The real transfer task the student performs at the end — a concrete
+    /// scenario/problem that integrates the course's capabilities, never a
+    /// bare topic list ("proyecto final sobre grafos").
+    pub description: String,
+    /// The tangible artifact(s) that certify closure — what gets handed in
+    /// or demonstrated (e.g. "repositorio con la app funcionando + demo en
+    /// video de 3 min"), never a vague "dominio del tema".
+    pub verifiable_evidence: String,
+}
+
 /// The syllabus exactly as the model must emit it — no ids or timestamps,
 /// those are backend bookkeeping the model should never be asked to invent.
 /// See [`SealedRoadmap`] for the persisted superset.
@@ -155,6 +260,16 @@ pub struct RoadmapSyllabusPackage {
     pub total_weeks: u16,
     pub pace_hours_per_week: f32,
     pub milestones: Vec<Milestone>,
+    /// The terminal competency/transfer project — required so the roadmap
+    /// has an explicit, verifiable closing deliverable distinct from the
+    /// last milestone (see `CapstoneProject`). Every NEW proposal must supply
+    /// it (enforced by the tool's JSON schema `required` list and by
+    /// `syllabus_violations`'s capstone check); `#[serde(default)]` only
+    /// keeps sessions sealed before this field existed deserializing, same
+    /// as `Milestone::weekly_goal`/`Micromodule::focus`/`Micromodule::
+    /// objective` do for their own back-compat gap.
+    #[serde(default)]
+    pub capstone_project: CapstoneProject,
 }
 
 /// Args for the `submit_diagnostic_assessment` tool call (see
@@ -444,6 +559,22 @@ mod tests {
     }
 
     #[test]
+    fn deliverable_deserializes_a_pre_upgrade_plain_string_as_other() {
+        // Sessions sealed before `Micromodule::deliverable` became a struct
+        // persisted it as a bare string — must keep loading.
+        let legacy: Deliverable = serde_json::from_value(serde_json::json!("CLI con 3 comandos funcionando")).unwrap();
+        assert_eq!(legacy.artifact_type, DeliverableArtifactType::Other);
+        assert_eq!(legacy.description, "CLI con 3 comandos funcionando");
+
+        let current: Deliverable = serde_json::from_value(serde_json::json!({
+            "artifactType": "functional_cli",
+            "description": "CLI con 3 comandos funcionando",
+        }))
+        .unwrap();
+        assert_eq!(current.artifact_type, DeliverableArtifactType::FunctionalCli);
+    }
+
+    #[test]
     fn gate_sequence_ends_at_roadmap() {
         assert_eq!(RoadmapPhase::Onboarding.next(), Some(RoadmapPhase::Diagnostic));
         assert_eq!(RoadmapPhase::Diagnostic.next(), Some(RoadmapPhase::Roadmap));
@@ -503,10 +634,18 @@ mod tests {
                     "micromodules": [{
                         "label": "Módulo 1",
                         "hours": 3.0,
-                        "deliverable": "Artefacto verificable",
+                        "deliverable": {
+                            "artifactType": "functional_cli",
+                            "description": "Artefacto verificable"
+                        },
                         "interactiveBlocks": ["socratic_prediction", "hands_on_mission", "metacognitive_closure"]
                     }]
-                }]
+                }],
+                "capstoneProject": {
+                    "title": "Proyecto terminal",
+                    "description": "Integrar lo aprendido en un escenario real de transferencia",
+                    "verifiableEvidence": "Repositorio con la app corriendo + demo grabada"
+                }
             },
             "closingQuestion": "¿Te parece adecuada esta distribución?"
         });

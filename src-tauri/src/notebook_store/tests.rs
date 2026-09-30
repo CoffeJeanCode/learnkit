@@ -411,13 +411,16 @@
     /// stay NULL rather than borrowing a sibling's.
     #[test]
     fn import_stamps_each_class_with_its_micromodule_objective() {
-        use crate::domain::roadmap::{Milestone, Micromodule, RoadmapSyllabusPackage};
+        use crate::domain::roadmap::{CapstoneProject, Deliverable, DeliverableArtifactType, Milestone, Micromodule, RoadmapSyllabusPackage};
         let store = NotebookStore::open_in_memory().expect("open");
         let module = |label: &str, objective: Option<&str>| Micromodule {
             label: label.to_string(),
             hours: 3.0,
             focus: Some("Conceptos centrales de la sesión".to_string()),
-            deliverable: "Artefacto verificable".to_string(),
+            deliverable: Deliverable {
+                artifact_type: DeliverableArtifactType::TestsPassing,
+                description: "Artefacto verificable".to_string(),
+            },
             objective: objective.map(str::to_string),
             interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
         };
@@ -432,6 +435,11 @@
                 weekly_goal: Some("Avanzar en el tema".to_string()),
                 micromodules: vec![module("Sesión 1", Some("Explicar el flujo con un ejemplo")), module("Sesión 2", None)],
             }],
+            capstone_project: CapstoneProject {
+                title: "Proyecto terminal".to_string(),
+                description: "Integrar lo aprendido en un escenario real de transferencia".to_string(),
+                verifiable_evidence: "Repositorio con la app corriendo + demo grabada".to_string(),
+            },
         };
 
         let (course_id, _, _) = import_syllabus_into_store(&store, &syllabus, "Meta").expect("import");

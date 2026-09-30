@@ -559,13 +559,14 @@ pub struct SyllabusMilestone {
     pub course_id: String,
     pub week_number: u16,
     pub title: String,
-    pub deliverable_goal: String,
+    pub deliverable: String,
 }
 
 /// One class within a milestone week — now one PER MICROMODULE (see
 /// `domain::roadmap::Micromodule`), not one per week: `class_number` is the
 /// micromodule's position within its week, `hours` is that micromodule's own
-/// bounded (≤5h) allocation, and `title` is composed as "Semana {week}:
+/// bounded (≤4h — see `application::roadmap_service::grounding::
+/// MAX_SESSION_HOURS`) allocation, and `title` is composed as "Semana {week}:
 /// {micromodule.label}" at import time (see `import_syllabus_into_store`) —
 /// never a separate id the model has to invent or echo back.
 #[derive(Debug, Clone, Serialize, Deserialize)]

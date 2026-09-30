@@ -52,6 +52,44 @@ use super::*;
         let _ = std::fs::remove_dir_all(&harness.dir);
     }
 
+    /// The durability gap this fixed: Gate 1 (assessment) and Gate 3a
+    /// (propose) chain inside the SAME `advance()` call for the
+    /// `absolute_zero` skip path (see the test above) — with only ONE save
+    /// at the very end, AFTER both gates already ran. If the chained propose
+    /// call died hard, the already-computed profile card had never touched
+    /// disk and was lost with it. Proves the intermediate save added right
+    /// before that chained call makes the profile card durable independently
+    /// of whether the propose call ever lands.
+    #[tokio::test]
+    async fn absolute_zero_checkpoints_the_profile_card_before_the_chained_propose_call_dies() {
+        let step1 = ScriptedStep {
+            text: "Entendido.".to_string(),
+            assessment: Some(full_assessment("Tema", 4, 3.0, EntryLevel::AbsoluteZero)),
+            ..Default::default()
+        };
+        let runner = Arc::new(SucceedOnceThenFailRunner { first_step: Mutex::new(Some(step1)), calls: Mutex::new(0) });
+        let harness = service_with_runner(runner.clone());
+        let r0 = harness.service.start_session(None).await.expect("start ok");
+        let sid = r0.session.session_id.clone();
+
+        let err = harness
+            .service
+            .send_message(None, &sid, "Tema, 4 semanas, 3h")
+            .await
+            .expect_err("the chained propose call dies hard right after gate 1 succeeds");
+        assert!(matches!(err, AppError::ProviderKeyMissing(_)));
+        assert_eq!(*runner.calls.lock().unwrap(), 2, "gate 1 succeeded, then the chained propose call failed");
+
+        let reloaded = harness.service.get_session(&sid).expect("reload from disk");
+        assert!(
+            reloaded.learner_profile_card.is_some(),
+            "gate 1's profile card must be durable even though the chained propose call never landed"
+        );
+        assert!(reloaded.diagnostic_summary_card.is_none(), "propose never landed, so nothing past gate 1 is set");
+        assert!(reloaded.proposed_plan.is_none());
+        let _ = std::fs::remove_dir_all(&harness.dir);
+    }
+
     #[test]
     fn the_analyst_drives_until_the_assessment_exists_then_the_roadmap_agent_takes_over() {
         let mut session = RoadmapSession::new("SID".to_string(), 0);

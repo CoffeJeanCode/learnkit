@@ -167,11 +167,25 @@ Cada sesión (cada elemento de `micromodules`) lleva:
   un `Result::Err` significa 'falló el disco'", "cómo recorrer un grafo en memoria sin recursión
   sin desbordar la pila". Si el tema no es de programación, aterriza igual en el caso límite o
   problema real que la sesión resuelve, nunca en una intención vaga.
-- `deliverable`: un artefacto medible y verificable, nunca un verbo vago ("comprender la teoría",
-  "leer sobre el tema"). Ejemplos reales: un parser con sus tests en verde, una CLI funcional que
-  corre de punta a punta, una matriz de diagnóstico de errores corregida, un archivo JSON
-  exportado y validado, un circuito simulado de 2 qubits con histograma analizado. Prohibidos los
-  entregables abstractos ("comprender la teoría", "familiarizarse con X").
+- `deliverable`: un objeto `{artifactType, description}`, NUNCA texto libre. `artifactType` es uno
+  de estos 5 tipos cerrados — usa el que de verdad describa el artefacto:
+  - `tests_passing`: un parser, función o módulo con sus tests en verde.
+  - `formal_diagram`: un diagrama, mapa o esquema con rigor formal (p. ej. circuito, grafo, mapa
+    conceptual anotado).
+  - `functional_cli`: una CLI o script que corre de punta a punta.
+  - `diagnostic_matrix`: una matriz de diagnóstico de errores corregida.
+  - `working_demo`: una demo funcionando (p. ej. un circuito simulado con histograma analizado, una
+    app corriendo).
+  - `other`: SOLO si de verdad no encaja en ninguno de los 4 anteriores — en ese caso `description`
+    tiene que ser especialmente detallada (mínimo 20 caracteres), porque "other" es la única salida
+    del catálogo cerrado y no se explica sola.
+  `description` es el artefacto concreto en sí, medible y verificable, nunca un verbo vago
+  ("comprender la teoría", "leer sobre el tema"). Ejemplos reales: "un parser con sus tests en
+  verde" (`tests_passing`), "una CLI funcional que corre de punta a punta" (`functional_cli`), "una
+  matriz de diagnóstico de errores corregida" (`diagnostic_matrix`), "un circuito simulado de 2
+  qubits con histograma analizado" (`working_demo`). Prohibidos los entregables abstractos
+  ("comprender la teoría", "familiarizarse con X") en `description`, sin importar el `artifactType`
+  elegido.
 - `objective`: qué sabrá HACER el estudiante al terminarla — UNA sola frase observable en
   infinitivo ("Explicar por qué el ciclo se reinicia con oxalacetato", "Depurar una función y
   dejar sus tests en verde"), distinta de `focus` (lo que explora) y de `deliverable` (lo que
@@ -185,6 +199,22 @@ Cada sesión (cada elemento de `micromodules`) lleva:
   - `error_audit_challenge`: detectar y corregir un artefacto con un error conceptual sutil.
   - `hands_on_mission`: práctica deliberada con rúbrica observable.
   - `metacognitive_closure`: contraste explícito entre el modelo mental inicial y lo observado.
+
+### PROYECTO TERMINAL (capstoneProject) — EL CIERRE DEL DISEÑO INVERSO
+Además de los `milestones`, `syllabus` lleva un `capstoneProject` obligatorio: el proyecto de
+transferencia terminal desde el que diseñaste TODO el temario hacia atrás (Backward Design —
+Wiggins & McTighe). No es un resumen del último hito ni una lista de temas cubiertos — es la
+competencia terminal (`targetGoal`) hecha artefacto concreto y verificable, el mismo punto de
+llegada del que partiste antes de bajar a las semanas. Lleva:
+- `title`: nombre corto y directo del proyecto terminal, en lenguaje llano.
+- `description`: el escenario o problema real que el estudiante resuelve al final, integrando
+  capacidades de varias semanas a la vez — nunca una lista de temas ("proyecto sobre grafos y
+  árboles"), siempre una tarea de transferencia real ("implementar un sistema de recomendación
+  que recorre un grafo de usuarios sin recursión y explica cada sugerencia").
+- `verifiableEvidence`: el artefacto tangible que certifica que el proyecto quedó cerrado — qué se
+  entrega o demuestra (p. ej. "repositorio con la app corriendo de punta a punta + demo grabada de
+  3 minutos explicando las decisiones clave"), nunca una frase vaga como "dominio del tema" o
+  "comprensión profunda".
 
 Esto es una PROPUESTA, no un compromiso: no persiste nada ni genera el notebook de la primera
 clase todavía. DETENTE después de llamarla — no llames `confirm_syllabus_plan` en el mismo turno.

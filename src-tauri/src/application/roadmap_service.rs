@@ -4,8 +4,9 @@ use uuid::Uuid;
 
 use crate::domain::notebook::{DiagnosticBattery, DiagnosticBatteryState, DiagnosticDimension, DiagnosticQuestion};
 use crate::domain::roadmap::{
-    ChatTurn, DiagnosticAssessmentArgs, DiagnosticSummaryCard, EntryLevel, LearnerProfileCard, Micromodule, Milestone,
-    ProposedPlan, RoadmapPhase, RoadmapSession, RoadmapSessionSummary, RoadmapSyllabusPackage, SealedRoadmap, SessionStatus,
+    CapstoneProject, ChatTurn, Deliverable, DeliverableArtifactType, DiagnosticAssessmentArgs, DiagnosticSummaryCard, EntryLevel,
+    LearnerProfileCard, Micromodule, Milestone, ProposedPlan, RoadmapPhase, RoadmapSession, RoadmapSessionSummary,
+    RoadmapSyllabusPackage, SealedRoadmap, SessionStatus,
 };
 use crate::error::{AppError, AppResult};
 use crate::notebook_store::NotebookStore;
@@ -319,6 +320,21 @@ impl RoadmapService {
                 text = t;
                 had_violation = v;
             } else if Self::propose_followup_needed(&session) {
+                // Durable checkpoint before the Gate 3a hand-off: Gate 1 just
+                // set `learner_profile_card` (and, via `apply_capture`,
+                // `diagnostic_summary_card` when it chains further) purely in
+                // memory — the only save so far was the one taken BEFORE the
+                // main turn ran (line above, still the pre-turn state). The
+                // upcoming call below is its own separate, potentially slow
+                // LLM turn (the full milestone/syllabus tree); if it fails
+                // hard or the process crashes mid-flight, an unsaved profile
+                // card would be lost and have to be regathered from scratch
+                // instead of resuming from what Gate 1 already produced. Only
+                // fires here — right before this specific hand-off — so a
+                // turn that never reaches Gate 3a (e.g. the battery hand-off
+                // above, or a plain chat turn) never pays for an extra write.
+                session.updated_at_ms = now_ms();
+                self.store.save_roadmap_session(&session)?;
                 let (t, v) = self
                     .run_diagnostic_turn_with_grounding_retry(
                         app,

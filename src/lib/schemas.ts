@@ -42,13 +42,50 @@ export const DiagnosticSummaryCardSchema = z.object({
   learningStrategy: z.string(),
 });
 
+// Closed taxonomy for what KIND of artifact a `Micromodule.deliverable`
+// actually is — mirrors `DeliverableArtifactType` in
+// `src-tauri/src/domain/roadmap.rs`. Replaces a denylist-only vague-phrase
+// check with a structural one: 5 of the 6 variants are self-describing,
+// `other` is the deliberate escape hatch (held to a stricter minimum
+// `description` length below).
+export const DeliverableArtifactTypeSchema = z.enum([
+  "tests_passing",
+  "formal_diagram",
+  "functional_cli",
+  "diagnostic_matrix",
+  "working_demo",
+  "other",
+]);
+
+const OTHER_DELIVERABLE_MIN_LEN = 20;
+
+// A session's concrete, checkable artifact — see `Deliverable` in Rust.
+// Mirrors the server-side `deliverable_violations` rule: `description` must
+// be non-empty, and when `artifactType` is `other` (the one bucket that
+// isn't already self-describing) it must ALSO clear a higher minimum length,
+// so "otro" can't be the whole answer.
+export const DeliverableSchema = z
+  .object({
+    artifactType: DeliverableArtifactTypeSchema,
+    description: z.string().min(1),
+  })
+  .superRefine((deliverable, ctx) => {
+    if (deliverable.artifactType === "other" && deliverable.description.trim().length < OTHER_DELIVERABLE_MIN_LEN) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["description"],
+        message: `artifactType "other" requiere una description de al menos ${OTHER_DELIVERABLE_MIN_LEN} caracteres`,
+      });
+    }
+  });
+
 // One of the week's exactly-2 study sessions (<=4h each, homogeneous) — the
 // anti-monolith unit, each ending in its OWN authentic, verifiable artifact
 // (see `Micromodule` in `src-tauri/src/domain/roadmap.rs`).
 export const MicromoduleSchema = z.object({
   label: z.string(),
   hours: z.number(),
-  deliverable: z.string(),
+  deliverable: DeliverableSchema,
   // Central concepts + cause-effect this session explores, landed in the
   // real friction it resolves. Nullish because sessions sealed before
   // `Micromodule::focus` existed deserialize without the key.
@@ -74,12 +111,23 @@ export const MilestoneSchema = z.object({
   micromodules: z.array(MicromoduleSchema),
 });
 
+// The terminal transfer project the whole roadmap builds toward, per
+// Backward Design (Wiggins & McTighe) — distinct from the last week's
+// `Milestone`, which is still just that week's rollup (see `CapstoneProject`
+// in `src-tauri/src/domain/roadmap.rs`).
+export const CapstoneProjectSchema = z.object({
+  title: z.string(),
+  description: z.string(),
+  verifiableEvidence: z.string(),
+});
+
 // Exactly what the model emits at Gate 3 — no ids or timestamps.
 export const RoadmapSyllabusPackageSchema = z.object({
   courseTitle: z.string(),
   totalWeeks: z.number(),
   paceHoursPerWeek: z.number(),
   milestones: z.array(MilestoneSchema),
+  capstoneProject: CapstoneProjectSchema,
 });
 
 // --- Diagnostic battery ----------------------------------------------------
@@ -90,13 +138,30 @@ export const RoadmapSyllabusPackageSchema = z.object({
 
 export const DiagnosticDimensionSchema = z.enum(["intuition", "mechanics", "critical_case", "boundary"]);
 
-export const DiagnosticQuestionSchema = z.object({
-  dimension: DiagnosticDimensionSchema,
-  prompt: z.string(),
-  options: z.array(z.string()),
-  correctOption: z.string(),
-  diagnosticInsight: z.string(),
-});
+// Mirrors the <15% option-length-variance rule enforced server-side in
+// `diagnostic_battery_violations` (src-tauri/.../roadmap_service/grounding.rs)
+// so length-bias regressions surface at the schema boundary, not just at
+// grounding time.
+export const DiagnosticQuestionSchema = z
+  .object({
+    dimension: DiagnosticDimensionSchema,
+    prompt: z.string(),
+    options: z.array(z.string()),
+    correctOption: z.string(),
+    diagnosticInsight: z.string(),
+  })
+  .superRefine((question, ctx) => {
+    const lengths = question.options.map((option) => option.length);
+    const maxLength = Math.max(...lengths);
+    const minLength = Math.min(...lengths);
+    if (maxLength > 0 && (maxLength - minLength) / maxLength > 0.15) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["options"],
+        message: `Paridad métrica violada: variación ${(((maxLength - minLength) / maxLength) * 100).toFixed(1)}% > 15%`,
+      });
+    }
+  });
 
 export const DiagnosticBatterySchema = z.object({
   goalAlignment: z.string(),
@@ -221,7 +286,10 @@ export type LearnerProfileCard = z.infer<typeof LearnerProfileCardSchema>;
 export type DiagnosticSummaryCard = z.infer<typeof DiagnosticSummaryCardSchema>;
 export type RoadmapSyllabusPackage = z.infer<typeof RoadmapSyllabusPackageSchema>;
 export type Milestone = z.infer<typeof MilestoneSchema>;
+export type DeliverableArtifactType = z.infer<typeof DeliverableArtifactTypeSchema>;
+export type Deliverable = z.infer<typeof DeliverableSchema>;
 export type Micromodule = z.infer<typeof MicromoduleSchema>;
+export type CapstoneProject = z.infer<typeof CapstoneProjectSchema>;
 export type SealedRoadmap = z.infer<typeof SealedRoadmapSchema>;
 export type ProposedPlan = z.infer<typeof ProposedPlanSchema>;
 export type ChatTurn = z.infer<typeof ChatTurnSchema>;
@@ -251,6 +319,21 @@ export const DynamicBlockTypeSchema = z.enum([
   "interactive_prediction_gate",
   "hands_on_mission",
   "metacognitive_closure",
+]);
+// Formalization of the 5 epistemological/disciplinary profiles that
+// `src-tauri/src/agents/block_generator_agent.rs`'s system prompt describes
+// in prose (see "COMPOSICIÓN DINÁMICA") to pick a starting disposition for a
+// class's block sequence. Mirrors `domain::lesson_composition::
+// DisciplineProfile` in Rust, which is the actual source of truth (and where
+// each profile's suggested `DynamicBlockType` sequence + unit tests live).
+// Documentation/typing only on this side — nothing currently reads or writes
+// this value at runtime.
+export const DisciplineProfileSchema = z.enum([
+  "spatial_biological",
+  "quantitative_math",
+  "cyclic_systemic",
+  "software_debugging",
+  "leadership_decisions",
 ]);
 export const NotebookStatusSchema = z.enum(["draft", "ready"]);
 // Per-BLOCK gating state — see `BlockStatus` in Rust. `ready` means
@@ -449,7 +532,7 @@ export const SyllabusMilestoneSchema = z.object({
   course_id: z.string(),
   week_number: z.number(),
   title: z.string(),
-  deliverable_goal: z.string(),
+  deliverable: z.string(),
 });
 
 export const ClassRecordSchema = z.object({
@@ -458,7 +541,7 @@ export const ClassRecordSchema = z.object({
   class_number: z.number(),
   title: z.string(),
   order_index: z.number(),
-  // This micromodule's own bounded (<=5h) allocation — one class per
+  // This micromodule's own bounded (<=4h) allocation — one class per
   // micromodule now, not one per week (see `Micromodule` above).
   hours: z.number(),
   // The micromodule's learning objective ("qué sabrás hacer al terminar
@@ -564,6 +647,7 @@ export const NotebookBlockEventSchema = z.object({
 });
 
 export type DynamicBlockType = z.infer<typeof DynamicBlockTypeSchema>;
+export type DisciplineProfile = z.infer<typeof DisciplineProfileSchema>;
 export type StaticVisualSpec = z.infer<typeof StaticVisualSpecSchema>;
 export type SvgElement = z.infer<typeof SvgElementSchema>;
 export type SvgGroup = z.infer<typeof SvgGroupSchema>;

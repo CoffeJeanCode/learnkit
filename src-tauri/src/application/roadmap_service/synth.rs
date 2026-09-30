@@ -49,7 +49,10 @@ pub(super) fn synth_micromodules(total_hours: f32) -> Vec<Micromodule> {
             label: format!("Sesión {i}"),
             hours: half,
             focus: Some(format!("Conceptos centrales de la sesión {i}, aplicados a un caso concreto del curso")),
-            deliverable: format!("Entregable verificable de la sesión {i}"),
+            deliverable: Deliverable {
+                artifact_type: DeliverableArtifactType::WorkingDemo,
+                description: format!("Entregable verificable de la sesión {i}"),
+            },
             objective: Some(format!("Aplicar los conceptos clave de la sesión {i} a un caso concreto del curso")),
             interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
         })
@@ -67,7 +70,18 @@ pub(super) fn synth_roadmap_package(profile: &LearnerProfileCard) -> RoadmapSyll
             micromodules: synth_micromodules(profile.weekly_commitment_hours),
         })
         .collect();
-    RoadmapSyllabusPackage { course_title: profile.topic.clone(), total_weeks, pace_hours_per_week: profile.weekly_commitment_hours, milestones }
+    let capstone_project = CapstoneProject {
+        title: format!("Proyecto terminal: {}", profile.topic),
+        description: format!("Aplicar lo aprendido en un escenario real que demuestre {}", profile.target_goal),
+        verifiable_evidence: "Artefacto final entregado y revisado contra la meta declarada".to_string(),
+    };
+    RoadmapSyllabusPackage {
+        course_title: profile.topic.clone(),
+        total_weeks,
+        pace_hours_per_week: profile.weekly_commitment_hours,
+        milestones,
+        capstone_project,
+    }
 }
 
 /// Fallback battery for the force-close path — generated alongside the
