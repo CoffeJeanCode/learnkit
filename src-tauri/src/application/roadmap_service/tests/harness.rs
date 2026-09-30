@@ -216,6 +216,46 @@ use super::*;
     }
 
 
+    /// Succeeds exactly once, returning the given step, then fails hard
+    /// (non-transient — no retry budget spent) on every call after that.
+    /// For proving a checkpoint saved right after the first gate lands is
+    /// durable even when the very NEXT model call — chained in the SAME
+    /// `advance()`/`send_message()` invocation, like the `absolute_zero`
+    /// assessment-then-propose hand-off — dies for good.
+    pub(super) struct SucceedOnceThenFailRunner {
+        pub(super) first_step: Mutex<Option<ScriptedStep>>,
+        pub(super) calls: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl PromptRunner for SucceedOnceThenFailRunner {
+        async fn run(&self, _: &str, _: &str, _: &str, _: &str, _: &[String]) -> AppResult<PromptOutput> {
+            unreachable!()
+        }
+
+        async fn run_diagnostic_execution(
+            &self,
+            _provider_id: &str,
+            _model: &str,
+            _system_prompt: &str,
+            _input: &str,
+            capture: SharedRoadmapCapture,
+            _scope: DiagnosticToolScope,
+        ) -> AppResult<PromptOutput> {
+            *self.calls.lock().unwrap() += 1;
+            let mut first = self.first_step.lock().unwrap();
+            if let Some(step) = first.take() {
+                let mut c = capture.lock().unwrap();
+                c.assessment = step.assessment;
+                c.diagnostic_battery = step.diagnostic_battery;
+                c.propose_syllabus_plan = step.propose_syllabus_plan;
+                c.confirm_syllabus_plan = step.confirm_syllabus_plan;
+                return Ok(PromptOutput { text: step.text, tool_calls: vec![] });
+            }
+            Err(AppError::ProviderKeyMissing("openai".to_string()))
+        }
+    }
+
     pub(super) struct FlakyRunner {
         pub(super) failures_left: Mutex<usize>,
         pub(super) transient: bool,
