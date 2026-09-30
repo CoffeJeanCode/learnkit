@@ -99,7 +99,7 @@ pub enum DeliverableArtifactType {
 /// sentence, deliberately NOT restructured — see that field's own doc
 /// comment) and from `CapstoneProject` (the terminal project, already its
 /// own struct).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Deliverable {
     pub artifact_type: DeliverableArtifactType,
@@ -111,6 +111,44 @@ pub struct Deliverable {
     /// also clear a higher minimum length, so "otro" can't be the whole
     /// answer.
     pub description: String,
+}
+
+impl<'de> Deserialize<'de> for Deliverable {
+    /// Manual impl (rather than `#[derive]`) so a `RoadmapSession` persisted
+    /// before this field became a struct — when `Micromodule::deliverable`
+    /// was still a plain `String` — keeps deserializing instead of breaking
+    /// resumption of in-flight roadmap creation. A bare legacy string maps to
+    /// `artifactType: Other` (the closed taxonomy's own escape hatch) with
+    /// that string as `description`.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Legacy(String),
+            #[serde(rename_all = "camelCase")]
+            Structured {
+                artifact_type: DeliverableArtifactType,
+                description: String,
+            },
+        }
+
+        match Repr::deserialize(deserializer)? {
+            Repr::Legacy(description) => Ok(Deliverable {
+                artifact_type: DeliverableArtifactType::Other,
+                description,
+            }),
+            Repr::Structured {
+                artifact_type,
+                description,
+            } => Ok(Deliverable {
+                artifact_type,
+                description,
+            }),
+        }
+    }
 }
 
 /// One of the week's exactly-2 study sessions — the anti-monolith unit.
@@ -518,6 +556,22 @@ mod tests {
 
         assert_eq!(session.draft["topic"], "Rust CLI");
         assert_eq!(session.draft["weeklyCommitmentHours"], 8);
+    }
+
+    #[test]
+    fn deliverable_deserializes_a_pre_upgrade_plain_string_as_other() {
+        // Sessions sealed before `Micromodule::deliverable` became a struct
+        // persisted it as a bare string — must keep loading.
+        let legacy: Deliverable = serde_json::from_value(serde_json::json!("CLI con 3 comandos funcionando")).unwrap();
+        assert_eq!(legacy.artifact_type, DeliverableArtifactType::Other);
+        assert_eq!(legacy.description, "CLI con 3 comandos funcionando");
+
+        let current: Deliverable = serde_json::from_value(serde_json::json!({
+            "artifactType": "functional_cli",
+            "description": "CLI con 3 comandos funcionando",
+        }))
+        .unwrap();
+        assert_eq!(current.artifact_type, DeliverableArtifactType::FunctionalCli);
     }
 
     #[test]
