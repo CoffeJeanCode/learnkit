@@ -73,6 +73,46 @@ pub struct DiagnosticSummaryCard {
     pub learning_strategy: String,
 }
 
+/// Closed taxonomy for WHAT KIND of artifact a `Micromodule::deliverable`
+/// actually is. Replaces a denylist-only check (`grounding::
+/// VAGUE_DELIVERABLE_PHRASES`) that could only reject phrasing it already
+/// knew about, letting anything else equally vague through unnoticed.
+/// Naming the shape up front makes "just a vague sentence" structurally
+/// impossible for the 5 self-describing variants; `Other` is the deliberate
+/// escape hatch for a real deliverable that genuinely doesn't fit any named
+/// bucket, so it alone is held to a stricter minimum `description` length
+/// (see `grounding::deliverable_violations`) — the one place a vague
+/// one-liner could otherwise hide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliverableArtifactType {
+    TestsPassing,
+    FormalDiagram,
+    FunctionalCli,
+    DiagnosticMatrix,
+    WorkingDemo,
+    Other,
+}
+
+/// A session's concrete, checkable artifact — see `Micromodule::deliverable`.
+/// Distinct from `Milestone::deliverable` (still a plain-text week-rollup
+/// sentence, deliberately NOT restructured — see that field's own doc
+/// comment) and from `CapstoneProject` (the terminal project, already its
+/// own struct).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Deliverable {
+    pub artifact_type: DeliverableArtifactType,
+    /// The concrete description of THIS artifact (e.g. "circuito simulado de
+    /// 2 qubits con histograma analizado") — never a vague verb phrase like
+    /// "comprender la teoría" (see `grounding::deliverable_violations`).
+    /// Required non-empty for every `artifactType`; when `artifactType` is
+    /// `other` (the only bucket that isn't already self-describing) it must
+    /// also clear a higher minimum length, so "otro" can't be the whole
+    /// answer.
+    pub description: String,
+}
+
 /// One of the week's exactly-2 study sessions — the anti-monolith unit.
 /// Never more than 4 hours (see `syllabus_violations`'s `hours` check): a
 /// week's `paceHoursPerWeek` is always split into EXACTLY two homogeneous
@@ -89,11 +129,12 @@ pub struct Micromodule {
     /// check).
     pub label: String,
     pub hours: f32,
-    /// A concrete, checkable artifact THIS session produces (e.g. "circuito
-    /// simulado de 2 qubits con histograma analizado") — never a vague verb
-    /// phrase like "comprender la teoría" (see `syllabus_violations`'s
-    /// banned-phrase check).
-    pub deliverable: String,
+    /// A concrete, checkable artifact THIS session produces — a typed
+    /// `{artifactType, description}` pair (see `Deliverable`), not free text:
+    /// a denylist alone let anything not already on the list through
+    /// unchecked. Never a vague verb phrase like "comprender la teoría" (see
+    /// `grounding::deliverable_violations`).
+    pub deliverable: Deliverable,
     /// The central concepts and cause-effect relationships this session
     /// explores, landed in the real friction it resolves (e.g. "por qué
     /// `iter_mut` evita clonar la estructura completa" instead of an
@@ -539,7 +580,10 @@ mod tests {
                     "micromodules": [{
                         "label": "Módulo 1",
                         "hours": 3.0,
-                        "deliverable": "Artefacto verificable",
+                        "deliverable": {
+                            "artifactType": "functional_cli",
+                            "description": "Artefacto verificable"
+                        },
                         "interactiveBlocks": ["socratic_prediction", "hands_on_mission", "metacognitive_closure"]
                     }]
                 }],

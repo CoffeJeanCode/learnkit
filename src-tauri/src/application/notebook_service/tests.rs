@@ -7,7 +7,10 @@
     use super::*;
     use crate::agents::AgentRegistry;
     use crate::domain::notebook::{BlockStatus, DynamicBlockType, GateSubmission, GeneratedSectionBlock, PredictionComparison};
-    use crate::domain::roadmap::{CapstoneProject, EntryLevel, LearnerProfileCard, Micromodule, Milestone, RoadmapSyllabusPackage, SealedRoadmap, SessionStatus};
+    use crate::domain::roadmap::{
+        CapstoneProject, Deliverable, DeliverableArtifactType, EntryLevel, LearnerProfileCard, Micromodule, Milestone, RoadmapSyllabusPackage,
+        SealedRoadmap, SessionStatus,
+    };
     use crate::orchestration::PromptRunner;
     use crate::providers::factory::PromptOutput;
     use crate::tools::{BlockAuditCapture, BlockAuditResult, ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult, GateScaffold, NotebookBlockCapture, ScaffoldType};
@@ -47,7 +50,10 @@
                             label: "Días 1-2 — Panorama general".to_string(),
                             hours: 1.5,
                             focus: Some("Cómo se conectan las 8 reacciones del ciclo entre sí".to_string()),
-                            deliverable: "Mapa visual anotado".to_string(),
+                            deliverable: Deliverable {
+                                artifact_type: DeliverableArtifactType::FormalDiagram,
+                                description: "Mapa visual anotado".to_string(),
+                            },
                             objective: Some("Explicar el ciclo de Krebs con un mapa propio".to_string()),
                             interactive_blocks: vec!["interactive_visual_anchor".to_string(), "metacognitive_closure".to_string(), "hands_on_mission".to_string()],
                         },
@@ -55,7 +61,10 @@
                             label: "Días 3-4 — Puntos de control".to_string(),
                             hours: 1.5,
                             focus: Some("Qué reacciones regulan la velocidad del ciclo".to_string()),
-                            deliverable: "Mapa visual anotado 2".to_string(),
+                            deliverable: Deliverable {
+                                artifact_type: DeliverableArtifactType::FormalDiagram,
+                                description: "Mapa visual anotado 2".to_string(),
+                            },
                             objective: Some("Señalar los puntos de control del ciclo en el mapa".to_string()),
                             interactive_blocks: vec!["error_audit_challenge".to_string(), "metacognitive_closure".to_string(), "hands_on_mission".to_string()],
                         },

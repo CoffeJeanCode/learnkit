@@ -187,8 +187,20 @@ fn syllabus_json_schema() -> serde_json::Value {
                                         "description": "Conceptos centrales y relación causa-efecto que explora ESTA sesión, aterrizados en la fricción real que resuelve (nunca una definición enciclopédica ni jerga de proceso)."
                                     },
                                     "deliverable": {
-                                        "type": "string",
-                                        "description": "Artefacto concreto y verificable de ESTA sesión (nunca \"comprender la teoría\" o \"leer sobre el tema\")."
+                                        "type": "object",
+                                        "description": "Artefacto concreto y verificable de ESTA sesión — nunca texto libre.",
+                                        "properties": {
+                                            "artifactType": {
+                                                "type": "string",
+                                                "enum": ["tests_passing", "formal_diagram", "functional_cli", "diagnostic_matrix", "working_demo", "other"],
+                                                "description": "El tipo de artefacto. Usa \"other\" SOLO si de verdad no encaja en ninguno de los otros 5 — en ese caso description debe ser especialmente detallada (mínimo 20 caracteres)."
+                                            },
+                                            "description": {
+                                                "type": "string",
+                                                "description": "El artefacto concreto en sí (p. ej. \"circuito simulado de 2 qubits con histograma analizado\"), nunca un verbo vago (\"comprender la teoría\", \"leer sobre el tema\")."
+                                            }
+                                        },
+                                        "required": ["artifactType", "description"]
                                     },
                                     "objective": {
                                         "type": "string",
@@ -326,7 +338,7 @@ impl Tool for ConfirmSyllabusPlanTool {
 mod tests {
     use super::*;
     use crate::domain::notebook::{DiagnosticBattery, DiagnosticDimension, DiagnosticQuestion};
-    use crate::domain::roadmap::{CapstoneProject, EntryLevel, Micromodule, Milestone, RoadmapSyllabusPackage};
+    use crate::domain::roadmap::{CapstoneProject, Deliverable, DeliverableArtifactType, EntryLevel, Micromodule, Milestone, RoadmapSyllabusPackage};
 
     fn sample_assessment() -> DiagnosticAssessmentArgs {
         DiagnosticAssessmentArgs {
@@ -369,7 +381,10 @@ mod tests {
                             label: "Días 1-2 — Recorrer sin clonar".to_string(),
                             hours: 1.5,
                             focus: Some("Por qué iterar por referencia evita copiar la estructura completa".to_string()),
-                            deliverable: "Artefacto verificable".to_string(),
+                            deliverable: Deliverable {
+                                artifact_type: DeliverableArtifactType::TestsPassing,
+                                description: "Artefacto verificable".to_string(),
+                            },
                             objective: Some("Explicar el flujo completo del módulo con sus propias palabras".to_string()),
                             interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
                         },
@@ -377,7 +392,10 @@ mod tests {
                             label: "Días 3-4 — Casos límite".to_string(),
                             hours: 1.5,
                             focus: Some("Qué pasa al recorrer una estructura vacía o circular".to_string()),
-                            deliverable: "Artefacto verificable 2".to_string(),
+                            deliverable: Deliverable {
+                                artifact_type: DeliverableArtifactType::TestsPassing,
+                                description: "Artefacto verificable 2".to_string(),
+                            },
                             objective: Some("Depurar un recorrido y dejar sus tests en verde".to_string()),
                             interactive_blocks: vec!["error_audit_challenge".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
                         },

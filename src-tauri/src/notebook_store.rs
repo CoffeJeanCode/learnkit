@@ -309,18 +309,21 @@ impl NotebookStore {
         course_id: &str,
         week_number: u16,
         title: &str,
-        deliverable_goal: &str,
+        deliverable: &str,
     ) -> AppResult<SyllabusMilestone> {
         let m = SyllabusMilestone {
             id: Uuid::new_v4().to_string(),
             course_id: course_id.to_string(),
             week_number,
             title: title.to_string(),
-            deliverable_goal: deliverable_goal.to_string(),
+            deliverable: deliverable.to_string(),
         };
+        // The `deliverable_goal` SQL column name is unchanged storage
+        // bookkeeping (see `SCHEMA_SQL`) — only the Rust/TS-facing field was
+        // renamed to `deliverable` to match `Milestone::deliverable`.
         self.lock().execute(
             "INSERT INTO syllabus_milestones (id, course_id, week_number, title, deliverable_goal) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![m.id, m.course_id, m.week_number, m.title, m.deliverable_goal],
+            params![m.id, m.course_id, m.week_number, m.title, m.deliverable],
         )?;
         Ok(m)
     }
@@ -497,7 +500,7 @@ impl NotebookStore {
                         course_id: row.get(6)?,
                         week_number: row.get(7)?,
                         title: row.get(8)?,
-                        deliverable_goal: row.get(9)?,
+                        deliverable: row.get(9)?,
                     },
                     class: ClassRecord {
                         id: row.get(10)?,
@@ -958,7 +961,8 @@ fn row_to_block(row: &rusqlite::Row) -> rusqlite::Result<NotebookBlock> {
 
 /// Seeds `courses`/`syllabus_milestones`/`classes` from a confirmed roadmap
 /// syllabus — one class per MICROMODULE now, not per week (each micromodule
-/// is already a bounded ≤5h unit — see `domain::roadmap::Micromodule`), each
+/// is already a bounded ≤4h unit — see `domain::roadmap::Micromodule` and
+/// `application::roadmap_service::grounding::MAX_SESSION_HOURS`), each
 /// class carrying that micromodule's own `hours`. Shared by
 /// `NotebookService::import_course_from_roadmap` and `RoadmapService`'s
 /// seal-time `import_syllabus_skeleton`, which both used to duplicate this

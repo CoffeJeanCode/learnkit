@@ -410,13 +410,16 @@
     /// stay NULL rather than borrowing a sibling's.
     #[test]
     fn import_stamps_each_class_with_its_micromodule_objective() {
-        use crate::domain::roadmap::{CapstoneProject, Milestone, Micromodule, RoadmapSyllabusPackage};
+        use crate::domain::roadmap::{CapstoneProject, Deliverable, DeliverableArtifactType, Milestone, Micromodule, RoadmapSyllabusPackage};
         let store = NotebookStore::open_in_memory().expect("open");
         let module = |label: &str, objective: Option<&str>| Micromodule {
             label: label.to_string(),
             hours: 3.0,
             focus: Some("Conceptos centrales de la sesión".to_string()),
-            deliverable: "Artefacto verificable".to_string(),
+            deliverable: Deliverable {
+                artifact_type: DeliverableArtifactType::TestsPassing,
+                description: "Artefacto verificable".to_string(),
+            },
             objective: objective.map(str::to_string),
             interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
         };

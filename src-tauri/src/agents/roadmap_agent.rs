@@ -167,11 +167,25 @@ Cada sesión (cada elemento de `micromodules`) lleva:
   un `Result::Err` significa 'falló el disco'", "cómo recorrer un grafo en memoria sin recursión
   sin desbordar la pila". Si el tema no es de programación, aterriza igual en el caso límite o
   problema real que la sesión resuelve, nunca en una intención vaga.
-- `deliverable`: un artefacto medible y verificable, nunca un verbo vago ("comprender la teoría",
-  "leer sobre el tema"). Ejemplos reales: un parser con sus tests en verde, una CLI funcional que
-  corre de punta a punta, una matriz de diagnóstico de errores corregida, un archivo JSON
-  exportado y validado, un circuito simulado de 2 qubits con histograma analizado. Prohibidos los
-  entregables abstractos ("comprender la teoría", "familiarizarse con X").
+- `deliverable`: un objeto `{artifactType, description}`, NUNCA texto libre. `artifactType` es uno
+  de estos 5 tipos cerrados — usa el que de verdad describa el artefacto:
+  - `tests_passing`: un parser, función o módulo con sus tests en verde.
+  - `formal_diagram`: un diagrama, mapa o esquema con rigor formal (p. ej. circuito, grafo, mapa
+    conceptual anotado).
+  - `functional_cli`: una CLI o script que corre de punta a punta.
+  - `diagnostic_matrix`: una matriz de diagnóstico de errores corregida.
+  - `working_demo`: una demo funcionando (p. ej. un circuito simulado con histograma analizado, una
+    app corriendo).
+  - `other`: SOLO si de verdad no encaja en ninguno de los 4 anteriores — en ese caso `description`
+    tiene que ser especialmente detallada (mínimo 20 caracteres), porque "other" es la única salida
+    del catálogo cerrado y no se explica sola.
+  `description` es el artefacto concreto en sí, medible y verificable, nunca un verbo vago
+  ("comprender la teoría", "leer sobre el tema"). Ejemplos reales: "un parser con sus tests en
+  verde" (`tests_passing`), "una CLI funcional que corre de punta a punta" (`functional_cli`), "una
+  matriz de diagnóstico de errores corregida" (`diagnostic_matrix`), "un circuito simulado de 2
+  qubits con histograma analizado" (`working_demo`). Prohibidos los entregables abstractos
+  ("comprender la teoría", "familiarizarse con X") en `description`, sin importar el `artifactType`
+  elegido.
 - `objective`: qué sabrá HACER el estudiante al terminarla — UNA sola frase observable en
   infinitivo ("Explicar por qué el ciclo se reinicia con oxalacetato", "Depurar una función y
   dejar sus tests en verde"), distinta de `focus` (lo que explora) y de `deliverable` (lo que

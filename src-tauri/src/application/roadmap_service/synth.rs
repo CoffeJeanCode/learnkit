@@ -49,7 +49,10 @@ pub(super) fn synth_micromodules(total_hours: f32) -> Vec<Micromodule> {
             label: format!("Sesión {i}"),
             hours: half,
             focus: Some(format!("Conceptos centrales de la sesión {i}, aplicados a un caso concreto del curso")),
-            deliverable: format!("Entregable verificable de la sesión {i}"),
+            deliverable: Deliverable {
+                artifact_type: DeliverableArtifactType::WorkingDemo,
+                description: format!("Entregable verificable de la sesión {i}"),
+            },
             objective: Some(format!("Aplicar los conceptos clave de la sesión {i} a un caso concreto del curso")),
             interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
         })

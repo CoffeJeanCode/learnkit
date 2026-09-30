@@ -63,6 +63,37 @@ pub(super) fn is_vague_deliverable(text: &str) -> bool {
     VAGUE_DELIVERABLE_PHRASES.iter().any(|p| lower.contains(p))
 }
 
+/// The minimum `description` length required when `artifactType` is `other`
+/// — the one bucket in `DeliverableArtifactType` that isn't already
+/// self-describing, so it's the only place a vague one-liner could otherwise
+/// hide behind a technically-non-empty string.
+pub(super) const OTHER_DELIVERABLE_MIN_LEN: usize = 20;
+
+/// Content-level grounding for a `Micromodule::deliverable`: replaces a
+/// denylist-only check (`is_vague_deliverable` used to be the WHOLE story)
+/// with a structural bar too. `description` must be non-empty and non-vague
+/// for every `artifactType`; when `artifactType` is `other` it must ALSO
+/// clear `OTHER_DELIVERABLE_MIN_LEN`, so "otro: algo" can't be the whole
+/// answer. `context` is the human-readable location used in every message
+/// (e.g. `la sesión "X" de la semana 1`).
+pub(super) fn deliverable_violations(context: &str, deliverable: &Deliverable) -> Vec<String> {
+    let mut v = Vec::new();
+    let desc = deliverable.description.trim();
+    if desc.is_empty() {
+        v.push(format!("{context} tiene deliverable vacío"));
+    } else if is_vague_deliverable(desc) {
+        v.push(format!("el deliverable \"{desc}\" de {context} es vago — debe ser un artefacto verificable"));
+    } else if deliverable.artifact_type == DeliverableArtifactType::Other && desc.chars().count() < OTHER_DELIVERABLE_MIN_LEN {
+        v.push(format!(
+            "el deliverable \"{desc}\" de {context} usa artifactType \"other\" (el único escape del catálogo cerrado) pero \
+             tiene menos de {OTHER_DELIVERABLE_MIN_LEN} caracteres — descríbelo con más detalle"
+        ));
+    } else {
+        check_student_facing_text(&mut v, &format!("deliverable de {context}"), desc);
+    }
+    v
+}
+
 /// The `interactive_blocks` catalog's own vocabulary (snake_case, as stored,
 /// and spaced, as it'd read if naively humanized) — the ONE thing this check
 /// hard-rejects on. Deliberately narrow: generic process jargon ("sprint",
@@ -122,16 +153,7 @@ pub(super) fn micromodule_violations(week: u16, pace_hours_per_week: f32, module
                 m.label, m.hours
             ));
         }
-        if m.deliverable.trim().is_empty() {
-            v.push(format!("la sesión \"{}\" de la semana {week} tiene deliverable vacío", m.label));
-        } else if is_vague_deliverable(&m.deliverable) {
-            v.push(format!(
-                "el deliverable \"{}\" de la sesión \"{}\" (semana {week}) es vago — debe ser un artefacto verificable",
-                m.deliverable, m.label
-            ));
-        } else {
-            check_student_facing_text(&mut v, &format!("deliverable de la sesión \"{}\" (semana {week})", m.label), &m.deliverable);
-        }
+        v.extend(deliverable_violations(&format!("la sesión \"{}\" de la semana {week}", m.label), &m.deliverable));
         match m.focus.as_deref().map(str::trim) {
             None | Some("") => {
                 v.push(format!(

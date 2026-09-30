@@ -103,7 +103,10 @@ use super::*;
                             label: "Días 1-2".to_string(),
                             hours: hours / 2.0,
                             focus: Some("Conceptos centrales de la primera sesión".to_string()),
-                            deliverable: "Artefacto verificable".to_string(),
+                            deliverable: Deliverable {
+                                artifact_type: DeliverableArtifactType::TestsPassing,
+                                description: "Artefacto verificable".to_string(),
+                            },
                             objective: Some("Explicar el concepto central de la sesión con un ejemplo propio".to_string()),
                             interactive_blocks: vec![
                                 "socratic_prediction".to_string(),
@@ -115,7 +118,10 @@ use super::*;
                             label: "Días 3-4".to_string(),
                             hours: hours / 2.0,
                             focus: Some("Profundización y casos límite".to_string()),
-                            deliverable: "Artefacto verificable 2".to_string(),
+                            deliverable: Deliverable {
+                                artifact_type: DeliverableArtifactType::TestsPassing,
+                                description: "Artefacto verificable 2".to_string(),
+                            },
                             objective: Some("Resolver un caso límite del concepto central".to_string()),
                             interactive_blocks: vec![
                                 "error_audit_challenge".to_string(),
