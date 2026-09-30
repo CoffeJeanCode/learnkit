@@ -320,6 +320,21 @@ export const DynamicBlockTypeSchema = z.enum([
   "hands_on_mission",
   "metacognitive_closure",
 ]);
+// Formalization of the 5 epistemological/disciplinary profiles that
+// `src-tauri/src/agents/block_generator_agent.rs`'s system prompt describes
+// in prose (see "COMPOSICIÓN DINÁMICA") to pick a starting disposition for a
+// class's block sequence. Mirrors `domain::lesson_composition::
+// DisciplineProfile` in Rust, which is the actual source of truth (and where
+// each profile's suggested `DynamicBlockType` sequence + unit tests live).
+// Documentation/typing only on this side — nothing currently reads or writes
+// this value at runtime.
+export const DisciplineProfileSchema = z.enum([
+  "spatial_biological",
+  "quantitative_math",
+  "cyclic_systemic",
+  "software_debugging",
+  "leadership_decisions",
+]);
 export const NotebookStatusSchema = z.enum(["draft", "ready"]);
 // Per-BLOCK gating state — see `BlockStatus` in Rust. `ready` means
 // different things per block family: for a content block (theory/diagram)
@@ -625,6 +640,7 @@ export const NotebookBlockEventSchema = z.object({
 });
 
 export type DynamicBlockType = z.infer<typeof DynamicBlockTypeSchema>;
+export type DisciplineProfile = z.infer<typeof DisciplineProfileSchema>;
 export type StaticVisualSpec = z.infer<typeof StaticVisualSpecSchema>;
 export type SvgElement = z.infer<typeof SvgElementSchema>;
 export type SvgGroup = z.infer<typeof SvgGroupSchema>;

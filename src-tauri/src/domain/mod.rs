@@ -1,5 +1,6 @@
 pub mod agent;
 pub mod learner_memory;
+pub mod lesson_composition;
 pub mod message;
 pub mod model;
 pub mod notebook;
