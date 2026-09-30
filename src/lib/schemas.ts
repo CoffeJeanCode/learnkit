@@ -138,30 +138,32 @@ export const RoadmapSyllabusPackageSchema = z.object({
 
 export const DiagnosticDimensionSchema = z.enum(["intuition", "mechanics", "critical_case", "boundary"]);
 
+export const DiagnosticQuestionSchema = z.object({
+  dimension: DiagnosticDimensionSchema,
+  prompt: z.string(),
+  options: z.array(z.string()),
+  correctOption: z.string(),
+  diagnosticInsight: z.string(),
+});
+
 // Mirrors the <15% option-length-variance rule enforced server-side in
-// `diagnostic_battery_violations` (src-tauri/.../roadmap_service/grounding.rs)
-// so length-bias regressions surface at the schema boundary, not just at
-// grounding time.
-export const DiagnosticQuestionSchema = z
-  .object({
-    dimension: DiagnosticDimensionSchema,
-    prompt: z.string(),
-    options: z.array(z.string()),
-    correctOption: z.string(),
-    diagnosticInsight: z.string(),
-  })
-  .superRefine((question, ctx) => {
-    const lengths = question.options.map((option) => option.length);
-    const maxLength = Math.max(...lengths);
-    const minLength = Math.min(...lengths);
-    if (maxLength > 0 && (maxLength - minLength) / maxLength > 0.15) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["options"],
-        message: `Paridad métrica violada: variación ${(((maxLength - minLength) / maxLength) * 100).toFixed(1)}% > 15%`,
-      });
-    }
-  });
+// `diagnostic_battery_violations` (src-tauri/.../roadmap_service/grounding.rs).
+// Deliberately NOT a `.superRefine` on `DiagnosticQuestionSchema`: that schema
+// also parses ALREADY-PERSISTED batteries on every load
+// (`getCourseDiagnosticBattery`, via `.parse()`), including ones generated
+// before this rule existed or under a since-fixed grounding bug — a throwing
+// refine there would brick loading a student's in-progress battery instead of
+// just flagging newly-generated content. Call this explicitly wherever fresh
+// LLM-generated options should be linted before use, not from the parse path.
+export function optionLengthVarianceViolation(options: string[]): string | null {
+  const lengths = options.map((option) => option.length);
+  const maxLength = Math.max(...lengths, 0);
+  const minLength = options.length > 0 ? Math.min(...lengths) : 0;
+  if (maxLength > 0 && (maxLength - minLength) / maxLength > 0.15) {
+    return `Paridad métrica violada: variación ${(((maxLength - minLength) / maxLength) * 100).toFixed(1)}% > 15%`;
+  }
+  return null;
+}
 
 export const DiagnosticBatterySchema = z.object({
   goalAlignment: z.string(),
