@@ -4,6 +4,7 @@ use tauri::State;
 
 use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{BlockUpdate, ClassRecord, ClosureFeedback, Course, DiagnosticBatteryState, GateResult, GateSubmission, NotebookPayload};
+use crate::domain::skill_evidence::SkillEvidence;
 use crate::error::AppResult;
 use crate::state::AppState;
 
@@ -117,6 +118,18 @@ pub fn reset_class_notebook(state: State<'_, AppState>, class_id: String) -> App
 #[tauri::command]
 pub fn record_retrieval_result(state: State<'_, AppState>, block_id: String, item_index: usize, recalled: bool) -> AppResult<()> {
     state.notebook_service.record_retrieval_result(&block_id, item_index, recalled)
+}
+
+/// Append-only evidence history of one skill (class), oldest first.
+#[tauri::command]
+pub fn get_skill_evidence(state: State<'_, AppState>, skill_id: String) -> AppResult<Vec<SkillEvidence>> {
+    state.notebook_service.get_skill_evidence(&skill_id)
+}
+
+/// Evidence for every skill of one course, oldest first.
+#[tauri::command]
+pub fn get_course_evidence(state: State<'_, AppState>, course_id: String) -> AppResult<Vec<SkillEvidence>> {
+    state.notebook_service.get_course_evidence(&course_id)
 }
 
 #[tauri::command]

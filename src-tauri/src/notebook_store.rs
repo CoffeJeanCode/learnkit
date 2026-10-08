@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
+use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, SkillEvidence};
 use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{
     BlockStatus, BlockUpdate, ClassRecord, Course, DiagnosticBattery, DiagnosticBatteryState, DynamicBlockType,
@@ -81,6 +82,25 @@ CREATE INDEX IF NOT EXISTS idx_blocks_document ON notebook_blocks(document_id);
 -- see that module's doc comment) — the WHOLE `LearnerCognitiveMemory`
 -- serialized as JSON, same "don't invent a relational shape for a
 -- backend-only blob" precedent as `courses.diagnostic_battery_json`.
+-- Append-only evidence history (see `domain::skill_evidence`): rows are only
+-- ever inserted. No FK on purpose — deleting a class/course must not rewrite
+-- what the student demonstrated.
+CREATE TABLE IF NOT EXISTS skill_evidence (
+    id TEXT PRIMARY KEY,
+    skill_id TEXT NOT NULL,
+    course_id TEXT NOT NULL,
+    block_id TEXT,
+    kind TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    attempt_number INTEGER NOT NULL,
+    hints_shown INTEGER NOT NULL,
+    support_level TEXT,
+    rubric_json TEXT NOT NULL DEFAULT '[]',
+    created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skill_evidence_skill ON skill_evidence(skill_id, created_at_ms);
+CREATE INDEX IF NOT EXISTS idx_skill_evidence_course ON skill_evidence(course_id, created_at_ms);
+
 CREATE TABLE IF NOT EXISTS learner_memory (
     learner_id TEXT PRIMARY KEY,
     data_json TEXT NOT NULL,
@@ -618,6 +638,82 @@ impl NotebookStore {
             params![memory.learner_id, json, now_ms()],
         )?;
         Ok(())
+    }
+
+    // --- Skill evidence (append-only) ---------------------------------------
+
+    pub fn append_skill_evidence(&self, e: &SkillEvidence) -> AppResult<()> {
+        let rubric = serde_json::to_string(&e.rubric).map_err(|err| AppError::Persistence(err.to_string()))?;
+        self.lock().execute(
+            "INSERT INTO skill_evidence
+                (id, skill_id, course_id, block_id, kind, outcome, attempt_number, hints_shown, support_level, rubric_json, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                e.id,
+                e.skill_id,
+                e.course_id,
+                e.block_id,
+                e.kind.as_str(),
+                e.outcome.as_str(),
+                e.attempt_number,
+                e.hints_shown,
+                e.support_level,
+                rubric,
+                e.created_at_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every evidence row of one skill, oldest first.
+    pub fn list_skill_evidence(&self, skill_id: &str) -> AppResult<Vec<SkillEvidence>> {
+        self.query_skill_evidence("WHERE skill_id = ?1", skill_id)
+    }
+
+    /// Every evidence row of one course (all its skills), oldest first.
+    pub fn list_course_evidence(&self, course_id: &str) -> AppResult<Vec<SkillEvidence>> {
+        self.query_skill_evidence("WHERE course_id = ?1", course_id)
+    }
+
+    fn query_skill_evidence(&self, filter: &str, arg: &str) -> AppResult<Vec<SkillEvidence>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, skill_id, course_id, block_id, kind, outcome, attempt_number, hints_shown, support_level, rubric_json, created_at_ms
+             FROM skill_evidence {filter} ORDER BY created_at_ms ASC, rowid ASC"
+        ))?;
+        let rows = stmt.query_map(params![arg], |row| {
+            let kind: String = row.get(4)?;
+            let outcome: String = row.get(5)?;
+            let rubric_json: String = row.get(9)?;
+            Ok((
+                SkillEvidence {
+                    id: row.get(0)?,
+                    skill_id: row.get(1)?,
+                    course_id: row.get(2)?,
+                    block_id: row.get(3)?,
+                    // Placeholders replaced below: an unknown stored string is
+                    // skipped, never a failure of the whole history read.
+                    kind: EvidenceKind::Closure,
+                    outcome: EvidenceOutcome::Failed,
+                    attempt_number: row.get(6)?,
+                    hints_shown: row.get(7)?,
+                    support_level: row.get(8)?,
+                    rubric: serde_json::from_str(&rubric_json).unwrap_or_default(),
+                    created_at_ms: row.get(10)?,
+                },
+                kind,
+                outcome,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (mut e, kind, outcome) = r?;
+            let (Some(k), Some(o)) = (EvidenceKind::parse(&kind), EvidenceOutcome::parse(&outcome)) else { continue };
+            e.kind = k;
+            e.outcome = o;
+            out.push(e);
+        }
+        Ok(out)
     }
 
     // --- Notebook documents / blocks ----------------------------------------

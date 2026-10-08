@@ -269,8 +269,10 @@ impl LearnerCognitiveMemory {
     /// `SELF_REPORT_MASTERY_CAP`; both push the due date out (coarse
     /// spaced-repetition backoff). A miss — graded or self-reported — pulls
     /// mastery down and makes the item due again immediately.
-    pub fn record_retrieval_outcome(&mut self, concept_label: &str, outcome: RetrievalOutcome, now_ms: i64) {
-        let Some(item) = self.retrieval_spaced_queue.iter_mut().find(|i| i.concept_label == concept_label) else { return };
+    /// Returns the concept id of the item it updated (`None` if no queued item
+    /// carries that label).
+    pub fn record_retrieval_outcome(&mut self, concept_label: &str, outcome: RetrievalOutcome, now_ms: i64) -> Option<String> {
+        let item = self.retrieval_spaced_queue.iter_mut().find(|i| i.concept_label == concept_label)?;
         match outcome {
             RetrievalOutcome::Correct | RetrievalOutcome::SelfRecalled => {
                 item.mastery_level = if outcome == RetrievalOutcome::Correct {
@@ -294,6 +296,7 @@ impl LearnerCognitiveMemory {
                 item.next_due_at_ms = now_ms;
             }
         }
+        Some(item.concept_id.clone())
     }
 
     /// Items due right now, oldest-due first, capped at

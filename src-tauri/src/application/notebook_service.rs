@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::domain::learner_memory::{LearnerCognitiveMemory, RetrievalOutcome, LOCAL_LEARNER_ID};
 use crate::domain::notebook::{BlockUpdate, ClassRecord, Course, DiagnosticBatteryState, DynamicBlockType};
 use crate::domain::roadmap::RoadmapSession;
+use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, SkillEvidence};
 use crate::error::{AppError, AppResult};
 use crate::notebook_store::NotebookStore;
 use crate::orchestration::Orchestrator;
@@ -105,8 +106,33 @@ impl NotebookService {
         self.store.update_block_contents(&block.document_id, &[BlockUpdate { id: block.id.clone(), content_json: content }])?;
 
         let mut memory = self.store.get_learner_memory(LOCAL_LEARNER_ID)?;
-        memory.record_retrieval_outcome(&label, outcome, crate::notebook_store::now_ms());
-        self.store.save_learner_memory(&memory)
+        let skill_id = memory.record_retrieval_outcome(&label, outcome, crate::notebook_store::now_ms());
+        self.store.save_learner_memory(&memory)?;
+
+        // The queued concept id IS the class (skill) the prompt reviews. The
+        // evidence row is best-effort history; the memory update above is
+        // what the student's scheduling depends on.
+        if let Some(skill_id) = skill_id {
+            if let Ok(Some(ctx)) = self.store.class_generation_context(&skill_id) {
+                let evidence_outcome = if recalled { EvidenceOutcome::SelfRecalled } else { EvidenceOutcome::SelfForgot };
+                let evidence = SkillEvidence::new(&skill_id, &ctx.course.id, EvidenceKind::Retrieval, evidence_outcome).with_block(block_id);
+                if let Err(e) = self.store.append_skill_evidence(&evidence) {
+                    tracing::warn!(error = %e, %skill_id, "failed to append retrieval evidence");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The append-only evidence history of ONE skill (class), oldest first —
+    /// the source of truth any progress/achievement view must point at.
+    pub fn get_skill_evidence(&self, skill_id: &str) -> AppResult<Vec<SkillEvidence>> {
+        self.store.list_skill_evidence(skill_id)
+    }
+
+    /// Evidence for every skill of one course, oldest first.
+    pub fn get_course_evidence(&self, course_id: &str) -> AppResult<Vec<SkillEvidence>> {
+        self.store.list_course_evidence(course_id)
     }
 
     /// Read-only: the learner-memory viewer's data source. Always

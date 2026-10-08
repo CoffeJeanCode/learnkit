@@ -31,6 +31,13 @@ la causa raíz real (heuristic_error_audit) o cumplió los criterios de evaluati
 explicar el mecanismo. Una entrega parcialmente correcta que no toca la causa/criterio central es
 `passed: false`.
 
+`criteria` (OBLIGATORIO, 2 a 6 elementos): un elemento por criterio de `evaluationRubricSummary`
+(hands_on_mission) o por componente de la causa raíz de `modelSolution` (heuristic_error_audit).
+Cada uno lleva `criterion` (qué se pidió, en tus palabras), `met` (true/false) y `evidence`: la
+cita o el hecho concreto de la entrega que lo respalda; si `met` es false, qué falta. `passed`
+debe ser coherente con ellos (true solo si los criterios centrales están cumplidos). Esto se
+guarda como historial de evidencias del estudiante y nunca se le muestra tal cual.
+
 `rationale` es tu justificación interna de la calificación — nunca se muestra al estudiante tal
 cual, así que puedes ser directo y técnico ahí.
 

@@ -452,3 +452,31 @@
         let ctx = store.class_generation_context(&classes[0].id).expect("ctx").expect("present");
         assert_eq!(ctx.class.objective.as_deref(), Some("Explicar el flujo con un ejemplo"));
     }
+
+    #[test]
+    fn skill_evidence_is_append_only_ordered_and_filterable_by_skill_and_course() {
+        use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, RubricCriterion, SkillEvidence};
+        let store = NotebookStore::open_in_memory().expect("open");
+        let rows = [
+            SkillEvidence::new("skill-a", "course-1", EvidenceKind::PracticeGate, EvidenceOutcome::Failed)
+                .with_block("b1")
+                .with_attempt(1, 0)
+                .with_support_level(Some("faded"))
+                .with_rubric(vec![RubricCriterion { criterion: "Nombra la causa raíz".into(), met: false, evidence: None }]),
+            SkillEvidence::new("skill-a", "course-1", EvidenceKind::PracticeGate, EvidenceOutcome::Passed).with_block("b1").with_attempt(2, 1),
+            SkillEvidence::new("skill-b", "course-1", EvidenceKind::Retrieval, EvidenceOutcome::SelfRecalled),
+            SkillEvidence::new("skill-c", "course-2", EvidenceKind::Closure, EvidenceOutcome::Passed),
+        ];
+        for r in &rows {
+            store.append_skill_evidence(r).expect("append");
+        }
+
+        let a = store.list_skill_evidence("skill-a").expect("list");
+        assert_eq!(a.len(), 2);
+        assert_eq!((a[0].outcome, a[1].outcome), (EvidenceOutcome::Failed, EvidenceOutcome::Passed), "insertion order is preserved");
+        assert_eq!(a[0].rubric[0].criterion, "Nombra la causa raíz");
+        assert_eq!(a[0].support_level.as_deref(), Some("faded"));
+        assert_eq!((a[1].attempt_number, a[1].hints_shown), (2, 1));
+        assert_eq!(store.list_course_evidence("course-1").expect("course").len(), 3);
+        assert!(store.list_skill_evidence("nope").expect("none").is_empty());
+    }

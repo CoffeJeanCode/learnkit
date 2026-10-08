@@ -366,7 +366,7 @@
     async fn a_cursor_left_behind_by_a_lost_race_heals_on_reopen_and_the_gate_becomes_submittable() {
         let runner = Arc::new(ScriptedNotebookRunner {
             blocks: Mutex::new(vec![Some(micro_theory()), Some(prediction_gate("B"))].into()),
-            grading: Mutex::new(vec![GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), scaffold: None }].into()),
+            grading: Mutex::new(vec![GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), criteria: vec![], scaffold: None }].into()),
             ..Default::default()
         });
         let service = service_with(runner);
@@ -409,7 +409,7 @@
         // -> content -> gate -> closure, only once both are actually cleared.
         let runner = Arc::new(ScriptedNotebookRunner {
             blocks: Mutex::new(vec![Some(prediction_gate("B")), Some(micro_theory()), Some(hands_on_mission()), Some(closure())].into()),
-            grading: Mutex::new(vec![GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), scaffold: None }].into()),
+            grading: Mutex::new(vec![GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), criteria: vec![], scaffold: None }].into()),
             ..Default::default()
         });
         let service = service_with(runner.clone());
@@ -498,6 +498,18 @@
         let escalation = third.escalation_block.expect("escalation block present on the 3rd fail");
         assert_eq!(escalation.block_type, DynamicBlockType::HandsOnMission);
 
+        // Every attempt left a row; the 3rd is `escalated` (could continue),
+        // never `passed`, and `hints_shown` counts the feedback rounds before it.
+        let evidence = service.get_skill_evidence(&class_id).expect("evidence");
+        let gate_rows: Vec<_> = evidence.iter().filter(|e| e.block_id.as_deref() == Some(gate_id.as_str())).collect();
+        use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome};
+        assert_eq!(
+            gate_rows.iter().map(|e| (e.attempt_number, e.hints_shown, e.outcome)).collect::<Vec<_>>(),
+            vec![(1, 0, EvidenceOutcome::Failed), (2, 1, EvidenceOutcome::Failed), (3, 2, EvidenceOutcome::Escalated)]
+        );
+        assert!(gate_rows.iter().all(|e| e.kind == EvidenceKind::ConceptualGate && e.skill_id == class_id));
+        assert!(gate_rows.iter().all(|e| !e.outcome.is_demonstration()));
+
         // Resubmitting the same escalated gate is rejected — it's locked forever, never retried.
         let err = service
             .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: "B".to_string() })
@@ -527,6 +539,7 @@
                 vec![GateGradingResult {
                     passed: false,
                     rationale: "no menciona la condición".to_string(),
+                    criteria: vec![],
                     scaffold: Some(GateScaffold {
                         scaffold_type: ScaffoldType::SocraticHint,
                         content: "¿Qué tendría que pasar para que el bucle termine?".to_string(),
@@ -553,6 +566,82 @@
             !feedback.to_lowercase().contains("condición del bucle nunca"),
             "scaffold must never quote the model_solution verbatim"
         );
+    }
+
+    #[tokio::test]
+    async fn a_graded_attempt_stores_the_graders_rubric_judgment_and_the_support_level() {
+        use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, RubricCriterion};
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(vec![Some(hands_on_mission())].into()),
+            grading: Mutex::new(
+                vec![GateGradingResult {
+                    passed: true,
+                    rationale: "cumple".to_string(),
+                    criteria: vec![RubricCriterion {
+                        criterion: "Entrega un artefacto verificable".to_string(),
+                        met: true,
+                        evidence: Some("incluye el resultado de la prueba".to_string()),
+                    }],
+                    scaffold: None,
+                }]
+                .into(),
+            ),
+            ..Default::default()
+        });
+        let service = service_with(runner);
+        let class_id = first_class_id(&service);
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start");
+        let block_id = payload.blocks[0].id.clone();
+
+        service
+            .submit_gate_response(None, &block_id, GateSubmission::HandsOnMission { submission_text: "mi solución".to_string() })
+            .await
+            .expect("submit ok");
+
+        let evidence = service.get_skill_evidence(&class_id).expect("evidence");
+        assert_eq!(evidence.len(), 1);
+        let row = &evidence[0];
+        assert_eq!((row.kind, row.outcome), (EvidenceKind::PracticeGate, EvidenceOutcome::Passed));
+        assert_eq!(row.rubric.len(), 1);
+        assert!(row.rubric[0].met);
+        assert_eq!(row.support_level.as_deref(), Some("full"), "first block of the class: no teaching before it");
+        assert_eq!(row.skill_id, class_id);
+    }
+
+    #[test]
+    fn a_retrieval_self_report_moves_memory_and_logs_evidence_once_while_showing_the_block_does_neither() {
+        use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome};
+        let service = service_with(Arc::new(ScriptedNotebookRunner::default()));
+        let class_id = first_class_id(&service);
+        let doc = service.store.ensure_document_shell(&class_id, "Clase").expect("shell");
+        let mut memory = service.store.get_learner_memory(LOCAL_LEARNER_ID).expect("memory");
+        memory.queue_retrieval(&class_id, "Pilas LIFO", 0);
+        service.store.save_learner_memory(&memory).expect("save");
+        let block = service
+            .store
+            .insert_block(
+                &doc.id,
+                DynamicBlockType::SpacedInterleavedRetrieval,
+                &serde_json::json!({"blockType": "spaced_interleaved_retrieval",
+                    "items": [{"conceptLabel": "Pilas LIFO", "prompt": "¿Qué sale primero?", "expectedAnswer": "El último en entrar"}]}),
+                BlockStatus::Ready,
+            )
+            .expect("insert");
+
+        // Merely having the block persisted: no evidence, mastery untouched.
+        assert!(service.get_skill_evidence(&class_id).expect("evidence").is_empty());
+        let before = service.get_learner_memory().expect("memory").retrieval_spaced_queue[0].mastery_level;
+
+        service.record_retrieval_result(&block.id, 0, true).expect("report");
+        service.record_retrieval_result(&block.id, 0, true).expect("repeat is a no-op");
+
+        let evidence = service.get_skill_evidence(&class_id).expect("evidence");
+        assert_eq!(evidence.len(), 1, "a repeated report must not add a second row");
+        assert_eq!((evidence[0].kind, evidence[0].outcome), (EvidenceKind::Retrieval, EvidenceOutcome::SelfRecalled));
+        assert!(!evidence[0].outcome.is_demonstration());
+        let after = service.get_learner_memory().expect("memory").retrieval_spaced_queue[0].mastery_level;
+        assert!(after > before);
+        assert!(service.record_retrieval_result(&block.id, 5, true).is_err(), "out-of-range item");
     }
 
     #[tokio::test]
@@ -830,7 +919,7 @@
                 vec![Some(prediction_gate("B")), Some(micro_theory()), Some(hands_on_mission()), Some(closure())].into(),
             ),
             grading: Mutex::new(
-                vec![GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), scaffold: None }].into(),
+                vec![GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), criteria: vec![], scaffold: None }].into(),
             ),
             closure_feedback: Mutex::new(
                 vec![
