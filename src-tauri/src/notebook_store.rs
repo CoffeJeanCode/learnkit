@@ -996,7 +996,7 @@ pub fn import_syllabus_into_store(
     Ok((course.id, first_class_id, first_class_title))
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 

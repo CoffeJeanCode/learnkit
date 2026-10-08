@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::domain::learner_memory::{LearnerCognitiveMemory, LOCAL_LEARNER_ID};
-use crate::domain::notebook::{BlockUpdate, ClassRecord, Course, DiagnosticBatteryState};
+use crate::domain::learner_memory::{LearnerCognitiveMemory, RetrievalOutcome, LOCAL_LEARNER_ID};
+use crate::domain::notebook::{BlockUpdate, ClassRecord, Course, DiagnosticBatteryState, DynamicBlockType};
 use crate::domain::roadmap::RoadmapSession;
 use crate::error::{AppError, AppResult};
 use crate::notebook_store::NotebookStore;
@@ -78,6 +78,35 @@ impl NotebookService {
 
     pub fn save_diagnostic_battery_answers(&self, course_id: &str, answers: &std::collections::HashMap<String, String>) -> AppResult<()> {
         self.store.save_diagnostic_battery_answers(course_id, answers)
+    }
+
+    /// Records how the student SELF-reported one retrieval prompt (recalled it
+    /// or not, after seeing the answer). Showing the block never touches
+    /// memory — only this does, and only once per item (a repeat call is a
+    /// no-op, so a double click can't inflate mastery). Self-reports are weak
+    /// evidence: see `RetrievalOutcome::SelfRecalled`.
+    pub fn record_retrieval_result(&self, block_id: &str, item_index: usize, recalled: bool) -> AppResult<()> {
+        let block = self.store.get_block(block_id)?.ok_or_else(|| AppError::InvalidInput(format!("block not found: {block_id}")))?;
+        if block.block_type != DynamicBlockType::SpacedInterleavedRetrieval {
+            return Err(AppError::InvalidInput(format!("el bloque {block_id} no es un repaso espaciado")));
+        }
+        let mut content = block.content_json.clone();
+        let item = content
+            .get_mut("items")
+            .and_then(|v| v.as_array_mut())
+            .and_then(|items| items.get_mut(item_index))
+            .ok_or_else(|| AppError::InvalidInput(format!("el repaso {block_id} no tiene el ítem {item_index}")))?;
+        if item.get("reportedOutcome").is_some() {
+            return Ok(());
+        }
+        let label = item.get("conceptLabel").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let outcome = if recalled { RetrievalOutcome::SelfRecalled } else { RetrievalOutcome::SelfForgot };
+        item["reportedOutcome"] = serde_json::to_value(outcome).map_err(|e| AppError::Persistence(e.to_string()))?;
+        self.store.update_block_contents(&block.document_id, &[BlockUpdate { id: block.id.clone(), content_json: content }])?;
+
+        let mut memory = self.store.get_learner_memory(LOCAL_LEARNER_ID)?;
+        memory.record_retrieval_outcome(&label, outcome, crate::notebook_store::now_ms());
+        self.store.save_learner_memory(&memory)
     }
 
     /// Read-only: the learner-memory viewer's data source. Always

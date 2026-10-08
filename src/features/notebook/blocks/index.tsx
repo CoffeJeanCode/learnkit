@@ -164,7 +164,7 @@ export function DynamicNotebookBlock({
         keyConcepts={lessonKeyConcepts}
         answerBearingStrings={lexical.answerBearing}
       >
-        {content.blockType === "spaced_interleaved_retrieval" && <SpacedInterleavedRetrievalBlock content={content} />}
+        {content.blockType === "spaced_interleaved_retrieval" && <SpacedInterleavedRetrievalBlock blockId={block.id} content={content} />}
         {content.blockType === "anchored_micro_theory" && <AnchoredMicroTheoryBlock content={content} />}
         {content.blockType === "declarative_visual_diagram" && <DeclarativeVisualDiagramBlock content={content} />}
         {content.blockType === "branching_scenario_challenge" && (

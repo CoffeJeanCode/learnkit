@@ -62,7 +62,9 @@ export function HandsOnMissionBlock({
         Te evaluarás en: <InlineText text={content.evaluationRubricSummary.join(" · ")} />
       </p>
       {resolved ? (
-        <p className="hint">Superaste este reto.</p>
+        <p className="hint">
+          {block.status === "passed" ? "Reto superado." : "Este reto no se superó todavía: continuaremos con otra estrategia."}
+        </p>
       ) : (
         <>
           <textarea

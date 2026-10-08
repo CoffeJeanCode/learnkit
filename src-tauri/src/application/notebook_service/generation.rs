@@ -200,9 +200,9 @@ impl NotebookService {
         let friction_is_low = memory.friction_is_low();
         if let Ok(Some(gen_ctx)) = self.store.class_generation_context(&document.class_id) {
             if passed {
-                memory.resolve_misconceptions_for(&gen_ctx.class.title);
+                memory.resolve_misconceptions_for_block(block_id);
             } else if let Some(pattern) = misconception_pattern_from_submission(&block, &submission) {
-                memory.record_misconception(&gen_ctx.class.title, &pattern, &iso_date_from_ms(now_ms()));
+                memory.record_misconception(&gen_ctx.class.title, &pattern, &iso_date_from_ms(now_ms()), block_id);
             }
         }
         if let Err(e) = self.store.save_learner_memory(&memory) {
@@ -704,20 +704,9 @@ async fn generate_and_persist_block(
     let content_json = serde_json::to_value(&report.value).map_err(|e| AppError::Persistence(e.to_string()))?;
     let inserted = store.insert_block_if_count(document_id, block_type, &content_json, BlockStatus::Ready, Some(expected_block_count))?;
 
-    // The retrieval block is non-gate content (see
-    // `DynamicBlockType::SpacedInterleavedRetrieval`'s doc comment): reaching
-    // it IS the reactivation, same "no grading needed" philosophy as
-    // `anchored_micro_theory`/`declarative_visual_diagram`. Push each of the
-    // due items' schedule forward now that they've been shown again.
-    if inserted.is_some() && block_type == DynamicBlockType::SpacedInterleavedRetrieval && !due_ids.is_empty() {
-        let mut memory = learner_memory;
-        for id in &due_ids {
-            memory.reactivate_retrieval(id, true, now);
-        }
-        if let Err(e) = store.save_learner_memory(&memory) {
-            tracing::warn!(error = %e, "failed to persist spaced-retrieval reactivation");
-        }
-    }
+    // Showing a `spaced_interleaved_retrieval` block is exposure, not
+    // evidence: mastery only moves once the student reports an outcome
+    // (`NotebookService::record_retrieval_result`).
 
     Ok(inserted)
 }

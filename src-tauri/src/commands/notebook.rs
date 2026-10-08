@@ -112,6 +112,13 @@ pub fn reset_class_notebook(state: State<'_, AppState>, class_id: String) -> App
     state.notebook_service.reset_class_notebook(&class_id)
 }
 
+/// The student's self-report on ONE spaced-retrieval prompt, sent after they
+/// saw the answer. The only path that moves retrieval mastery.
+#[tauri::command]
+pub fn record_retrieval_result(state: State<'_, AppState>, block_id: String, item_index: usize, recalled: bool) -> AppResult<()> {
+    state.notebook_service.record_retrieval_result(&block_id, item_index, recalled)
+}
+
 #[tauri::command]
 pub fn save_notebook_state(state: State<'_, AppState>, notebook_id: String, blocks: Vec<BlockUpdate>) -> AppResult<()> {
     state.notebook_service.save_notebook_state(&notebook_id, &blocks)

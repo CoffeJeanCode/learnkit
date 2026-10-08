@@ -188,6 +188,13 @@ export const getClassNotebookProgress = (class_id: string) =>
 export const submitGateResponse = (block_id: string, submission: GateSubmission) =>
   invoke("submit_gate_response", { blockId: block_id, submission }).then((v) => GateResultSchema.parse(v));
 
+/**
+ * Self-report for one spaced-retrieval prompt, sent AFTER the answer was
+ * revealed. Showing the block never changes mastery; only this does.
+ */
+export const recordRetrievalResult = (block_id: string, item_index: number, recalled: boolean) =>
+  invoke("record_retrieval_result", { blockId: block_id, itemIndex: item_index, recalled }).then(() => undefined);
+
 // Grades the closing block's reflection: the backend persists the submitted
 // text, stores the verdict on the block, and returns the always
 // student-facing feedback. A `passed` verdict is what completes the class.

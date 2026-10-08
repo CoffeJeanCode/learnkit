@@ -428,6 +428,8 @@ export const RetrievalPromptSchema = z.object({
   conceptLabel: z.string(),
   prompt: z.string(),
   expectedAnswer: z.string(),
+  // Set by the backend once the student self-reports; absent until then.
+  reportedOutcome: z.enum(["self_recalled", "self_forgot"]).nullish(),
 });
 
 export const PredictionComparisonSchema = z.object({
