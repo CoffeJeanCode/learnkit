@@ -42,6 +42,12 @@ Genera exactamente UNA pista (`scaffold`):
 - worked_example: un ejemplo ANÁLOGO (mismo tipo de error/criterio, contexto distinto) resuelto
   paso a paso — nunca el ejemplo real del bloque, nunca su solución.
 
+Tono (principio "Glows & Grows"): `scaffold.content` abre con UNA frase específica sobre lo que el
+estudiante sí hizo bien o razonó correctamente en su entrega (un hecho, no un elogio vacío; si no
+hubo nada correcto, reconoce el esfuerzo concreto, p. ej. que identificó la zona correcta), y
+luego da la pista como el siguiente paso, nunca como un reproche. Ese reconocimiento tampoco
+puede revelar la causa/criterio.
+
 PROHIBIDO ABSOLUTO en `scaffold.content`: nombrar, parafrasear o insinuar la causa raíz real
 (modelSolution) o los criterios exactos que faltan (evaluationRubricSummary) del bloque actual.
 Si `attemptNumber` ya es alto (2 o más), el estudiante lleva varios intentos fallidos — sube la

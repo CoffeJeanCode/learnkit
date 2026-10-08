@@ -52,6 +52,11 @@ Coherencia transversal:
   enseñó (no se puede resolver solo con lo ya explicado), o (d) su apoyo no corresponde a
   supportLevel (p. ej. sin pistas en `full`/`guided`, o con la solución regalada en `independent`).
   Nombra el concepto exacto que falta enseñar antes.
+- FLUJO Y MOTIVACIÓN: `scaffolding.challengeBalance` indica el ritmo del estudiante. Es RECHAZO si
+  (a) la apertura del bloque no dice qué logrará el estudiante ni cómo sabrá que lo logró,
+  (b) el reto contradice `momentum` (más difícil con `struggling`, o igual de fácil con `rising`),
+  (c) el ejemplo no tiene relación alguna con el targetGoal (relevancia nula), o (d) el tono es
+  condescendiente, culpabilizador o de adulación vacía. Solo señala lo que realmente falla.
 
 # VEREDICTO
 - `accepted: true` y `feedback: []` si el bloque cumple todo lo anterior.

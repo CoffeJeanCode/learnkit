@@ -75,6 +75,49 @@ impl SupportLevel {
     }
 }
 
+/// Challenge-skill balance read from how the student actually performed on
+/// resolved gates. The paper's motivation rubric asks for "an optimal level
+/// of challenge, between too easy (boring) and too hard (frustrating)":
+/// first-try streaks mean the next block is too easy, escalations mean it was
+/// too hard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Momentum {
+    /// Last 2 resolved gates passed on the first attempt → raise the challenge.
+    Rising,
+    Steady,
+    /// Last resolved gate was escalated or needed 3+ attempts → lower it.
+    Struggling,
+}
+
+impl Momentum {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Rising => "rising",
+            Self::Steady => "steady",
+            Self::Struggling => "struggling",
+        }
+    }
+
+    fn guidance(self) -> &'static str {
+        match self {
+            Self::Rising => {
+                "ritmo_alto: las últimas compuertas salieron al primer intento — el reto anterior fue \
+                 demasiado fácil. Sube la dificultad UN grado (caso con una complicación, dato \
+                 faltante o dos variables) y reconoce el avance con una frase concreta, sin adular."
+            }
+            Self::Steady => {
+                "ritmo_estable: mantén el reto apenas por encima de lo ya demostrado — que exija \
+                 pensar, pero que el estudiante pueda resolverlo con lo que ya vio."
+            }
+            Self::Struggling => {
+                "ritmo_bajo: la última compuerta costó demasiado. Baja el reto: caso más corto y \
+                 concreto, una sola variable, un logro pequeño y alcanzable. Tono de ánimo \
+                 específico (qué sí logró), nunca condescendiente."
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScaffoldingPlan {
     /// 1-based position of the block about to be generated.
@@ -86,6 +129,20 @@ pub struct ScaffoldingPlan {
     pub last_taught_unchecked: bool,
     /// The previous gate was failed — the ladder stepped back one rung.
     pub stepped_back: bool,
+    pub momentum: Momentum,
+    pub gates_passed: usize,
+}
+
+fn momentum_of(blocks: &[NotebookBlock]) -> Momentum {
+    let resolved: Vec<&NotebookBlock> =
+        blocks.iter().filter(|b| b.block_type.is_gate() && matches!(b.status, BlockStatus::Passed | BlockStatus::Escalated)).collect();
+    match resolved.as_slice() {
+        [.., last] if last.status == BlockStatus::Escalated || last.attempt_count >= 3 => Momentum::Struggling,
+        [.., a, b] if a.status == BlockStatus::Passed && b.status == BlockStatus::Passed && a.attempt_count <= 1 && b.attempt_count <= 1 => {
+            Momentum::Rising
+        }
+        _ => Momentum::Steady,
+    }
 }
 
 fn is_teaching(t: DynamicBlockType) -> bool {
@@ -140,6 +197,8 @@ pub fn plan(blocks: &[NotebookBlock], needs_heavy_scaffolding: bool) -> Scaffold
         teaching_blocks,
         last_taught_unchecked: last.is_some_and(|b| is_teaching(b.block_type)),
         stepped_back,
+        momentum: momentum_of(blocks),
+        gates_passed: blocks.iter().filter(|b| b.block_type.is_gate() && b.status == BlockStatus::Passed).count(),
     }
 }
 
@@ -152,6 +211,11 @@ impl ScaffoldingPlan {
             "supportLevel": self.support_level.as_str(),
             "supportGuidance": self.support_level.guidance(),
             "teachingBlocksSoFar": self.teaching_blocks,
+            "challengeBalance": {
+                "momentum": self.momentum.as_str(),
+                "guidance": self.momentum.guidance(),
+            },
+            "gatesPassedSoFar": self.gates_passed,
             "alreadyCovered": covered,
             "rules": "Un solo paso nuevo respecto al bloque anterior. Abre conectando con \
                       bridgeFrom. Una compuerta solo evalúa lo ya enseñado en contentSoFar.",
@@ -239,6 +303,25 @@ mod tests {
         assert_eq!(p.support_level, SupportLevel::Guided);
         let p = plan(&[], true);
         assert_eq!(p.support_level, SupportLevel::Full);
+    }
+
+    fn gate(i: u32, status: BlockStatus, attempts: u32) -> NotebookBlock {
+        block(i, InteractivePredictionGate, status, attempts)
+    }
+
+    #[test]
+    fn two_first_try_passes_raise_the_challenge() {
+        let b = [gate(0, Passed, 1), gate(1, Passed, 1)];
+        assert_eq!(plan(&b, false).momentum, Momentum::Rising);
+        let b = [gate(0, Passed, 2), gate(1, Passed, 1)];
+        assert_eq!(plan(&b, false).momentum, Momentum::Steady);
+    }
+
+    #[test]
+    fn an_escalation_or_a_3rd_attempt_pass_lowers_the_challenge() {
+        assert_eq!(plan(&[gate(0, Escalated, 3)], false).momentum, Momentum::Struggling);
+        assert_eq!(plan(&[gate(0, Passed, 3)], false).momentum, Momentum::Struggling);
+        assert_eq!(plan(&[], false).momentum, Momentum::Steady);
     }
 
     #[test]

@@ -207,6 +207,33 @@ carga cognitiva, chequeo formativo inmediato, reto ni aburrido ni frustrante, ad
    y `guidingQuestions` van de lo más general a lo más específico, y el nivel de reto debe quedar
    apenas por encima de lo ya demostrado — no el techo del tema.
 
+## FLUJO Y MOTIVACIÓN (`scaffolding.challengeBalance`, `gatesPassedSoFar`)
+Meta: que el estudiante entre y se mantenga en estado de flujo — objetivo claro, reto a la medida de
+su nivel y retroalimentación inmediata (rúbrica de motivación y curiosidad de arXiv:2509.13348:
+tono de apoyo, reto óptimo ni aburrido ni frustrante, relevancia personal, autonomía). Reglas:
+1. **Micro-meta visible.** Cada bloque abre diciendo en UNA frase qué logrará el estudiante aquí y
+   cómo sabrá que lo logró ("Al terminar sabrás predecir X sin calcular Y"). Va en el campo de
+   apertura del bloque (`intuitiveHook`, `question`, `challengeStatement`, `scenario`,
+   `instruction`, `title` según el tipo), nunca como relleno aparte.
+2. **Reto a la medida (`challengeBalance.momentum`).** Obedece su `guidance`: `rising` → sube UN
+   grado de dificultad; `steady` → apenas por encima de lo demostrado; `struggling` → caso más
+   corto, una variable, un logro pequeño alcanzable. Nunca saltes dos grados.
+3. **Relevancia.** Ancla el ejemplo, la analogía o el caso en el `targetGoal` del curso y en el
+   `milestone.deliverable` de la semana: que el estudiante vea para qué le sirve ESTO en lo que
+   quiere construir. Un hilo narrativo por clase (un mismo caso/proyecto que va creciendo) vale
+   más que ejemplos sueltos distintos en cada bloque.
+4. **Curiosidad.** Cierra la teoría con una brecha concreta que la siguiente compuerta resuelve
+   ("¿qué crees que pasa si…?"), sin dar la respuesta. Una predicción que el estudiante quiere
+   verificar motiva más que un quiz.
+5. **Progreso y logros pequeños.** Si `gatesPassedSoFar` > 0 o `lastGateOutcome` existe, la apertura
+   reconoce lo logrado con un hecho concreto ("ya predices bien X"), en una frase, sin adulación
+   ni exclamaciones vacías.
+6. **Autonomía.** Cuando el tema lo permita, ofrece una elección real: dos casos para auditar,
+   dos ramas válidas de decisión, o pistas opcionales (`scaffoldingHints`) que el estudiante abre
+   solo si las necesita.
+7. **Tono.** Cálido, directo y en segunda persona; los errores se enmarcan como el siguiente paso
+   de aprendizaje, nunca como fallo del estudiante. Sin sarcasmo ni infantilización.
+
 ## PROHIBIDO re-explicar lo ya enseñado
 Antes de redactar, lee `contentSoFar`. Si un bloque anterior — de cualquier tipo — ya explicó una
 regla, analogía, mecanismo o ejemplo, NO lo vuelvas a explicar con otras palabras: eso gasta la
