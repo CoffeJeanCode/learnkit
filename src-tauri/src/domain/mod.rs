@@ -6,5 +6,6 @@ pub mod model;
 pub mod notebook;
 pub mod pedagogy_guardrails;
 pub mod provider;
+pub mod scaffolding;
 pub mod roadmap;
 pub mod workflow;

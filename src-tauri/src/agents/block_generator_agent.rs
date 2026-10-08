@@ -180,6 +180,33 @@ BLOQUES abajo). El diagrama separado ya resuelve solapamiento y anclaje geométr
 ORO DE GEOMETRÍA, GROUNDING Y COLISIONES más abajo); duplicar esa lógica dentro de la microteoría
 solo genera el mismo problema dos veces.
 
+## ANDAMIAJE GRADUAL — PROHIBIDO EL SALTO DE CONOCIMIENTO (`scaffolding`)
+El input trae `scaffolding`, calculado por el sistema: `supportLevel` (full → guided → faded →
+independent), `bridgeFrom` (el bloque anterior), `alreadyCovered` y, a veces, `nextShouldCheck` o
+`steppedBack`. Un estudiante real reportó que el conocimiento crecía de golpe entre bloques; estas
+reglas existen para eso (principios de arXiv:2509.13348: activar conocimiento previo, controlar la
+carga cognitiva, chequeo formativo inmediato, reto ni aburrido ni frustrante, adaptar a las brechas):
+1. **Un solo paso nuevo por bloque.** Cada bloque añade UNA idea o UN grado de dificultad sobre el
+   anterior, nunca ambos. Máximo 1 término técnico nuevo por bloque; los demás ya deben estar en
+   `contentSoFar`.
+2. **Puente explícito.** La primera frase del bloque conecta con `bridgeFrom` ("Ya viste que X; ahora
+   miramos Y"). En el primer bloque de la clase, activa un conocimiento previo cotidiano del
+   estudiante (según `diagnosticProfile`/nivel de entrada) antes de nombrar nada técnico.
+3. **Una compuerta SOLO evalúa lo ya enseñado.** Antes de generar una compuerta, verifica que su
+   pregunta/tarea se pueda resolver únicamente con lo que dice `contentSoFar`. Si exige un concepto,
+   término o paso que ningún bloque anterior cubrió, NO la generes: enseña ese paso primero.
+4. **Chequeo antes de apilar.** Si viene `nextShouldCheck`, el bloque siguiente comprueba lo recién
+   enseñado (compuerta chica o spaced check) en vez de añadir más teoría. Máximo 2 bloques de
+   teoría/diagrama seguidos sin un chequeo.
+5. **Respeta `supportLevel`.** `full`: ejemplo resuelto, nada que producir. `guided`: un paso
+   pequeño con pistas. `faded`: caso nuevo, pistas a demanda (menos que antes). `independent`:
+   transferencia sin pistas. Atenúa UN escalón por bloque, nunca saltes de `full` a `independent`.
+6. **`steppedBack`:** el estudiante falló; mismo concepto, más apoyo (ejemplo resuelto o analogía
+   más concreta), cero material nuevo.
+7. **Dificultad dentro del bloque:** en `hands_on_mission` y `heuristic_error_audit`, `scaffoldingHints`
+   y `guidingQuestions` van de lo más general a lo más específico, y el nivel de reto debe quedar
+   apenas por encima de lo ya demostrado — no el techo del tema.
+
 ## PROHIBIDO re-explicar lo ya enseñado
 Antes de redactar, lee `contentSoFar`. Si un bloque anterior — de cualquier tipo — ya explicó una
 regla, analogía, mecanismo o ejemplo, NO lo vuelvas a explicar con otras palabras: eso gasta la
