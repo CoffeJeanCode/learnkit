@@ -50,8 +50,11 @@ export interface VersionFiles {
 }
 
 const JSON_VERSION = /("version"\s*:\s*")(\d+\.\d+\.\d+)(")/;
-const CARGO_TOML_VERSION = /(\[package\][^\[]*?\nversion\s*=\s*")(\d+\.\d+\.\d+)(")/;
-const CARGO_LOCK_VERSION = /(\[\[package\]\]\nname = "learnkit"\nversion = ")(\d+\.\d+\.\d+)(")/;
+// Line endings: on Windows runners git checks files out with CRLF, so every
+// pattern spanning lines accepts `\r?\n` (and replaces only the number, so the
+// file keeps whatever endings it had).
+const CARGO_TOML_VERSION = /(\[package\][^\[]*?\r?\nversion\s*=\s*")(\d+\.\d+\.\d+)(")/;
+const CARGO_LOCK_VERSION = /(\[\[package\]\]\r?\nname = "learnkit"\r?\nversion = ")(\d+\.\d+\.\d+)(")/;
 
 function read(text: string, re: RegExp, label: string): string {
   const m = re.exec(text);
