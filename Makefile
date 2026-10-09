@@ -58,6 +58,10 @@ dist-linux: ## Linux .deb + AppImage inside Docker (Tauri cannot cross-compile)
 test: typecheck ## tsc --noEmit + UI render checks + cargo test
 	bun run scripts/check-rendering.tsx
 	bun run scripts/check-mermaid-repair.ts
+	bun run scripts/check-capability-map.ts
+	bun run scripts/check-study-presentation.ts
+	bun run scripts/check-release.ts
+	bun run scripts/check-version.ts
 	cargo test --manifest-path $(MANIFEST)
 
 clean: ## remove build output (dist/ + src-tauri/target)

@@ -12,12 +12,39 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
+  # Never publish from a tag that does not name the version inside the files:
+  # the updater compares `tauri.conf.json`'s version against `latest.json`, so
+  # a mismatch would ship an installer that offers itself as an update forever
+  # (or never offers one).
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Tag matches the version in every file
+        run: bun scripts/check-version.ts "${{ github.ref_name }}"
+
   release:
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
-        platform: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - platform: ubuntu-latest
+            args: ""
+          - platform: windows-latest
+            args: ""
+          # Two separate macOS builds (Apple Silicon + Intel): the updater
+          # serves each CPU its own bundle from the same latest.json.
+          - platform: macos-latest
+            args: "--target aarch64-apple-darwin"
+          - platform: macos-latest
+            args: "--target x86_64-apple-darwin"
 
     runs-on: ${{ matrix.platform }}
 
@@ -28,10 +55,12 @@ jobs:
         uses: oven-sh/setup-bun@v2
 
       - name: Install frontend dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - name: Cache Rust build
         uses: swatinem/rust-cache@v2
@@ -66,6 +95,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "LearnKit ${{ github.ref_name }}"
+          args: ${{ matrix.args }}
           releaseBody: >-
             Instaladores de LearnKit ${{ github.ref_name }}.
             Desde la app: 🔄 Actualizaciones en la barra superior, o el aviso

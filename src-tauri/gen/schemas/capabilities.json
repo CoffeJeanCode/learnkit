@@ -1,1 +1,1 @@
-{"default":{"identifier":"default","description":"Default capability for the main window.","local":true,"windows":["main"],"permissions":["core:event:default"]}}
+{"default":{"identifier":"default","description":"Default capability for the main window: events, plus the updater and the relaunch it needs.","local":true,"windows":["main"],"permissions":["core:event:default","updater:default","process:allow-restart"]}}

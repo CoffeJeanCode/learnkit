@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "release": "bun scripts/release.ts",
+    "check:version": "bun scripts/check-version.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "^4.0.114",
