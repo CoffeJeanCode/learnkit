@@ -142,6 +142,10 @@ pub struct SkillEvidence {
     /// constraints, no hints) — the only evidence "applied" is built from.
     #[serde(default)]
     pub is_transfer: bool,
+    /// Study version (`domain::study`) in force when the row was written —
+    /// stamped by the store, so a mid-study switch stays visible in the data.
+    #[serde(default)]
+    pub variant: Option<String>,
     pub created_at_ms: i64,
 }
 
@@ -161,6 +165,7 @@ impl SkillEvidence {
             support_level: None,
             rubric: Vec::new(),
             is_transfer: false,
+            variant: None,
             created_at_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)

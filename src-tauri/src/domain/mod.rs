@@ -9,6 +9,7 @@ pub mod pedagogy_guardrails;
 pub mod provider;
 pub mod scaffolding;
 pub mod skill_evidence;
+pub mod study;
 pub mod skill_status;
 pub mod roadmap;
 pub mod workflow;

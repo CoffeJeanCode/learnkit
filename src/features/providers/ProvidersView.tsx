@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useProviders } from "../../stores/providers";
+import { StudySettingsCard } from "../study/StudySettingsCard";
 import type { ModelInfo } from "../../types";
 
 // Module-level stable fallbacks: selectors must return referentially stable
@@ -184,6 +185,7 @@ export function ProvidersView() {
           <ProviderCard key={p.id} id={p.id} />
         ))}
       </div>
+      <StudySettingsCard />
     </div>
   );
 }

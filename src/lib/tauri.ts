@@ -348,6 +348,25 @@ export interface CapabilityMap {
   totals: { skills: number; solved: number; retained: number; applied: number };
 }
 
+// --- Study switch -------------------------------------------------------------
+
+export type StudyVariantMode = "random" | "gamified" | "plain";
+
+export interface StudySettings {
+  participantId: string;
+  mode: StudyVariantMode;
+  /** The version actually in force. */
+  variant: "gamified" | "plain";
+  randomAssignment: "gamified" | "plain" | null;
+  assignedAtMs: number | null;
+}
+
+export const getStudySettings = () => invoke<StudySettings>("get_study_settings");
+export const setStudyVariantMode = (mode: StudyVariantMode) => invoke<StudySettings>("set_study_variant_mode", { mode });
+export const logStudyEvent = (kind: "app_opened") => invoke<void>("log_study_event", { kind });
+/** Writes the participant's report into the app data folder; resolves to its path. */
+export const exportStudyReport = () => invoke<string>("export_study_report");
+
 export const getCapabilityMap = (course_id: string) => invoke<CapabilityMap>("get_capability_map", { courseId: course_id });
 
 // --- Lexical assistant (popover) --------------------------------------------

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { SubmitGate } from "./index";
+import { usePresentation } from "../../../stores/study";
 import { InlineText, RichText } from "./RichText";
 import { StaticVisual } from "./StaticVisual";
 
@@ -21,6 +22,7 @@ export function HandsOnMissionBlock({
   isActive: boolean;
   onSubmitGate: SubmitGate;
 }) {
+  const { showTransferFraming } = usePresentation();
   const [submission, setSubmission] = useState("");
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<{ passed: boolean; feedback: string | null } | null>(null);
@@ -43,7 +45,7 @@ export function HandsOnMissionBlock({
 
   return (
     <div className="notebook-block-body">
-      {content.isTransfer && (
+      {content.isTransfer && showTransferFraming && (
         <p className="hint">
           <strong>Reto de transferencia:</strong> el mismo concepto en un caso nuevo, sin pistas.
         </p>

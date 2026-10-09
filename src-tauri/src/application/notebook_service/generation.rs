@@ -21,6 +21,7 @@ use crate::domain::notebook::{
 };
 use crate::domain::pedagogy_guardrails::{block_guardrail_violations, needs_llm_critic};
 use crate::domain::scaffolding;
+use crate::domain::study::StudyEventKind;
 use crate::domain::skill_status::MIN_RETENTION_INTERVAL_MS;
 use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, RubricCriterion, SkillEvidence};
 use crate::error::{AppError, AppResult};
@@ -76,6 +77,7 @@ impl NotebookService {
             .class_generation_context(class_id)?
             .ok_or_else(|| AppError::InvalidInput(format!("class not found: {class_id}")))?;
         self.ensure_prior_classes_complete(&ctx.class, &ctx.milestone.course_id)?;
+        self.log_study_event(StudyEventKind::ClassOpened, Some(class_id));
         let doc = self.store.ensure_document_shell(class_id, &ctx.class.title)?;
 
         if let Some(existing) = self.load_reconciled(class_id)? {

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNotebookNav } from "../stores/notebook";
 import { displaySessionTitle, useRoadmap } from "../stores/roadmap";
+import { usePresentation } from "../stores/study";
 import { useUi } from "../stores/ui";
 import { useUpdater } from "../stores/updater";
 import { SessionsDrawer } from "./SessionsDrawer";
@@ -26,6 +27,7 @@ export function Header() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [openingClasses, setOpeningClasses] = useState(false);
 
+  const { showCapabilityMap } = usePresentation();
   const inSettings = view === "providers";
   const inMemory = view === "learner-memory";
   const inCapabilities = view === "capabilities";
@@ -139,9 +141,11 @@ export function Header() {
           >
             {updateLabel}
           </button>
-          <button onClick={() => setView(inCapabilities ? lastMainView : "capabilities")}>
-            {inCapabilities ? "← Volver" : "🗺 Capacidades"}
-          </button>
+          {(showCapabilityMap || inCapabilities) && (
+            <button onClick={() => setView(inCapabilities ? lastMainView : "capabilities")}>
+              {inCapabilities ? "← Volver" : "🗺 Capacidades"}
+            </button>
+          )}
           <button onClick={() => setView(inMemory ? lastMainView : "learner-memory")}>
             {inMemory ? "← Volver" : "🧠 Memoria"}
           </button>

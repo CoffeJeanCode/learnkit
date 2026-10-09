@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::domain::learner_memory::{LearnerCognitiveMemory, RetrievalOutcome, LOCAL_LEARNER_ID};
 use crate::domain::notebook::{BlockUpdate, ClassRecord, Course, DiagnosticBatteryState, DynamicBlockType, NotebookBlock};
 use crate::domain::capability_map::{self, CapabilityMap};
+use crate::domain::study::{self, StudyEventKind, StudyReport, StudySettings, VariantMode};
 use crate::domain::skill_status::{self, SkillStatus};
 use crate::domain::roadmap::RoadmapSession;
 use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, RubricCriterion, SkillEvidence};
@@ -183,9 +184,40 @@ impl NotebookService {
         Ok(())
     }
 
+    /// The study switch in force (creating the participant id and the random
+    /// assignment on first use). Read by the frontend to decide what to SHOW;
+    /// it must never reach generation or grading (see `domain::study`).
+    pub fn get_study_settings(&self) -> AppResult<StudySettings> {
+        self.store.study_settings()
+    }
+
+    /// Who decides the version: `random` (default, assigned once) or a manual
+    /// override by whoever runs the study.
+    pub fn set_study_variant_mode(&self, mode: VariantMode) -> AppResult<StudySettings> {
+        self.store.set_study_mode(mode)
+    }
+
+    /// Best-effort activity log for the engagement metrics.
+    pub fn log_study_event(&self, kind: StudyEventKind, class_id: Option<&str>) {
+        if let Err(e) = self.store.append_study_event(kind, class_id) {
+            tracing::warn!(error = %e, kind = kind.as_str(), "failed to log study event");
+        }
+    }
+
+    /// Everything this installation exports for the analysis.
+    pub fn export_study_report(&self) -> AppResult<StudyReport> {
+        Ok(study::build_report(
+            self.store.study_settings()?,
+            self.store.list_all_skill_evidence()?,
+            self.store.list_study_events()?,
+            crate::notebook_store::now_ms(),
+        ))
+    }
+
     /// The capability map of one course: one entry per skill (class), each
     /// with its derived status and the evidence rows behind it.
     pub fn get_capability_map(&self, course_id: &str) -> AppResult<CapabilityMap> {
+        self.log_study_event(StudyEventKind::CapabilityMapOpened, None);
         let classes = self.store.list_classes_for_course(course_id)?;
         let milestones: std::collections::HashMap<String, (u16, String)> =
             self.store.list_milestones_for_course(course_id)?.into_iter().map(|(id, week, title)| (id, (week, title))).collect();

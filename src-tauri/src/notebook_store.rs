@@ -18,6 +18,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
 use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, SkillEvidence};
+use crate::domain::study::{resolve_variant, StudyEvent, StudyEventKind, StudySettings, StudyVariant, VariantMode};
 use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{
     BlockStatus, BlockUpdate, ClassRecord, Course, DiagnosticBattery, DiagnosticBatteryState, DynamicBlockType,
@@ -97,10 +98,26 @@ CREATE TABLE IF NOT EXISTS skill_evidence (
     support_level TEXT,
     rubric_json TEXT NOT NULL DEFAULT '[]',
     is_transfer INTEGER NOT NULL DEFAULT 0,
+    variant TEXT,
     created_at_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_skill_evidence_skill ON skill_evidence(skill_id, created_at_ms);
 CREATE INDEX IF NOT EXISTS idx_skill_evidence_course ON skill_evidence(course_id, created_at_ms);
+
+-- Study switch (`domain::study`): plain key/value settings, and an
+-- append-only activity log used for the engagement metrics.
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS study_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    class_id TEXT,
+    variant TEXT,
+    at_ms INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS learner_memory (
     learner_id TEXT PRIMARY KEY,
@@ -117,6 +134,18 @@ fn migrate_add_evidence_transfer_column(conn: &Connection) -> AppResult<()> {
     drop(stmt);
     if !has_column {
         conn.execute("ALTER TABLE skill_evidence ADD COLUMN is_transfer INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+    Ok(())
+}
+
+/// Same story for `variant` (study version stamp). Old rows stay `NULL`:
+/// they predate the experiment and belong to no arm.
+fn migrate_add_evidence_variant_column(conn: &Connection) -> AppResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(skill_evidence)")?;
+    let has_column = stmt.query_map([], |row| row.get::<_, String>(1))?.collect::<Result<Vec<_>, _>>()?.iter().any(|n| n == "variant");
+    drop(stmt);
+    if !has_column {
+        conn.execute("ALTER TABLE skill_evidence ADD COLUMN variant TEXT", [])?;
     }
     Ok(())
 }
@@ -320,6 +349,7 @@ impl NotebookStore {
         migrate_add_block_gating_columns(&conn)?;
         conn.execute_batch(SCHEMA_SQL)?;
         migrate_add_evidence_transfer_column(&conn)?;
+        migrate_add_evidence_variant_column(&conn)?;
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
@@ -662,14 +692,91 @@ impl NotebookStore {
         Ok(())
     }
 
+    // --- Study switch ---------------------------------------------------------
+
+    fn setting_get(conn: &Connection, key: &str) -> AppResult<Option<String>> {
+        Ok(conn.query_row("SELECT value FROM app_settings WHERE key = ?1", params![key], |r| r.get(0)).optional()?)
+    }
+
+    fn setting_set(conn: &Connection, key: &str, value: &str) -> AppResult<()> {
+        conn.execute("INSERT INTO app_settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![key, value])?;
+        Ok(())
+    }
+
+    /// The study settings in force, creating on first use: a pseudonymous
+    /// participant id and — when the mode is `random` — ONE random assignment
+    /// that is then kept forever (see `domain::study::resolve_variant`).
+    pub fn study_settings(&self) -> AppResult<StudySettings> {
+        let conn = self.lock();
+        let participant_id = match Self::setting_get(&conn, "study.participant_id")? {
+            Some(id) => id,
+            None => {
+                let id = Uuid::new_v4().to_string();
+                Self::setting_set(&conn, "study.participant_id", &id)?;
+                id
+            }
+        };
+        let mode = Self::setting_get(&conn, "study.mode")?.and_then(|m| VariantMode::parse(&m)).unwrap_or(VariantMode::Random);
+        let stored_random = Self::setting_get(&conn, "study.random_variant")?.and_then(|v| StudyVariant::parse(&v));
+        let mut assigned_at_ms = Self::setting_get(&conn, "study.assigned_at_ms")?.and_then(|v| v.parse::<i64>().ok());
+
+        // The coin is only used when an assignment is actually needed.
+        let coin = Uuid::new_v4().as_bytes()[0] & 1 == 1;
+        let (variant, fresh) = resolve_variant(mode, stored_random, coin);
+        let mut random_assignment = stored_random;
+        if let Some(v) = fresh {
+            let now = now_ms();
+            Self::setting_set(&conn, "study.random_variant", v.as_str())?;
+            Self::setting_set(&conn, "study.assigned_at_ms", &now.to_string())?;
+            random_assignment = Some(v);
+            assigned_at_ms = Some(now);
+        }
+        Ok(StudySettings { participant_id, mode, variant, random_assignment, assigned_at_ms })
+    }
+
+    /// Sets who decides the variant. Switching to `random` keeps any earlier
+    /// random assignment (it is never re-rolled).
+    pub fn set_study_mode(&self, mode: VariantMode) -> AppResult<StudySettings> {
+        Self::setting_set(&self.lock(), "study.mode", mode.as_str())?;
+        self.study_settings()
+    }
+
+    /// Appends one activity event, stamped with the variant in force.
+    pub fn append_study_event(&self, kind: StudyEventKind, class_id: Option<&str>) -> AppResult<()> {
+        let variant = self.study_settings()?.variant.as_str().to_string();
+        self.lock().execute(
+            "INSERT INTO study_events (kind, class_id, variant, at_ms) VALUES (?1, ?2, ?3, ?4)",
+            params![kind.as_str(), class_id, variant, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_study_events(&self) -> AppResult<Vec<StudyEvent>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT kind, class_id, variant, at_ms FROM study_events ORDER BY id ASC")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, i64>(3)?)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (kind, class_id, variant, at_ms) = r?;
+            if let Some(kind) = StudyEventKind::parse(&kind) {
+                out.push(StudyEvent { kind, class_id, variant, at_ms });
+            }
+        }
+        Ok(out)
+    }
+
     // --- Skill evidence (append-only) ---------------------------------------
 
     pub fn append_skill_evidence(&self, e: &SkillEvidence) -> AppResult<()> {
+        // Stamp the study version in force NOW (resolved before taking the
+        // connection lock; best-effort — an unreadable setting just leaves it
+        // unstamped rather than losing the evidence row).
+        let variant = e.variant.clone().or_else(|| self.study_settings().ok().map(|s| s.variant.as_str().to_string()));
         let rubric = serde_json::to_string(&e.rubric).map_err(|err| AppError::Persistence(err.to_string()))?;
         self.lock().execute(
             "INSERT INTO skill_evidence
-                (id, skill_id, course_id, block_id, kind, outcome, attempt_number, hints_shown, support_level, rubric_json, is_transfer, created_at_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                (id, skill_id, course_id, block_id, kind, outcome, attempt_number, hints_shown, support_level, rubric_json, is_transfer, variant, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 e.id,
                 e.skill_id,
@@ -682,6 +789,7 @@ impl NotebookStore {
                 e.support_level,
                 rubric,
                 e.is_transfer,
+                variant,
                 e.created_at_ms
             ],
         )?;
@@ -693,6 +801,13 @@ impl NotebookStore {
         self.query_skill_evidence("WHERE skill_id = ?1", skill_id)
     }
 
+    /// Every evidence row of the installation (all courses), oldest first.
+    pub fn list_all_skill_evidence(&self) -> AppResult<Vec<SkillEvidence>> {
+        // `query_skill_evidence` always binds one argument; this filter is
+        // always true and only uses it.
+        self.query_skill_evidence("WHERE ?1 <> ''", "all")
+    }
+
     /// Every evidence row of one course (all its skills), oldest first.
     pub fn list_course_evidence(&self, course_id: &str) -> AppResult<Vec<SkillEvidence>> {
         self.query_skill_evidence("WHERE course_id = ?1", course_id)
@@ -701,7 +816,7 @@ impl NotebookStore {
     fn query_skill_evidence(&self, filter: &str, arg: &str) -> AppResult<Vec<SkillEvidence>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(&format!(
-            "SELECT id, skill_id, course_id, block_id, kind, outcome, attempt_number, hints_shown, support_level, rubric_json, is_transfer, created_at_ms
+            "SELECT id, skill_id, course_id, block_id, kind, outcome, attempt_number, hints_shown, support_level, rubric_json, is_transfer, variant, created_at_ms
              FROM skill_evidence {filter} ORDER BY created_at_ms ASC, rowid ASC"
         ))?;
         let rows = stmt.query_map(params![arg], |row| {
@@ -723,7 +838,8 @@ impl NotebookStore {
                     support_level: row.get(8)?,
                     rubric: serde_json::from_str(&rubric_json).unwrap_or_default(),
                     is_transfer: row.get(10)?,
-                    created_at_ms: row.get(11)?,
+                    variant: row.get(11)?,
+                    created_at_ms: row.get(12)?,
                 },
                 kind,
                 outcome,

@@ -9,7 +9,9 @@ import { ProvidersView } from "./features/providers/ProvidersView";
 import { RoadmapView } from "./features/roadmap/RoadmapView";
 import { readActiveSessionId, useRoadmap } from "./stores/roadmap";
 import { useUi } from "./stores/ui";
+import { useStudy, usePresentation } from "./stores/study";
 import { useUpdater } from "./stores/updater";
+import { logStudyEvent } from "./lib/tauri";
 import "./styles.css";
 
 // Single-column layout: top bar (brand + the active session's section tabs)
@@ -26,12 +28,20 @@ export default function App() {
   const setView = useUi((s) => s.setView);
   const openSession = useRoadmap((s) => s.openSession);
   const checkOnStartup = useUpdater((s) => s.checkOnStartup);
+  const loadStudy = useStudy((s) => s.load);
+  const { showCapabilityMap } = usePresentation();
 
   // Check for a new version once on entry. Silent by design: no release
   // published yet, or starting offline, must not surface anything.
   useEffect(() => {
     void checkOnStartup();
   }, [checkOnStartup]);
+
+  // Study switch: load the version in force and log the app opening (best-effort).
+  useEffect(() => {
+    void loadStudy();
+    void logStudyEvent("app_opened").catch(() => undefined);
+  }, [loadStudy]);
 
   useEffect(() => {
     let cancelled = false;
@@ -58,7 +68,7 @@ export default function App() {
           <ProvidersView />
         ) : view === "learner-memory" ? (
           <LearnerMemoryView />
-        ) : view === "capabilities" ? (
+        ) : view === "capabilities" && showCapabilityMap ? (
           <CapabilityMapView />
         ) : view === "notebook" ? (
           <ClassNotebookView />
