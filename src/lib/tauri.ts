@@ -293,6 +293,63 @@ export interface LearnerCognitiveMemory {
 
 export const getLearnerMemory = () => invoke<LearnerCognitiveMemory>("get_learner_memory");
 
+// --- Capability map ----------------------------------------------------------
+//
+// Mirrors `domain::capability_map` / `domain::skill_status` /
+// `domain::skill_evidence` in Rust (camelCase fields, snake_case enum values).
+// Everything here is DERIVED from the append-only evidence history.
+
+export interface SkillEvidence {
+  id: string;
+  skillId: string;
+  courseId: string;
+  blockId: string | null;
+  kind: "conceptual_gate" | "practice_gate" | "retrieval" | "closure";
+  outcome: "passed" | "failed" | "escalated" | "self_recalled" | "self_forgot";
+  attemptNumber: number;
+  hintsShown: number;
+  supportLevel: string | null;
+  rubric: { criterion: string; met: boolean; evidence?: string | null }[];
+  isTransfer: boolean;
+  createdAtMs: number;
+}
+
+export interface Achievement {
+  achieved: boolean;
+  achievedAtMs: number | null;
+  evidenceIds: string[];
+}
+
+export interface SkillStatus {
+  skillId: string;
+  solved: Achievement;
+  solvedWithAids: boolean | null;
+  retained: Achievement;
+  retainedAfterDays: number | null;
+  applied: Achievement;
+  attemptsRecorded: number;
+}
+
+export interface CapabilityEntry {
+  skillId: string;
+  title: string;
+  objective: string | null;
+  weekNumber: number;
+  milestoneTitle: string;
+  classComplete: boolean;
+  status: SkillStatus;
+  nextRetrievalAtMs: number | null;
+  evidence: SkillEvidence[];
+}
+
+export interface CapabilityMap {
+  courseId: string;
+  entries: CapabilityEntry[];
+  totals: { skills: number; solved: number; retained: number; applied: number };
+}
+
+export const getCapabilityMap = (course_id: string) => invoke<CapabilityMap>("get_capability_map", { courseId: course_id });
+
 // --- Lexical assistant (popover) --------------------------------------------
 //
 // One isolated question at a time: only `term`/`fragmentContext`/

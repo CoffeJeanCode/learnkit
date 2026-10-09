@@ -463,6 +463,14 @@ impl NotebookStore {
 
     /// Every class for a course, ordered by `order_index` — what the
     /// frontend uses to link "open notebook" per week right after import.
+    /// `(milestone id, week number, title)` for every milestone of a course.
+    pub fn list_milestones_for_course(&self, course_id: &str) -> AppResult<Vec<(String, u16, String)>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT id, week_number, title FROM syllabus_milestones WHERE course_id = ?1 ORDER BY week_number ASC")?;
+        let rows = stmt.query_map(params![course_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn list_classes_for_course(&self, course_id: &str) -> AppResult<Vec<ClassRecord>> {
         // Query under the lock, completion checks AFTER dropping it —
         // `is_class_complete` re-enters `self.lock()` and the mutex isn't

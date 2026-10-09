@@ -6,6 +6,7 @@ use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{BlockUpdate, ClassRecord, ClosureFeedback, Course, DiagnosticBatteryState, GateResult, GateSubmission, NotebookPayload};
 use crate::application::notebook_service::RetrievalAnswerResult;
 use crate::domain::skill_evidence::SkillEvidence;
+use crate::domain::capability_map::CapabilityMap;
 use crate::domain::skill_status::SkillStatus;
 use crate::error::AppResult;
 use crate::state::AppState;
@@ -132,6 +133,13 @@ pub async fn submit_retrieval_answer(
 #[tauri::command]
 pub fn reveal_retrieval_answer(state: State<'_, AppState>, block_id: String, item_index: usize) -> AppResult<String> {
     state.notebook_service.reveal_retrieval_answer(&block_id, item_index)
+}
+
+/// The capability map of a course: per skill, what the student has
+/// demonstrated and the evidence behind each achievement.
+#[tauri::command]
+pub fn get_capability_map(state: State<'_, AppState>, course_id: String) -> AppResult<CapabilityMap> {
+    state.notebook_service.get_capability_map(&course_id)
 }
 
 /// Derived solved/retained/applied status of every skill of a course.

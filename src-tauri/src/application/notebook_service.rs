@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::domain::learner_memory::{LearnerCognitiveMemory, RetrievalOutcome, LOCAL_LEARNER_ID};
 use crate::domain::notebook::{BlockUpdate, ClassRecord, Course, DiagnosticBatteryState, DynamicBlockType, NotebookBlock};
+use crate::domain::capability_map::{self, CapabilityMap};
 use crate::domain::skill_status::{self, SkillStatus};
 use crate::domain::roadmap::RoadmapSession;
 use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, RubricCriterion, SkillEvidence};
@@ -180,6 +181,17 @@ impl NotebookService {
             }
         }
         Ok(())
+    }
+
+    /// The capability map of one course: one entry per skill (class), each
+    /// with its derived status and the evidence rows behind it.
+    pub fn get_capability_map(&self, course_id: &str) -> AppResult<CapabilityMap> {
+        let classes = self.store.list_classes_for_course(course_id)?;
+        let milestones: std::collections::HashMap<String, (u16, String)> =
+            self.store.list_milestones_for_course(course_id)?.into_iter().map(|(id, week, title)| (id, (week, title))).collect();
+        let evidence = self.store.list_course_evidence(course_id)?;
+        let memory = self.store.get_learner_memory(LOCAL_LEARNER_ID)?;
+        Ok(capability_map::build(course_id, &classes, &milestones, &evidence, &memory))
     }
 
     /// Derived "solved / retained / applied" status of every skill of one

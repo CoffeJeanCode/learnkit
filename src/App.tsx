@@ -3,6 +3,7 @@ import { Header } from "./components/Header";
 import { SessionView } from "./components/SessionView";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { ClassNotebookView } from "./features/notebook/ClassNotebookView";
+import { CapabilityMapView } from "./features/capabilities/CapabilityMapView";
 import { LearnerMemoryView } from "./features/learner-memory/LearnerMemoryView";
 import { ProvidersView } from "./features/providers/ProvidersView";
 import { RoadmapView } from "./features/roadmap/RoadmapView";
@@ -57,6 +58,8 @@ export default function App() {
           <ProvidersView />
         ) : view === "learner-memory" ? (
           <LearnerMemoryView />
+        ) : view === "capabilities" ? (
+          <CapabilityMapView />
         ) : view === "notebook" ? (
           <ClassNotebookView />
         ) : view === "roadmap" || view === "plan" ? (

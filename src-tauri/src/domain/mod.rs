@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod capability_map;
 pub mod learner_memory;
 pub mod lesson_composition;
 pub mod message;

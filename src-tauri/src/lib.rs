@@ -88,6 +88,7 @@ pub fn run() {
             commands::notebook::submit_retrieval_answer,
             commands::notebook::reveal_retrieval_answer,
             commands::notebook::get_course_skill_status,
+            commands::notebook::get_capability_map,
             commands::notebook::get_skill_evidence,
             commands::notebook::get_course_evidence,
             commands::notebook::grade_closure_reflection,

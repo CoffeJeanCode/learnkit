@@ -59,6 +59,9 @@ pub struct SkillStatus {
     /// `Some(true)` when the first solving attempt needed a retry or hints.
     pub solved_with_aids: Option<bool>,
     pub retained: Achievement,
+    /// Whole days between the first demonstration and the first qualifying
+    /// retrieval — what "recordaste el concepto después de N días" says.
+    pub retained_after_days: Option<i64>,
     pub applied: Achievement,
     /// Evidence that moved nothing yet: attempts and retrievals that did not
     /// qualify. Lets a UI say "intentado" without claiming mastery.
@@ -104,6 +107,7 @@ pub fn derive_status(skill_id: &str, evidence: &[SkillEvidence]) -> SkillStatus 
         skill_id: skill_id.to_string(),
         solved_with_aids: solved_rows.first().map(|r| r.attempt_number > 1 || r.hints_shown > 0),
         solved: Achievement::from_rows(&solved_rows),
+        retained_after_days: retained_rows.first().zip(anchor).map(|(r, a)| (r.created_at_ms - a) / MIN_RETENTION_INTERVAL_MS),
         retained: Achievement::from_rows(&retained_rows),
         applied: Achievement::from_rows(&applied_rows),
         attempts_recorded: rows.len(),
@@ -178,6 +182,7 @@ mod tests {
         let s = derive_status("s", &[passed.clone(), on_time.clone()]);
         assert!(s.retained.achieved);
         assert_eq!(s.retained.evidence_ids, vec![on_time.id.clone()]);
+        assert_eq!(s.retained_after_days, Some(1));
 
         let wrong = row(EvidenceKind::Retrieval, EvidenceOutcome::Failed, 1000 + 2 * DAY);
         assert!(!derive_status("s", &[passed.clone(), wrong]).retained.achieved);
