@@ -59,7 +59,7 @@ export function HeuristicErrorAuditBlock({
       </ul>
       {resolved ? (
         <>
-          <p className="hint">Ya identificaste la causa raíz.</p>
+          <p className="hint">{block.status === "passed" ? "Ya identificaste la causa raíz." : "Aún no se identificó la causa raíz: continuaremos con otra estrategia."}</p>
           {content.modelSolution && <RichText className="block-question" text={content.modelSolution} />}
         </>
       ) : (

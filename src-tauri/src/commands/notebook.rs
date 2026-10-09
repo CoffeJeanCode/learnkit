@@ -4,7 +4,12 @@ use tauri::State;
 
 use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{BlockUpdate, ClassRecord, ClosureFeedback, Course, DiagnosticBatteryState, GateResult, GateSubmission, NotebookPayload};
-use crate::error::AppResult;
+use crate::application::notebook_service::RetrievalAnswerResult;
+use crate::domain::skill_evidence::SkillEvidence;
+use crate::domain::capability_map::CapabilityMap;
+use crate::domain::skill_status::SkillStatus;
+use crate::domain::study::{StudyEventKind, StudySettings, VariantMode};
+use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
 /// Seeds `courses`/`syllabus_milestones`/`classes` in the SQLite store from
@@ -110,6 +115,84 @@ pub async fn regenerate_notebook_block(
 #[tauri::command]
 pub fn reset_class_notebook(state: State<'_, AppState>, class_id: String) -> AppResult<()> {
     state.notebook_service.reset_class_notebook(&class_id)
+}
+
+/// Grades the student's WRITTEN answer to one spaced-retrieval prompt and
+/// reveals the solution only now. The only path that can count as retention.
+#[tauri::command]
+pub async fn submit_retrieval_answer(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    block_id: String,
+    item_index: usize,
+    answer: String,
+) -> AppResult<RetrievalAnswerResult> {
+    state.notebook_service.submit_retrieval_answer(Some(&app), &block_id, item_index, &answer).await
+}
+
+/// "No lo recuerdo": reveals the solution and records a self-reported miss.
+#[tauri::command]
+pub fn reveal_retrieval_answer(state: State<'_, AppState>, block_id: String, item_index: usize) -> AppResult<String> {
+    state.notebook_service.reveal_retrieval_answer(&block_id, item_index)
+}
+
+/// The study switch in force (which progress presentation to show).
+#[tauri::command]
+pub fn get_study_settings(state: State<'_, AppState>) -> AppResult<StudySettings> {
+    state.notebook_service.get_study_settings()
+}
+
+/// `random` (default) | `gamified` | `plain`. For whoever runs the study.
+#[tauri::command]
+pub fn set_study_variant_mode(state: State<'_, AppState>, mode: String) -> AppResult<StudySettings> {
+    let mode = VariantMode::parse(&mode).ok_or_else(|| AppError::InvalidInput(format!("modo de versión desconocido: {mode}")))?;
+    state.notebook_service.set_study_variant_mode(mode)
+}
+
+/// Logs a frontend-side activity event (only `app_opened` is sent from there).
+#[tauri::command]
+pub fn log_study_event(state: State<'_, AppState>, kind: String) -> AppResult<()> {
+    let kind = StudyEventKind::parse(&kind).ok_or_else(|| AppError::InvalidInput(format!("evento desconocido: {kind}")))?;
+    state.notebook_service.log_study_event(kind, None);
+    Ok(())
+}
+
+/// Writes this installation's study report (JSON) into the app data folder and
+/// returns its path — one file per participant, aggregated outside the app.
+#[tauri::command]
+pub fn export_study_report(state: State<'_, AppState>) -> AppResult<String> {
+    let report = state.notebook_service.export_study_report()?;
+    let dir = state.data_dir.join("learnkit");
+    std::fs::create_dir_all(&dir).map_err(|e| AppError::Persistence(e.to_string()))?;
+    let path = dir.join(format!("study-export-{}.json", report.generated_at_ms));
+    let json = serde_json::to_string_pretty(&report).map_err(|e| AppError::Persistence(e.to_string()))?;
+    std::fs::write(&path, json).map_err(|e| AppError::Persistence(e.to_string()))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// The capability map of a course: per skill, what the student has
+/// demonstrated and the evidence behind each achievement.
+#[tauri::command]
+pub fn get_capability_map(state: State<'_, AppState>, course_id: String) -> AppResult<CapabilityMap> {
+    state.notebook_service.get_capability_map(&course_id)
+}
+
+/// Derived solved/retained/applied status of every skill of a course.
+#[tauri::command]
+pub fn get_course_skill_status(state: State<'_, AppState>, course_id: String) -> AppResult<Vec<SkillStatus>> {
+    state.notebook_service.get_course_skill_status(&course_id)
+}
+
+/// Append-only evidence history of one skill (class), oldest first.
+#[tauri::command]
+pub fn get_skill_evidence(state: State<'_, AppState>, skill_id: String) -> AppResult<Vec<SkillEvidence>> {
+    state.notebook_service.get_skill_evidence(&skill_id)
+}
+
+/// Evidence for every skill of one course, oldest first.
+#[tauri::command]
+pub fn get_course_evidence(state: State<'_, AppState>, course_id: String) -> AppResult<Vec<SkillEvidence>> {
+    state.notebook_service.get_course_evidence(&course_id)
 }
 
 #[tauri::command]

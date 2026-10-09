@@ -427,7 +427,10 @@ export const ScenarioBranchSchema = z.object({
 export const RetrievalPromptSchema = z.object({
   conceptLabel: z.string(),
   prompt: z.string(),
-  expectedAnswer: z.string(),
+  // Withheld by the backend until the student answers (or gives up), so a
+  // correct answer is proof of recall, not of reading.
+  expectedAnswer: z.string().nullish(),
+  reportedOutcome: z.enum(["correct", "incorrect", "self_recalled", "self_forgot"]).nullish(),
 });
 
 export const PredictionComparisonSchema = z.object({
@@ -502,6 +505,8 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
     constraints: z.array(z.string()),
     scaffoldingHints: z.array(z.string()),
     evaluationRubricSummary: z.array(z.string()),
+    // true only for the transfer challenge (new case, no hints); omitted otherwise.
+    isTransfer: z.boolean().nullish(),
     // Optional — a reference diagram of the target artifact, when it helps.
     // Nullish — Rust's `Option<StaticVisualSpec>` takes an explicit null.
     visualAid: StaticVisualSpecSchema.nullish(),

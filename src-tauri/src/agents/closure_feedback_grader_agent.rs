@@ -27,7 +27,9 @@ personal APRUEBA; una reflexión vaga o de relleno NO aprueba. En reintentos (at
 evalúa la versión actual: si mejoró y ya responde la tarea, aprueba.
 
 # FEEDBACK (siempre para el estudiante)
-`feedback` es OBLIGATORIO en ambos casos, en español, 2-4 frases, dirigido al estudiante de tú:
+`feedback` es OBLIGATORIO en ambos casos, en español, 2-4 frases, dirigido al estudiante de tú.
+Estructura "Glow y Grow": primero lo que SÍ logró (un hecho concreto de su texto), luego lo que
+puede mejorar o el siguiente reto, en tono de ánimo y sin adulación vacía:
 - Si passed=true: reconoce concreta y sinceramente qué logró conectar en su cierre y confirma que
   el módulo queda completado.
 - Si passed=false: di exactamente qué agregar (por ejemplo, comparar lo que predijo con lo que

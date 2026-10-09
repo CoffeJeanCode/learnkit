@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
+use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, SkillEvidence};
+use crate::domain::study::{resolve_variant, StudyEvent, StudyEventKind, StudySettings, StudyVariant, VariantMode};
 use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{
     BlockStatus, BlockUpdate, ClassRecord, Course, DiagnosticBattery, DiagnosticBatteryState, DynamicBlockType,
@@ -81,12 +83,72 @@ CREATE INDEX IF NOT EXISTS idx_blocks_document ON notebook_blocks(document_id);
 -- see that module's doc comment) — the WHOLE `LearnerCognitiveMemory`
 -- serialized as JSON, same "don't invent a relational shape for a
 -- backend-only blob" precedent as `courses.diagnostic_battery_json`.
+-- Append-only evidence history (see `domain::skill_evidence`): rows are only
+-- ever inserted. No FK on purpose — deleting a class/course must not rewrite
+-- what the student demonstrated.
+CREATE TABLE IF NOT EXISTS skill_evidence (
+    id TEXT PRIMARY KEY,
+    skill_id TEXT NOT NULL,
+    course_id TEXT NOT NULL,
+    block_id TEXT,
+    kind TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    attempt_number INTEGER NOT NULL,
+    hints_shown INTEGER NOT NULL,
+    support_level TEXT,
+    rubric_json TEXT NOT NULL DEFAULT '[]',
+    is_transfer INTEGER NOT NULL DEFAULT 0,
+    variant TEXT,
+    created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skill_evidence_skill ON skill_evidence(skill_id, created_at_ms);
+CREATE INDEX IF NOT EXISTS idx_skill_evidence_course ON skill_evidence(course_id, created_at_ms);
+
+-- Study switch (`domain::study`): plain key/value settings, and an
+-- append-only activity log used for the engagement metrics.
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS study_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    class_id TEXT,
+    variant TEXT,
+    at_ms INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS learner_memory (
     learner_id TEXT PRIMARY KEY,
     data_json TEXT NOT NULL,
     updated_at_ms INTEGER NOT NULL
 );
 "#;
+
+/// `skill_evidence` shipped without `is_transfer`; databases created by that
+/// build need the column added (a fresh one already has it).
+fn migrate_add_evidence_transfer_column(conn: &Connection) -> AppResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(skill_evidence)")?;
+    let has_column = stmt.query_map([], |row| row.get::<_, String>(1))?.collect::<Result<Vec<_>, _>>()?.iter().any(|n| n == "is_transfer");
+    drop(stmt);
+    if !has_column {
+        conn.execute("ALTER TABLE skill_evidence ADD COLUMN is_transfer INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+    Ok(())
+}
+
+/// Same story for `variant` (study version stamp). Old rows stay `NULL`:
+/// they predate the experiment and belong to no arm.
+fn migrate_add_evidence_variant_column(conn: &Connection) -> AppResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(skill_evidence)")?;
+    let has_column = stmt.query_map([], |row| row.get::<_, String>(1))?.collect::<Result<Vec<_>, _>>()?.iter().any(|n| n == "variant");
+    drop(stmt);
+    if !has_column {
+        conn.execute("ALTER TABLE skill_evidence ADD COLUMN variant TEXT", [])?;
+    }
+    Ok(())
+}
 
 /// One-time migration: an sqlite file written before the fixed-4-section
 /// notebook model was retired has `notebook_blocks.section_type TEXT NOT
@@ -286,6 +348,8 @@ impl NotebookStore {
         migrate_add_class_micromodule_columns(&conn)?;
         migrate_add_block_gating_columns(&conn)?;
         conn.execute_batch(SCHEMA_SQL)?;
+        migrate_add_evidence_transfer_column(&conn)?;
+        migrate_add_evidence_variant_column(&conn)?;
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
@@ -429,6 +493,14 @@ impl NotebookStore {
 
     /// Every class for a course, ordered by `order_index` — what the
     /// frontend uses to link "open notebook" per week right after import.
+    /// `(milestone id, week number, title)` for every milestone of a course.
+    pub fn list_milestones_for_course(&self, course_id: &str) -> AppResult<Vec<(String, u16, String)>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT id, week_number, title FROM syllabus_milestones WHERE course_id = ?1 ORDER BY week_number ASC")?;
+        let rows = stmt.query_map(params![course_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn list_classes_for_course(&self, course_id: &str) -> AppResult<Vec<ClassRecord>> {
         // Query under the lock, completion checks AFTER dropping it —
         // `is_class_complete` re-enters `self.lock()` and the mutex isn't
@@ -618,6 +690,170 @@ impl NotebookStore {
             params![memory.learner_id, json, now_ms()],
         )?;
         Ok(())
+    }
+
+    // --- Study switch ---------------------------------------------------------
+
+    fn setting_get(conn: &Connection, key: &str) -> AppResult<Option<String>> {
+        Ok(conn.query_row("SELECT value FROM app_settings WHERE key = ?1", params![key], |r| r.get(0)).optional()?)
+    }
+
+    fn setting_set(conn: &Connection, key: &str, value: &str) -> AppResult<()> {
+        conn.execute("INSERT INTO app_settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params![key, value])?;
+        Ok(())
+    }
+
+    /// The study settings in force, creating on first use: a pseudonymous
+    /// participant id and — when the mode is `random` — ONE random assignment
+    /// that is then kept forever (see `domain::study::resolve_variant`).
+    pub fn study_settings(&self) -> AppResult<StudySettings> {
+        let conn = self.lock();
+        let participant_id = match Self::setting_get(&conn, "study.participant_id")? {
+            Some(id) => id,
+            None => {
+                let id = Uuid::new_v4().to_string();
+                Self::setting_set(&conn, "study.participant_id", &id)?;
+                id
+            }
+        };
+        let mode = Self::setting_get(&conn, "study.mode")?.and_then(|m| VariantMode::parse(&m)).unwrap_or(VariantMode::Random);
+        let stored_random = Self::setting_get(&conn, "study.random_variant")?.and_then(|v| StudyVariant::parse(&v));
+        let mut assigned_at_ms = Self::setting_get(&conn, "study.assigned_at_ms")?.and_then(|v| v.parse::<i64>().ok());
+
+        // The coin is only used when an assignment is actually needed.
+        let coin = Uuid::new_v4().as_bytes()[0] & 1 == 1;
+        let (variant, fresh) = resolve_variant(mode, stored_random, coin);
+        let mut random_assignment = stored_random;
+        if let Some(v) = fresh {
+            let now = now_ms();
+            Self::setting_set(&conn, "study.random_variant", v.as_str())?;
+            Self::setting_set(&conn, "study.assigned_at_ms", &now.to_string())?;
+            random_assignment = Some(v);
+            assigned_at_ms = Some(now);
+        }
+        Ok(StudySettings { participant_id, mode, variant, random_assignment, assigned_at_ms })
+    }
+
+    /// Sets who decides the variant. Switching to `random` keeps any earlier
+    /// random assignment (it is never re-rolled).
+    pub fn set_study_mode(&self, mode: VariantMode) -> AppResult<StudySettings> {
+        Self::setting_set(&self.lock(), "study.mode", mode.as_str())?;
+        self.study_settings()
+    }
+
+    /// Appends one activity event, stamped with the variant in force.
+    pub fn append_study_event(&self, kind: StudyEventKind, class_id: Option<&str>) -> AppResult<()> {
+        let variant = self.study_settings()?.variant.as_str().to_string();
+        self.lock().execute(
+            "INSERT INTO study_events (kind, class_id, variant, at_ms) VALUES (?1, ?2, ?3, ?4)",
+            params![kind.as_str(), class_id, variant, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_study_events(&self) -> AppResult<Vec<StudyEvent>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare("SELECT kind, class_id, variant, at_ms FROM study_events ORDER BY id ASC")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, i64>(3)?)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (kind, class_id, variant, at_ms) = r?;
+            if let Some(kind) = StudyEventKind::parse(&kind) {
+                out.push(StudyEvent { kind, class_id, variant, at_ms });
+            }
+        }
+        Ok(out)
+    }
+
+    // --- Skill evidence (append-only) ---------------------------------------
+
+    pub fn append_skill_evidence(&self, e: &SkillEvidence) -> AppResult<()> {
+        // Stamp the study version in force NOW (resolved before taking the
+        // connection lock; best-effort — an unreadable setting just leaves it
+        // unstamped rather than losing the evidence row).
+        let variant = e.variant.clone().or_else(|| self.study_settings().ok().map(|s| s.variant.as_str().to_string()));
+        let rubric = serde_json::to_string(&e.rubric).map_err(|err| AppError::Persistence(err.to_string()))?;
+        self.lock().execute(
+            "INSERT INTO skill_evidence
+                (id, skill_id, course_id, block_id, kind, outcome, attempt_number, hints_shown, support_level, rubric_json, is_transfer, variant, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            params![
+                e.id,
+                e.skill_id,
+                e.course_id,
+                e.block_id,
+                e.kind.as_str(),
+                e.outcome.as_str(),
+                e.attempt_number,
+                e.hints_shown,
+                e.support_level,
+                rubric,
+                e.is_transfer,
+                variant,
+                e.created_at_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every evidence row of one skill, oldest first.
+    pub fn list_skill_evidence(&self, skill_id: &str) -> AppResult<Vec<SkillEvidence>> {
+        self.query_skill_evidence("WHERE skill_id = ?1", skill_id)
+    }
+
+    /// Every evidence row of the installation (all courses), oldest first.
+    pub fn list_all_skill_evidence(&self) -> AppResult<Vec<SkillEvidence>> {
+        // `query_skill_evidence` always binds one argument; this filter is
+        // always true and only uses it.
+        self.query_skill_evidence("WHERE ?1 <> ''", "all")
+    }
+
+    /// Every evidence row of one course (all its skills), oldest first.
+    pub fn list_course_evidence(&self, course_id: &str) -> AppResult<Vec<SkillEvidence>> {
+        self.query_skill_evidence("WHERE course_id = ?1", course_id)
+    }
+
+    fn query_skill_evidence(&self, filter: &str, arg: &str) -> AppResult<Vec<SkillEvidence>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(&format!(
+            "SELECT id, skill_id, course_id, block_id, kind, outcome, attempt_number, hints_shown, support_level, rubric_json, is_transfer, variant, created_at_ms
+             FROM skill_evidence {filter} ORDER BY created_at_ms ASC, rowid ASC"
+        ))?;
+        let rows = stmt.query_map(params![arg], |row| {
+            let kind: String = row.get(4)?;
+            let outcome: String = row.get(5)?;
+            let rubric_json: String = row.get(9)?;
+            Ok((
+                SkillEvidence {
+                    id: row.get(0)?,
+                    skill_id: row.get(1)?,
+                    course_id: row.get(2)?,
+                    block_id: row.get(3)?,
+                    // Placeholders replaced below: an unknown stored string is
+                    // skipped, never a failure of the whole history read.
+                    kind: EvidenceKind::Closure,
+                    outcome: EvidenceOutcome::Failed,
+                    attempt_number: row.get(6)?,
+                    hints_shown: row.get(7)?,
+                    support_level: row.get(8)?,
+                    rubric: serde_json::from_str(&rubric_json).unwrap_or_default(),
+                    is_transfer: row.get(10)?,
+                    variant: row.get(11)?,
+                    created_at_ms: row.get(12)?,
+                },
+                kind,
+                outcome,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (mut e, kind, outcome) = r?;
+            let (Some(k), Some(o)) = (EvidenceKind::parse(&kind), EvidenceOutcome::parse(&outcome)) else { continue };
+            e.kind = k;
+            e.outcome = o;
+            out.push(e);
+        }
+        Ok(out)
     }
 
     // --- Notebook documents / blocks ----------------------------------------
@@ -996,7 +1232,7 @@ pub fn import_syllabus_into_store(
     Ok((course.id, first_class_id, first_class_title))
 }
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 

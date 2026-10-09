@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{BlockStatus, GeneratedSectionBlock, NotebookBlock};
+use crate::domain::scaffolding;
 use crate::notebook_store::ClassGenerationContext;
 
 use super::grounding::MasteryProgress;
@@ -129,6 +130,7 @@ pub(super) fn render_next_block_input(
         context["diagnosticProfile"] = profile.clone();
     }
     context["learnerMemory"] = render_learner_memory_context(learner_memory, ctx, now_ms);
+    context["scaffolding"] = scaffolding::plan(existing_blocks, learner_memory.needs_heavy_scaffolding()).to_json(existing_blocks);
     if let Some(last) = existing_blocks.last() {
         if last.block_type.is_gate() && last.status == BlockStatus::Passed {
             context["lastGateOutcome"] = serde_json::json!({
@@ -227,6 +229,26 @@ pub(super) fn render_grading_input(block: &NotebookBlock, submission_text: &str,
     )
 }
 
+/// Input for the gate grader's `spaced_interleaved_retrieval` mode: one
+/// prompt, its reference answer and what the student wrote.
+pub(super) fn render_retrieval_grading_input(item: &serde_json::Value, answer: &str) -> String {
+    let context = serde_json::json!({
+        "blockType": "spaced_interleaved_retrieval",
+        "blockContent": {
+            "conceptLabel": item.get("conceptLabel"),
+            "prompt": item.get("prompt"),
+            "expectedAnswer": item.get("expectedAnswer"),
+        },
+        "studentSubmission": answer,
+        "attemptNumber": 1,
+    });
+    format!(
+        "Califica esta respuesta de repaso llamando a grade_gate_submission según tu system prompt \
+         (modo spaced_interleaved_retrieval).\n\n{}",
+        serde_json::to_string_pretty(&context).unwrap_or_default()
+    )
+}
+
 /// Input for `closure_feedback_grader`'s `grade_closure_submission` call —
 /// the closing block's student reflection against its synthesis task and
 /// self-evaluation checklist. The caller persists `reflection` into the
@@ -259,6 +281,7 @@ pub(super) fn render_block_audit_input(
         "targetGoal": ctx.course.target_goal,
         "blockType": block.block_type().as_str(),
         "blocksSoFar": prior_blocks_content(existing_blocks),
+        "scaffolding": scaffolding::plan(existing_blocks, false).to_json(existing_blocks),
         "block": block,
     });
     format!(

@@ -472,6 +472,13 @@ pub enum GeneratedSectionBlock {
         constraints: Vec<String>,
         scaffolding_hints: Vec<String>,
         evaluation_rubric_summary: Vec<String>,
+        /// A TRANSFER challenge: the same skill in a NEW case with different
+        /// constraints and NO hints (`scaffolding_hints` must be empty).
+        /// Generated only after both mastery gates are passed, and the only
+        /// block whose first-attempt pass counts as "applied" evidence (see
+        /// `domain::skill_status`). Omitted from the payload when false.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        is_transfer: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         visual_aid: Option<StaticVisualSpec>,
     },

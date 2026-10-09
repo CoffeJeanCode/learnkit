@@ -45,7 +45,7 @@ export function InteractivePredictionGateBlock({
       <div className="notebook-block-body">
         {content.visualAid && <StaticVisual visual={content.visualAid} />}
         <RichText className="block-question" text={content.question} />
-        <p className="hint">Ya superaste esta predicción.</p>
+        <p className="hint">{block.status === "passed" ? "Ya superaste esta predicción." : "Esta predicción no se superó todavía: continuaremos con otra estrategia."}</p>
       </div>
     );
   }

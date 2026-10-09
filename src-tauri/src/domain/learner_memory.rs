@@ -103,7 +103,34 @@ pub struct RecurringMisconception {
     pub identified_error_pattern: String,
     pub last_encountered_date: String,
     pub resolved: bool,
+    /// Ids of the gate blocks where this exact error showed up. ONLY
+    /// passing one of THESE gates resolves the entry — passing an unrelated
+    /// gate in the same class says nothing about this misconception. Empty
+    /// for entries persisted before this field existed: they stay open
+    /// rather than being resolved on weaker evidence.
+    #[serde(default)]
+    pub evidence_block_ids: Vec<String>,
 }
+
+/// How a spaced-retrieval prompt was answered. Showing the block is NOT an
+/// outcome (exposure never moves mastery); only one of these is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetrievalOutcome {
+    /// Graded as right against a reference (strong evidence).
+    Correct,
+    /// Graded as wrong.
+    Incorrect,
+    /// Student said they recalled it after seeing the answer (weak evidence:
+    /// can't raise mastery past `SELF_REPORT_MASTERY_CAP`).
+    SelfRecalled,
+    /// Student said they did not recall it.
+    SelfForgot,
+}
+
+/// Self-assessed recall is evidence of recognition, not of retention — it may
+/// never promote an item beyond this level on its own.
+const SELF_REPORT_MASTERY_CAP: f32 = 0.6;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -163,7 +190,7 @@ impl LearnerCognitiveMemory {
     /// a generic "estudiante falló" entry. Deduplicates on
     /// `(domain_concept, identified_error_pattern)`: a repeat sighting
     /// refreshes the date and clears `resolved` instead of growing the list.
-    pub fn record_misconception(&mut self, domain_concept: &str, identified_error_pattern: &str, today_iso: &str) {
+    pub fn record_misconception(&mut self, domain_concept: &str, identified_error_pattern: &str, today_iso: &str, evidence_block_id: &str) {
         if let Some(existing) = self
             .recurring_misconceptions
             .iter_mut()
@@ -171,6 +198,9 @@ impl LearnerCognitiveMemory {
         {
             existing.last_encountered_date = today_iso.to_string();
             existing.resolved = false;
+            if !existing.evidence_block_ids.iter().any(|id| id == evidence_block_id) {
+                existing.evidence_block_ids.push(evidence_block_id.to_string());
+            }
             return;
         }
         self.recurring_misconceptions.push(RecurringMisconception {
@@ -178,6 +208,7 @@ impl LearnerCognitiveMemory {
             identified_error_pattern: identified_error_pattern.to_string(),
             last_encountered_date: today_iso.to_string(),
             resolved: false,
+            evidence_block_ids: vec![evidence_block_id.to_string()],
         });
         if self.recurring_misconceptions.len() > MAX_RECURRING_MISCONCEPTIONS {
             // Drop the oldest RESOLVED entry first — an unresolved one is
@@ -191,12 +222,11 @@ impl LearnerCognitiveMemory {
         }
     }
 
-    /// Marks every unresolved misconception under `domain_concept` resolved
-    /// — called once the student PASSES a gate on a class matching that
-    /// concept, closing the loop the diagnostic battery / a failed gate
-    /// opened.
-    pub fn resolve_misconceptions_for(&mut self, domain_concept: &str) {
-        for m in self.recurring_misconceptions.iter_mut().filter(|m| m.domain_concept == domain_concept) {
+    /// Marks resolved ONLY the misconceptions this gate exposed — called when
+    /// the student PASSES `block_id`. A pass on any other gate of the same
+    /// class does not touch them.
+    pub fn resolve_misconceptions_for_block(&mut self, block_id: &str) {
+        for m in self.recurring_misconceptions.iter_mut().filter(|m| m.evidence_block_ids.iter().any(|id| id == block_id)) {
             m.resolved = true;
         }
     }
@@ -233,29 +263,40 @@ impl LearnerCognitiveMemory {
         });
     }
 
-    /// Applies one reactivation attempt's outcome: a correct recall bumps
-    /// `mastery_level` and pushes the next due date out (classic spaced-
-    /// repetition backoff, coarse on purpose — this app has no per-second
-    /// scheduling need); a miss resets mastery down and makes it due again
-    /// immediately, same as a fresh miss on any other gate.
-    pub fn reactivate_retrieval(&mut self, concept_id: &str, recalled_correctly: bool, now_ms: i64) {
-        let Some(item) = self.retrieval_spaced_queue.iter_mut().find(|i| i.concept_id == concept_id) else { return };
-        if recalled_correctly {
-            item.mastery_level = (item.mastery_level + 0.25).min(1.0);
-            let interval_days: i64 = if item.mastery_level < 0.5 {
-                1
-            } else if item.mastery_level < 0.7 {
-                3
-            } else if item.mastery_level < 0.9 {
-                7
-            } else {
-                14
-            };
-            item.next_due_at_ms = now_ms + interval_days * 24 * 60 * 60 * 1000;
-        } else {
-            item.mastery_level = (item.mastery_level - 0.2).max(0.0);
-            item.next_due_at_ms = now_ms;
+    /// Applies one retrieval attempt's outcome (never called just because a
+    /// block was shown). A graded correct recall bumps `mastery_level` by
+    /// 0.25; a self-reported one by 0.10, capped at
+    /// `SELF_REPORT_MASTERY_CAP`; both push the due date out (coarse
+    /// spaced-repetition backoff). A miss — graded or self-reported — pulls
+    /// mastery down and makes the item due again immediately.
+    /// Returns the concept id of the item it updated (`None` if no queued item
+    /// carries that label).
+    pub fn record_retrieval_outcome(&mut self, concept_label: &str, outcome: RetrievalOutcome, now_ms: i64) -> Option<String> {
+        let item = self.retrieval_spaced_queue.iter_mut().find(|i| i.concept_label == concept_label)?;
+        match outcome {
+            RetrievalOutcome::Correct | RetrievalOutcome::SelfRecalled => {
+                item.mastery_level = if outcome == RetrievalOutcome::Correct {
+                    (item.mastery_level + 0.25).min(1.0)
+                } else {
+                    (item.mastery_level + 0.10).min(SELF_REPORT_MASTERY_CAP).max(item.mastery_level)
+                };
+                let interval_days: i64 = if item.mastery_level < 0.5 {
+                    1
+                } else if item.mastery_level < 0.7 {
+                    3
+                } else if item.mastery_level < 0.9 {
+                    7
+                } else {
+                    14
+                };
+                item.next_due_at_ms = now_ms + interval_days * 24 * 60 * 60 * 1000;
+            }
+            RetrievalOutcome::Incorrect | RetrievalOutcome::SelfForgot => {
+                item.mastery_level = (item.mastery_level - 0.2).max(0.0);
+                item.next_due_at_ms = now_ms;
+            }
         }
+        Some(item.concept_id.clone())
     }
 
     /// Items due right now, oldest-due first, capped at
@@ -319,8 +360,8 @@ mod tests {
     #[test]
     fn record_misconception_dedupes_by_concept_and_pattern() {
         let mut mem = LearnerCognitiveMemory::new(LOCAL_LEARNER_ID);
-        mem.record_misconception("Termodinámica", "Confunde calor con temperatura", "2026-01-01");
-        mem.record_misconception("Termodinámica", "Confunde calor con temperatura", "2026-01-05");
+        mem.record_misconception("Termodinámica", "Confunde calor con temperatura", "2026-01-01", "g1");
+        mem.record_misconception("Termodinámica", "Confunde calor con temperatura", "2026-01-05", "g1");
         assert_eq!(mem.recurring_misconceptions.len(), 1);
         assert_eq!(mem.recurring_misconceptions[0].last_encountered_date, "2026-01-05");
     }
@@ -328,10 +369,10 @@ mod tests {
     #[test]
     fn misconceptions_relevant_to_matches_case_insensitively_and_skips_resolved() {
         let mut mem = LearnerCognitiveMemory::new(LOCAL_LEARNER_ID);
-        mem.record_misconception("Termodinámica", "Confunde calor con temperatura", "2026-01-01");
+        mem.record_misconception("Termodinámica", "Confunde calor con temperatura", "2026-01-01", "g1");
         assert_eq!(mem.misconceptions_relevant_to("Semana 2: TERMODINÁMICA avanzada").len(), 1);
         assert_eq!(mem.misconceptions_relevant_to("Óptica geométrica").len(), 0);
-        mem.resolve_misconceptions_for("Termodinámica");
+        mem.resolve_misconceptions_for_block("g1");
         assert_eq!(mem.misconceptions_relevant_to("Termodinámica").len(), 0, "a resolved entry must not keep surfacing");
     }
 
@@ -347,18 +388,63 @@ mod tests {
     }
 
     #[test]
-    fn reactivate_retrieval_pushes_the_due_date_out_on_success_and_resets_on_failure() {
+    fn a_pass_resolves_only_the_misconceptions_that_gate_exposed() {
+        let mut mem = LearnerCognitiveMemory::new(LOCAL_LEARNER_ID);
+        mem.record_misconception("Termodinámica", "Confunde calor con temperatura", "2026-01-01", "g1");
+        mem.record_misconception("Termodinámica", "Ignora la fase del cambio de estado", "2026-01-01", "g2");
+        mem.resolve_misconceptions_for_block("g1");
+        let open: Vec<_> = mem.misconceptions_relevant_to("Termodinámica").iter().map(|m| m.identified_error_pattern.clone()).collect();
+        assert_eq!(open, vec!["Ignora la fase del cambio de estado".to_string()]);
+    }
+
+    #[test]
+    fn legacy_misconceptions_without_evidence_are_never_resolved_by_a_pass() {
+        let mut mem = LearnerCognitiveMemory::new(LOCAL_LEARNER_ID);
+        mem.record_misconception("Termodinámica", "Confunde calor con temperatura", "2026-01-01", "g1");
+        mem.recurring_misconceptions[0].evidence_block_ids.clear();
+        mem.resolve_misconceptions_for_block("g1");
+        assert!(!mem.recurring_misconceptions[0].resolved);
+    }
+
+    #[test]
+    fn retrieval_outcome_correct_pushes_the_due_date_out_and_a_miss_resets_it() {
         let mut mem = LearnerCognitiveMemory::new(LOCAL_LEARNER_ID);
         mem.queue_retrieval("c1", "Concepto 1", 0);
-        mem.reactivate_retrieval("c1", true, 0);
-        let item = mem.retrieval_spaced_queue.iter().find(|i| i.concept_id == "c1").unwrap();
-        assert!(item.next_due_at_ms > 0, "a correct recall must push the due date into the future");
-        assert!(item.mastery_level > 0.3);
+        mem.record_retrieval_outcome("Concepto 1", RetrievalOutcome::Correct, 0);
+        let item = mem.retrieval_spaced_queue[0].clone();
+        assert!(item.next_due_at_ms > 0 && item.mastery_level > 0.3);
 
-        mem.reactivate_retrieval("c1", false, item.next_due_at_ms);
-        let item = mem.retrieval_spaced_queue.iter().find(|i| i.concept_id == "c1").unwrap();
-        assert_eq!(item.next_due_at_ms, item.next_due_at_ms.min(item.next_due_at_ms), "sanity: field still readable");
-        assert!(item.mastery_level < 0.55, "a miss must pull mastery back down");
+        mem.record_retrieval_outcome("Concepto 1", RetrievalOutcome::Incorrect, item.next_due_at_ms);
+        let after = &mem.retrieval_spaced_queue[0];
+        assert!(after.mastery_level < item.mastery_level, "a miss must pull mastery back down");
+        assert_eq!(after.next_due_at_ms, item.next_due_at_ms, "a miss makes it due again now");
+    }
+
+    #[test]
+    fn self_reported_recall_is_weaker_evidence_and_capped() {
+        let mut mem = LearnerCognitiveMemory::new(LOCAL_LEARNER_ID);
+        mem.queue_retrieval("c1", "Concepto 1", 0);
+        for _ in 0..10 {
+            mem.record_retrieval_outcome("Concepto 1", RetrievalOutcome::SelfRecalled, 0);
+        }
+        assert!(mem.retrieval_spaced_queue[0].mastery_level <= SELF_REPORT_MASTERY_CAP + f32::EPSILON);
+
+        let mut graded = LearnerCognitiveMemory::new(LOCAL_LEARNER_ID);
+        graded.queue_retrieval("c1", "Concepto 1", 0);
+        graded.record_retrieval_outcome("Concepto 1", RetrievalOutcome::Correct, 0);
+        let mut selfie = LearnerCognitiveMemory::new(LOCAL_LEARNER_ID);
+        selfie.queue_retrieval("c1", "Concepto 1", 0);
+        selfie.record_retrieval_outcome("Concepto 1", RetrievalOutcome::SelfRecalled, 0);
+        assert!(graded.retrieval_spaced_queue[0].mastery_level > selfie.retrieval_spaced_queue[0].mastery_level);
+    }
+
+    #[test]
+    fn showing_a_retrieval_block_alone_never_changes_mastery() {
+        let mut mem = LearnerCognitiveMemory::new(LOCAL_LEARNER_ID);
+        mem.queue_retrieval("c1", "Concepto 1", 0);
+        let before = mem.retrieval_spaced_queue[0].clone();
+        mem.record_retrieval_outcome("Concepto desconocido", RetrievalOutcome::Correct, 0);
+        assert_eq!(mem.retrieval_spaced_queue[0].mastery_level, before.mastery_level);
     }
 
     #[test]

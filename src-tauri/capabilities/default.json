@@ -1,7 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capability for the main window.",
-  "windows": ["main"],
-  "permissions": ["core:event:default"]
+  "description": "Default capability for the main window: events, plus the updater and the relaunch it needs.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:event:default",
+    "updater:default",
+    "process:allow-restart"
+  ]
 }

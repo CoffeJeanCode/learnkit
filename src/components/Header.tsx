@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNotebookNav } from "../stores/notebook";
 import { displaySessionTitle, useRoadmap } from "../stores/roadmap";
+import { usePresentation } from "../stores/study";
 import { useUi } from "../stores/ui";
 import { useUpdater } from "../stores/updater";
 import { SessionsDrawer } from "./SessionsDrawer";
@@ -26,11 +27,13 @@ export function Header() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [openingClasses, setOpeningClasses] = useState(false);
 
+  const { showCapabilityMap } = usePresentation();
   const inSettings = view === "providers";
   const inMemory = view === "learner-memory";
+  const inCapabilities = view === "capabilities";
   // Both settings and the learner-memory viewer are full-screen overlays
   // over the active session — neither shows the session chip/tabs.
-  const inOverlay = inSettings || inMemory;
+  const inOverlay = inSettings || inMemory || inCapabilities;
   // One merged tab for both session sections: the Conversación|Plan filter
   // now lives INSIDE `SessionView`, so the header only tracks whether we're
   // in the session view at all.
@@ -138,6 +141,11 @@ export function Header() {
           >
             {updateLabel}
           </button>
+          {(showCapabilityMap || inCapabilities) && (
+            <button onClick={() => setView(inCapabilities ? lastMainView : "capabilities")}>
+              {inCapabilities ? "← Volver" : "🗺 Capacidades"}
+            </button>
+          )}
           <button onClick={() => setView(inMemory ? lastMainView : "learner-memory")}>
             {inMemory ? "← Volver" : "🧠 Memoria"}
           </button>

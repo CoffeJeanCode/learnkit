@@ -45,6 +45,18 @@ Coherencia transversal:
   en blocksSoFar. Si otro bloque anterior — del mismo tipo o de uno distinto — ya explicó
   esencialmente la misma regla, analogía o concepto con otras palabras, es RECHAZO: nombra
   cuál bloque anterior se repite y qué información nueva falta.
+- SALTO DE CONOCIMIENTO (andamiaje): el input trae `scaffolding` (supportLevel, bridgeFrom,
+  alreadyCovered). Es RECHAZO si el bloque (a) introduce más de UNA idea o más de UN término técnico
+  que blocksSoFar no cubrió, (b) no conecta con el bloque anterior (bridgeFrom) en su apertura,
+  (c) siendo una compuerta, exige un concepto, término o paso que ningún bloque de blocksSoFar
+  enseñó (no se puede resolver solo con lo ya explicado), o (d) su apoyo no corresponde a
+  supportLevel (p. ej. sin pistas en `full`/`guided`, o con la solución regalada en `independent`).
+  Nombra el concepto exacto que falta enseñar antes.
+- FLUJO Y MOTIVACIÓN: `scaffolding.challengeBalance` indica el ritmo del estudiante. Es RECHAZO si
+  (a) la apertura del bloque no dice qué logrará el estudiante ni cómo sabrá que lo logró,
+  (b) el reto contradice `momentum` (más difícil con `struggling`, o igual de fácil con `rising`),
+  (c) el ejemplo no tiene relación alguna con el targetGoal (relevancia nula), o (d) el tono es
+  condescendiente, culpabilizador o de adulación vacía. Solo señala lo que realmente falla.
 
 # VEREDICTO
 - `accepted: true` y `feedback: []` si el bloque cumple todo lo anterior.

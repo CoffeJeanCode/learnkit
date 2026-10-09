@@ -1,11 +1,24 @@
 use std::sync::Arc;
 
-use crate::domain::learner_memory::{LearnerCognitiveMemory, LOCAL_LEARNER_ID};
-use crate::domain::notebook::{BlockUpdate, ClassRecord, Course, DiagnosticBatteryState};
+use crate::domain::learner_memory::{LearnerCognitiveMemory, RetrievalOutcome, LOCAL_LEARNER_ID};
+use crate::domain::notebook::{BlockUpdate, ClassRecord, Course, DiagnosticBatteryState, DynamicBlockType, NotebookBlock};
+use crate::domain::capability_map::{self, CapabilityMap};
+use crate::domain::study::{self, StudyEventKind, StudyReport, StudySettings, VariantMode};
+use crate::domain::skill_status::{self, SkillStatus};
 use crate::domain::roadmap::RoadmapSession;
+use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, RubricCriterion, SkillEvidence};
 use crate::error::{AppError, AppResult};
 use crate::notebook_store::NotebookStore;
 use crate::orchestration::Orchestrator;
+
+/// What the student gets back after answering a retrieval prompt: the verdict
+/// and, only now, the reference answer.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RetrievalAnswerResult {
+    pub correct: bool,
+    pub expected_answer: String,
+}
 
 /// Application service for the Notebook engine: bridges the confirmed
 /// roadmap syllabus into the relational store, and drives the
@@ -78,6 +91,156 @@ impl NotebookService {
 
     pub fn save_diagnostic_battery_answers(&self, course_id: &str, answers: &std::collections::HashMap<String, String>) -> AppResult<()> {
         self.store.save_diagnostic_battery_answers(course_id, answers)
+    }
+
+    /// Grades one WRITTEN retrieval answer and only then reveals the solution.
+    /// This is the one path that can count as retention evidence: the answer
+    /// was produced from memory (the client never had `expectedAnswer` — see
+    /// `grading::redact_block`) and graded against the reference. One outcome
+    /// per item; answering twice is rejected so a retry can't launder a miss.
+    pub async fn submit_retrieval_answer(
+        &self,
+        app: Option<&tauri::AppHandle>,
+        block_id: &str,
+        item_index: usize,
+        answer: &str,
+    ) -> AppResult<RetrievalAnswerResult> {
+        let answer = answer.trim();
+        if answer.is_empty() {
+            return Err(AppError::InvalidInput("escribe tu respuesta antes de comprobarla".to_string()));
+        }
+        let (block, content) = self.load_retrieval_item(block_id, item_index)?;
+        let item = &content["items"][item_index];
+        if item.get("reportedOutcome").is_some() {
+            return Err(AppError::InvalidInput("este repaso ya tiene respuesta".to_string()));
+        }
+        let expected = item.get("expectedAnswer").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let grade = grading::grade_retrieval_with_model(&self.orchestrator, app, item, answer).await?;
+        let outcome = if grade.passed { RetrievalOutcome::Correct } else { RetrievalOutcome::Incorrect };
+        self.finish_retrieval_item(&block, content, item_index, outcome, grade.criteria)?;
+        Ok(RetrievalAnswerResult { correct: grade.passed, expected_answer: expected })
+    }
+
+    /// The student gave up ("no lo recuerdo"): reveal the solution and record
+    /// a self-reported miss. Idempotent. Never evidence of retention.
+    pub fn reveal_retrieval_answer(&self, block_id: &str, item_index: usize) -> AppResult<String> {
+        let (block, content) = self.load_retrieval_item(block_id, item_index)?;
+        let expected = content["items"][item_index].get("expectedAnswer").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        if content["items"][item_index].get("reportedOutcome").is_none() {
+            self.finish_retrieval_item(&block, content, item_index, RetrievalOutcome::SelfForgot, Vec::new())?;
+        }
+        Ok(expected)
+    }
+
+    fn load_retrieval_item(&self, block_id: &str, item_index: usize) -> AppResult<(NotebookBlock, serde_json::Value)> {
+        let block = self.store.get_block(block_id)?.ok_or_else(|| AppError::InvalidInput(format!("block not found: {block_id}")))?;
+        if block.block_type != DynamicBlockType::SpacedInterleavedRetrieval {
+            return Err(AppError::InvalidInput(format!("el bloque {block_id} no es un repaso espaciado")));
+        }
+        let content = block.content_json.clone();
+        if content.get("items").and_then(|v| v.as_array()).and_then(|a| a.get(item_index)).is_none() {
+            return Err(AppError::InvalidInput(format!("el repaso {block_id} no tiene el ítem {item_index}")));
+        }
+        Ok((block, content))
+    }
+
+    /// Persists the item's outcome marker FIRST (so it can't be recorded
+    /// twice), then moves the retrieval schedule and appends the evidence row.
+    fn finish_retrieval_item(
+        &self,
+        block: &NotebookBlock,
+        mut content: serde_json::Value,
+        item_index: usize,
+        outcome: RetrievalOutcome,
+        rubric: Vec<RubricCriterion>,
+    ) -> AppResult<()> {
+        let label = content["items"][item_index].get("conceptLabel").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        content["items"][item_index]["reportedOutcome"] = serde_json::to_value(outcome).map_err(|e| AppError::Persistence(e.to_string()))?;
+        self.store.update_block_contents(&block.document_id, &[BlockUpdate { id: block.id.clone(), content_json: content }])?;
+
+        let mut memory = self.store.get_learner_memory(LOCAL_LEARNER_ID)?;
+        let skill_id = memory.record_retrieval_outcome(&label, outcome, crate::notebook_store::now_ms());
+        self.store.save_learner_memory(&memory)?;
+
+        // The queued concept id IS the class (skill) the prompt reviews. The
+        // evidence row is best-effort history; the memory update above is
+        // what the student's scheduling depends on.
+        if let Some(skill_id) = skill_id {
+            if let Ok(Some(ctx)) = self.store.class_generation_context(&skill_id) {
+                let evidence_outcome = match outcome {
+                    RetrievalOutcome::Correct => EvidenceOutcome::Passed,
+                    RetrievalOutcome::Incorrect => EvidenceOutcome::Failed,
+                    RetrievalOutcome::SelfRecalled => EvidenceOutcome::SelfRecalled,
+                    RetrievalOutcome::SelfForgot => EvidenceOutcome::SelfForgot,
+                };
+                let evidence = SkillEvidence::new(&skill_id, &ctx.course.id, EvidenceKind::Retrieval, evidence_outcome)
+                    .with_block(&block.id)
+                    .with_rubric(rubric);
+                if let Err(e) = self.store.append_skill_evidence(&evidence) {
+                    tracing::warn!(error = %e, %skill_id, "failed to append retrieval evidence");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The study switch in force (creating the participant id and the random
+    /// assignment on first use). Read by the frontend to decide what to SHOW;
+    /// it must never reach generation or grading (see `domain::study`).
+    pub fn get_study_settings(&self) -> AppResult<StudySettings> {
+        self.store.study_settings()
+    }
+
+    /// Who decides the version: `random` (default, assigned once) or a manual
+    /// override by whoever runs the study.
+    pub fn set_study_variant_mode(&self, mode: VariantMode) -> AppResult<StudySettings> {
+        self.store.set_study_mode(mode)
+    }
+
+    /// Best-effort activity log for the engagement metrics.
+    pub fn log_study_event(&self, kind: StudyEventKind, class_id: Option<&str>) {
+        if let Err(e) = self.store.append_study_event(kind, class_id) {
+            tracing::warn!(error = %e, kind = kind.as_str(), "failed to log study event");
+        }
+    }
+
+    /// Everything this installation exports for the analysis.
+    pub fn export_study_report(&self) -> AppResult<StudyReport> {
+        Ok(study::build_report(
+            self.store.study_settings()?,
+            self.store.list_all_skill_evidence()?,
+            self.store.list_study_events()?,
+            crate::notebook_store::now_ms(),
+        ))
+    }
+
+    /// The capability map of one course: one entry per skill (class), each
+    /// with its derived status and the evidence rows behind it.
+    pub fn get_capability_map(&self, course_id: &str) -> AppResult<CapabilityMap> {
+        self.log_study_event(StudyEventKind::CapabilityMapOpened, None);
+        let classes = self.store.list_classes_for_course(course_id)?;
+        let milestones: std::collections::HashMap<String, (u16, String)> =
+            self.store.list_milestones_for_course(course_id)?.into_iter().map(|(id, week, title)| (id, (week, title))).collect();
+        let evidence = self.store.list_course_evidence(course_id)?;
+        let memory = self.store.get_learner_memory(LOCAL_LEARNER_ID)?;
+        Ok(capability_map::build(course_id, &classes, &milestones, &evidence, &memory))
+    }
+
+    /// Derived "solved / retained / applied" status of every skill of one
+    /// course — computed from the evidence history on every call, never stored.
+    pub fn get_course_skill_status(&self, course_id: &str) -> AppResult<Vec<SkillStatus>> {
+        Ok(skill_status::derive_all(&self.store.list_course_evidence(course_id)?))
+    }
+
+    /// The append-only evidence history of ONE skill (class), oldest first —
+    /// the source of truth any progress/achievement view must point at.
+    pub fn get_skill_evidence(&self, skill_id: &str) -> AppResult<Vec<SkillEvidence>> {
+        self.store.list_skill_evidence(skill_id)
+    }
+
+    /// Evidence for every skill of one course, oldest first.
+    pub fn get_course_evidence(&self, course_id: &str) -> AppResult<Vec<SkillEvidence>> {
+        self.store.list_course_evidence(course_id)
     }
 
     /// Read-only: the learner-memory viewer's data source. Always

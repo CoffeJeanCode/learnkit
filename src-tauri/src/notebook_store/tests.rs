@@ -452,3 +452,97 @@
         let ctx = store.class_generation_context(&classes[0].id).expect("ctx").expect("present");
         assert_eq!(ctx.class.objective.as_deref(), Some("Explicar el flujo con un ejemplo"));
     }
+
+    #[test]
+    fn skill_evidence_is_append_only_ordered_and_filterable_by_skill_and_course() {
+        use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, RubricCriterion, SkillEvidence};
+        let store = NotebookStore::open_in_memory().expect("open");
+        let rows = [
+            SkillEvidence::new("skill-a", "course-1", EvidenceKind::PracticeGate, EvidenceOutcome::Failed)
+                .with_block("b1")
+                .with_attempt(1, 0)
+                .with_support_level(Some("faded"))
+                .with_rubric(vec![RubricCriterion { criterion: "Nombra la causa raíz".into(), met: false, evidence: None }]),
+            SkillEvidence::new("skill-a", "course-1", EvidenceKind::PracticeGate, EvidenceOutcome::Passed).with_block("b1").with_attempt(2, 1),
+            SkillEvidence::new("skill-b", "course-1", EvidenceKind::Retrieval, EvidenceOutcome::SelfRecalled),
+            SkillEvidence::new("skill-c", "course-2", EvidenceKind::Closure, EvidenceOutcome::Passed),
+        ];
+        for r in &rows {
+            store.append_skill_evidence(r).expect("append");
+        }
+
+        let a = store.list_skill_evidence("skill-a").expect("list");
+        assert_eq!(a.len(), 2);
+        assert_eq!((a[0].outcome, a[1].outcome), (EvidenceOutcome::Failed, EvidenceOutcome::Passed), "insertion order is preserved");
+        assert_eq!(a[0].rubric[0].criterion, "Nombra la causa raíz");
+        assert_eq!(a[0].support_level.as_deref(), Some("faded"));
+        assert_eq!((a[1].attempt_number, a[1].hints_shown), (2, 1));
+        assert_eq!(store.list_course_evidence("course-1").expect("course").len(), 3);
+        assert!(store.list_skill_evidence("nope").expect("none").is_empty());
+    }
+
+    #[test]
+    fn a_skill_evidence_table_from_before_is_transfer_gets_the_column_added() {
+        let conn = rusqlite::Connection::open_in_memory().expect("conn");
+        conn.execute_batch(
+            "CREATE TABLE skill_evidence (id TEXT PRIMARY KEY, skill_id TEXT NOT NULL, course_id TEXT NOT NULL, block_id TEXT,
+             kind TEXT NOT NULL, outcome TEXT NOT NULL, attempt_number INTEGER NOT NULL, hints_shown INTEGER NOT NULL,
+             support_level TEXT, rubric_json TEXT NOT NULL DEFAULT '[]', created_at_ms INTEGER NOT NULL);
+             INSERT INTO skill_evidence VALUES ('e1','s','c',NULL,'practice_gate','passed',1,0,NULL,'[]',5);",
+        )
+        .expect("old shape");
+        migrate_add_evidence_transfer_column(&conn).expect("migrate");
+        migrate_add_evidence_transfer_column(&conn).expect("idempotent");
+        let transfer: i64 = conn.query_row("SELECT is_transfer FROM skill_evidence WHERE id = 'e1'", [], |r| r.get(0)).expect("column exists");
+        assert_eq!(transfer, 0, "old rows default to not-transfer");
+    }
+
+    #[test]
+    fn the_study_variant_is_assigned_once_stamped_on_evidence_and_overridable() {
+        use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, SkillEvidence};
+        use crate::domain::study::{StudyEventKind, VariantMode};
+        let store = NotebookStore::open_in_memory().expect("open");
+
+        let first = store.study_settings().expect("settings");
+        assert_eq!(first.mode, VariantMode::Random);
+        assert_eq!(Some(first.variant), first.random_assignment);
+        assert!(first.assigned_at_ms.is_some());
+        let again = store.study_settings().expect("settings");
+        assert_eq!((again.participant_id.as_str(), again.variant), (first.participant_id.as_str(), first.variant), "stable across reads");
+
+        // Evidence and events are stamped with the variant in force.
+        store.append_skill_evidence(&SkillEvidence::new("s", "c", EvidenceKind::PracticeGate, EvidenceOutcome::Passed)).expect("append");
+        store.append_study_event(StudyEventKind::ClassOpened, Some("s")).expect("event");
+        assert_eq!(store.list_skill_evidence("s").expect("rows")[0].variant.as_deref(), Some(first.variant.as_str()));
+        assert_eq!(store.list_study_events().expect("events")[0].variant.as_deref(), Some(first.variant.as_str()));
+
+        // A manual override changes what is in force but never the random assignment.
+        let other = if first.variant == crate::domain::study::StudyVariant::Gamified { VariantMode::Plain } else { VariantMode::Gamified };
+        let forced = store.set_study_mode(other).expect("override");
+        assert_ne!(forced.variant, first.variant);
+        assert_eq!(forced.random_assignment, first.random_assignment);
+        store.append_skill_evidence(&SkillEvidence::new("s", "c", EvidenceKind::Retrieval, EvidenceOutcome::Passed)).expect("append");
+        let rows = store.list_skill_evidence("s").expect("rows");
+        assert_eq!(rows[1].variant.as_deref(), Some(forced.variant.as_str()), "the switch is visible in the data");
+
+        // Back to random: the ORIGINAL assignment returns, no re-roll.
+        let back = store.set_study_mode(VariantMode::Random).expect("random again");
+        assert_eq!(back.variant, first.variant);
+    }
+
+    #[test]
+    fn a_skill_evidence_table_from_before_variant_gets_the_column_added_and_old_rows_stay_unstamped() {
+        let conn = rusqlite::Connection::open_in_memory().expect("conn");
+        conn.execute_batch(
+            "CREATE TABLE skill_evidence (id TEXT PRIMARY KEY, skill_id TEXT NOT NULL, course_id TEXT NOT NULL, block_id TEXT,
+             kind TEXT NOT NULL, outcome TEXT NOT NULL, attempt_number INTEGER NOT NULL, hints_shown INTEGER NOT NULL,
+             support_level TEXT, rubric_json TEXT NOT NULL DEFAULT '[]', is_transfer INTEGER NOT NULL DEFAULT 0, created_at_ms INTEGER NOT NULL);
+             INSERT INTO skill_evidence VALUES ('e1','s','c',NULL,'practice_gate','passed',1,0,NULL,'[]',0,5);",
+        )
+        .expect("old shape");
+        migrate_add_evidence_variant_column(&conn).expect("migrate");
+        migrate_add_evidence_variant_column(&conn).expect("idempotent");
+        let variant: Option<String> = conn.query_row("SELECT variant FROM skill_evidence WHERE id = 'e1'", [], |r| r.get(0)).expect("column exists");
+        assert_eq!(variant, None, "rows from before the experiment belong to no arm");
+    }
+

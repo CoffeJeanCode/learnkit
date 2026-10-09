@@ -291,6 +291,7 @@
                 constraints: vec![],
                 scaffolding_hints: vec![],
                 evaluation_rubric_summary: vec![],
+                is_transfer: false,
                 visual_aid: None,
             },
             &["blockType", "challengeStatement", "expectedMilestoneArtifact", "constraints", "scaffoldingHints", "evaluationRubricSummary"],

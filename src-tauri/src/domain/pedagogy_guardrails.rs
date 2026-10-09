@@ -103,8 +103,12 @@ pub fn block_guardrail_violations(block: &GeneratedSectionBlock) -> Vec<String> 
             constraints,
             scaffolding_hints,
             evaluation_rubric_summary,
+            is_transfer,
             visual_aid,
         } => {
+            if *is_transfer && !scaffolding_hints.is_empty() {
+                v.push("hands_on_mission de transferencia (isTransfer): scaffoldingHints debe ir vacío — la transferencia se evalúa sin pistas".to_string());
+            }
             scan_text("challengeStatement", challenge_statement, &mut v);
             scan_text("expectedMilestoneArtifact", expected_milestone_artifact, &mut v);
             scan_list("constraints", constraints, &mut v);
@@ -433,5 +437,22 @@ mod tests {
             self_evaluation_checklist: vec!["Puedo explicarlo".to_string()],
         };
         assert!(block_guardrail_violations(&closure).is_empty());
+    }
+
+    #[test]
+    fn a_transfer_mission_must_have_no_hints_but_an_ordinary_one_is_unaffected() {
+        let mission = |transfer: bool, hints: Vec<String>| GeneratedSectionBlock::HandsOnMission {
+            challenge_statement: "Aplica la idea en otro dominio".to_string(),
+            expected_milestone_artifact: "Una solución".to_string(),
+            constraints: vec!["Datos incompletos".to_string()],
+            scaffolding_hints: hints,
+            evaluation_rubric_summary: vec!["Adapta la regla".to_string()],
+            is_transfer: transfer,
+            visual_aid: None,
+        };
+        let hint = vec!["Empieza por el caso base".to_string()];
+        assert!(block_guardrail_violations(&mission(true, hint.clone())).iter().any(|m| m.contains("transferencia")));
+        assert!(block_guardrail_violations(&mission(true, vec![])).iter().all(|m| !m.contains("transferencia")));
+        assert!(block_guardrail_violations(&mission(false, hint)).iter().all(|m| !m.contains("transferencia")));
     }
 }

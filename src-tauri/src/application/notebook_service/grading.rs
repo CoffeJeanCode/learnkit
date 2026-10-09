@@ -14,6 +14,7 @@ use tauri::AppHandle;
 
 use crate::agents::closure_feedback_grader_agent::CLOSURE_FEEDBACK_GRADER_AGENT_ID;
 use crate::agents::notebook_gate_grader_agent::NOTEBOOK_GATE_GRADER_AGENT_ID;
+use crate::domain::skill_evidence::RubricCriterion;
 use crate::domain::notebook::{BlockStatus, DynamicBlockType, NotebookBlock};
 use crate::error::{AppError, AppResult};
 use crate::orchestration::Orchestrator;
@@ -51,6 +52,18 @@ pub(super) fn redact_block(block: &NotebookBlock) -> NotebookBlock {
                     obj.remove("modelSolution");
                 }
             }
+            // Retention only counts if the student answered BEFORE seeing the
+            // solution, so each item's `expectedAnswer` stays server-side
+            // until that item has an outcome (`reportedOutcome`).
+            DynamicBlockType::SpacedInterleavedRetrieval => {
+                if let Some(items) = obj.get_mut("items").and_then(|v| v.as_array_mut()) {
+                    for item in items.iter_mut().filter_map(|i| i.as_object_mut()) {
+                        if !item.contains_key("reportedOutcome") {
+                            item.remove("expectedAnswer");
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -86,17 +99,39 @@ pub(super) fn grade_branching_scenario(block: &NotebookBlock, selected_choice: &
     Ok(false)
 }
 
+/// A free-text gate's verdict: `scaffold_feedback` is `None` on a pass;
+/// `criteria` is the grader's per-criterion rubric judgment (may be empty).
+pub(super) struct ModelGrade {
+    pub passed: bool,
+    pub scaffold_feedback: Option<String>,
+    pub criteria: Vec<RubricCriterion>,
+}
+
 /// Grades a free-text submission (`heuristic_error_audit`'s diagnosis,
-/// `hands_on_mission`'s solution) via `notebook_gate_grader`. Returns
-/// `(passed, scaffold_feedback)` — feedback is `None` on a pass.
+/// `hands_on_mission`'s solution) via `notebook_gate_grader`.
 pub(super) async fn grade_with_model(
     orchestrator: &Orchestrator,
     app: Option<&AppHandle>,
     block: &NotebookBlock,
     submission_text: &str,
     attempt_number: u32,
-) -> AppResult<(bool, Option<String>)> {
-    let base_input = render::render_grading_input(block, submission_text, attempt_number);
+) -> AppResult<ModelGrade> {
+    run_gate_grader(orchestrator, app, render::render_grading_input(block, submission_text, attempt_number)).await
+}
+
+/// Grades ONE written retrieval answer against the item's `expectedAnswer`
+/// with the same grader agent (it has a `spaced_interleaved_retrieval` mode):
+/// no scaffold on a miss, because the answer is revealed right after.
+pub(super) async fn grade_retrieval_with_model(
+    orchestrator: &Orchestrator,
+    app: Option<&AppHandle>,
+    item: &serde_json::Value,
+    answer: &str,
+) -> AppResult<ModelGrade> {
+    run_gate_grader(orchestrator, app, render::render_retrieval_grading_input(item, answer)).await
+}
+
+async fn run_gate_grader(orchestrator: &Orchestrator, app: Option<&AppHandle>, base_input: String) -> AppResult<ModelGrade> {
     let mut note = String::new();
     let mut last_err: Option<AppError> = None;
     for attempt in 0..MAX_GRADING_ATTEMPTS {
@@ -106,7 +141,7 @@ pub(super) async fn grade_with_model(
             Ok(_) => {
                 let result = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
                 return match result {
-                    Some(r) => Ok((r.passed, r.scaffold.map(|s| s.content))),
+                    Some(r) => Ok(ModelGrade { passed: r.passed, scaffold_feedback: r.scaffold.map(|s| s.content), criteria: r.criteria }),
                     None => Err(AppError::AgentExecutionFailed(
                         "el calificador no llamó a grade_gate_submission".to_string(),
                     )),

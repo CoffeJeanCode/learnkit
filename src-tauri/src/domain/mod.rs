@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod capability_map;
 pub mod learner_memory;
 pub mod lesson_composition;
 pub mod message;
@@ -6,5 +7,9 @@ pub mod model;
 pub mod notebook;
 pub mod pedagogy_guardrails;
 pub mod provider;
+pub mod scaffolding;
+pub mod skill_evidence;
+pub mod study;
+pub mod skill_status;
 pub mod roadmap;
 pub mod workflow;

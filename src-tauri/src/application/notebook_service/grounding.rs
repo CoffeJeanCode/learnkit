@@ -47,7 +47,7 @@ pub(super) fn dominance_violation(
         return None;
     }
     let bt = block.block_type().as_str();
-    if !PRACTICE_BLOCK_FAMILY.contains(&bt) {
+    if !PRACTICE_BLOCK_FAMILY.contains(&bt) || matches!(block, GeneratedSectionBlock::HandsOnMission { is_transfer: true, .. }) {
         return None;
     }
     let prior = usage.get(bt).copied().unwrap_or(0);
@@ -80,7 +80,7 @@ pub(super) struct MasteryProgress {
 }
 
 impl MasteryProgress {
-    fn complete(self) -> bool {
+    pub(super) fn complete(self) -> bool {
         self.has_passed_conceptual && self.has_passed_practice
     }
 }
@@ -124,8 +124,11 @@ pub(super) fn single_block_violations(
     if !is_escalation && total_so_far > MAX_TOTAL_BLOCKS {
         v.push(format!("la clase ya tiene {total_so_far} bloques, el tope de seguridad es {MAX_TOTAL_BLOCKS}"));
     }
+    let is_transfer = matches!(block, GeneratedSectionBlock::HandsOnMission { is_transfer: true, .. });
     if let Some(last) = prior_types.last() {
-        if *last == block.block_type() {
+        // A transfer mission may directly follow the practice mission that
+        // completed mastery: it is a different case, not a repeat.
+        if *last == block.block_type() && !is_transfer {
             v.push(format!(
                 "blockType {} se repite consecutivamente respecto al bloque anterior — la secuencia debe variar",
                 block.block_type().as_str()
@@ -297,6 +300,7 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
             constraints,
             scaffolding_hints,
             evaluation_rubric_summary,
+            is_transfer,
             visual_aid,
         } => {
             if challenge_statement.trim().is_empty() {
@@ -308,7 +312,7 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
             if constraints.is_empty() {
                 v.push(format!("bloque {i} (hands_on_mission): constraints está vacío"));
             }
-            if scaffolding_hints.is_empty() {
+            if scaffolding_hints.is_empty() && !is_transfer {
                 v.push(format!("bloque {i} (hands_on_mission): scaffoldingHints está vacío"));
             }
             if evaluation_rubric_summary.is_empty() {
@@ -607,5 +611,27 @@ mod tests {
         let flowchart = gate_with(MermaidChartType::Flowchart, "flowchart LR\n    A[usa String::from] --> B[ok]");
         let v = single_block_violations(&[], &flowchart, 1, false, no_mastery(), false, false);
         assert!(!v.iter().any(|s| s.contains("::")), "`::` parses fine outside stateDiagram: {v:?}");
+    }
+
+    #[test]
+    fn a_transfer_mission_may_follow_a_mission_and_may_have_no_hints_but_an_ordinary_repeat_is_still_rejected() {
+        let mission = |transfer: bool| GeneratedSectionBlock::HandsOnMission {
+            challenge_statement: "c".to_string(),
+            expected_milestone_artifact: "a".to_string(),
+            constraints: vec!["k".to_string()],
+            scaffolding_hints: if transfer { vec![] } else { vec!["h".to_string()] },
+            evaluation_rubric_summary: vec!["r".to_string()],
+            is_transfer: transfer,
+            visual_aid: None,
+        };
+        let prior = [DynamicBlockType::HandsOnMission];
+        let ok = single_block_violations(&prior, &mission(true), 2, false, full_mastery(), false, false);
+        assert!(ok.is_empty(), "transfer after a mission is a new case, not a repeat: {ok:?}");
+        let repeated = single_block_violations(&prior, &mission(false), 2, false, full_mastery(), false, false);
+        assert!(repeated.iter().any(|m| m.contains("se repite consecutivamente")));
+
+        let usage: HashMap<String, i64> = [("hands_on_mission".to_string(), 3i64)].into_iter().collect();
+        assert!(dominance_violation(&mission(true), &(usage.clone(), 3)).is_none(), "transfer is exempt from the variety rule");
+        assert!(dominance_violation(&mission(false), &(usage, 3)).is_some());
     }
 }

@@ -44,7 +44,7 @@ export function BranchingScenarioChallengeBlock({
       <div className="notebook-block-body">
         <RichText className="block-question" text={content.scenario} />
         {content.visualAid && <StaticVisual visual={content.visualAid} />}
-        <p className="hint">Ya resolviste esta decisión.</p>
+        <p className="hint">{block.status === "passed" ? "Ya resolviste esta decisión." : "Esta decisión no se resolvió todavía: continuaremos con otra estrategia."}</p>
       </div>
     );
   }

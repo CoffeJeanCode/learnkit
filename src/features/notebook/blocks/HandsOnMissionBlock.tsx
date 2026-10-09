@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { SubmitGate } from "./index";
+import { usePresentation } from "../../../stores/study";
 import { InlineText, RichText } from "./RichText";
 import { StaticVisual } from "./StaticVisual";
 
@@ -21,6 +22,7 @@ export function HandsOnMissionBlock({
   isActive: boolean;
   onSubmitGate: SubmitGate;
 }) {
+  const { showTransferFraming } = usePresentation();
   const [submission, setSubmission] = useState("");
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<{ passed: boolean; feedback: string | null } | null>(null);
@@ -43,6 +45,11 @@ export function HandsOnMissionBlock({
 
   return (
     <div className="notebook-block-body">
+      {content.isTransfer && showTransferFraming && (
+        <p className="hint">
+          <strong>Reto de transferencia:</strong> el mismo concepto en un caso nuevo, sin pistas.
+        </p>
+      )}
       <RichText className="block-question" text={content.challengeStatement} />
       {content.visualAid && <StaticVisual visual={content.visualAid} />}
       <p className="hint">
@@ -51,18 +58,22 @@ export function HandsOnMissionBlock({
       <p className="hint">
         Restricciones: <InlineText text={content.constraints.join(" · ")} />
       </p>
-      <ul className="dod-list">
-        {content.scaffoldingHints.map((h) => (
-          <li key={h}>
-            <InlineText text={h} />
-          </li>
-        ))}
-      </ul>
+      {content.scaffoldingHints.length > 0 && (
+        <ul className="dod-list">
+          {content.scaffoldingHints.map((h) => (
+            <li key={h}>
+              <InlineText text={h} />
+            </li>
+          ))}
+        </ul>
+      )}
       <p className="hint">
         Te evaluarás en: <InlineText text={content.evaluationRubricSummary.join(" · ")} />
       </p>
       {resolved ? (
-        <p className="hint">Superaste este reto.</p>
+        <p className="hint">
+          {block.status === "passed" ? "Reto superado." : "Este reto no se superó todavía: continuaremos con otra estrategia."}
+        </p>
       ) : (
         <>
           <textarea

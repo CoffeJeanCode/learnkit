@@ -1174,3 +1174,18 @@ pre.output, .quickrun pre {
   .lex-lemniscate * { animation: none; stroke-dashoffset: 0; }
   .brand, .badge, .msg, .msg.user, .msg.assistant, .phase-step, .side-note { transform: none; }
 }
+
+/* Capability map (`CapabilityMapView`) — reuses .card/.badge; only the
+   map-specific pieces live here. */
+.cap-week { margin-top: 18px; }
+.cap-skill { margin-bottom: 14px; }
+.cap-week-title { font-family: var(--font-hand); font-size: 25px; font-weight: 600; margin: 0 0 8px; }
+.cap-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
+.cap-chip-off { opacity: 0.55; }
+.cap-celebration { margin: 6px 0; color: var(--green-chalk); font-size: 15px; }
+.cap-evidence, .cap-rubric { list-style: none; margin: 8px 0 0; padding-left: 0; }
+.cap-evidence > li { padding: 6px 0; border-top: 1px dashed var(--chalk-soft); }
+.cap-evidence-key > strong { color: var(--green-chalk); }
+.cap-rubric { padding-left: 14px; font-size: 14px; }
+.cap-rubric .met { color: var(--green-chalk); }
+.cap-skill summary { cursor: pointer; color: var(--chalk-soft); font-size: 14px; margin-top: 6px; }

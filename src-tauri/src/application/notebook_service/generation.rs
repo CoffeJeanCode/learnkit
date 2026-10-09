@@ -20,6 +20,10 @@ use crate::domain::notebook::{
     NotebookBlock, NotebookPayload,
 };
 use crate::domain::pedagogy_guardrails::{block_guardrail_violations, needs_llm_critic};
+use crate::domain::scaffolding;
+use crate::domain::study::StudyEventKind;
+use crate::domain::skill_status::MIN_RETENTION_INTERVAL_MS;
+use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, RubricCriterion, SkillEvidence};
 use crate::error::{AppError, AppResult};
 use crate::notebook_store::{ClassGenerationContext, NotebookStore};
 use crate::orchestration::Orchestrator;
@@ -73,6 +77,7 @@ impl NotebookService {
             .class_generation_context(class_id)?
             .ok_or_else(|| AppError::InvalidInput(format!("class not found: {class_id}")))?;
         self.ensure_prior_classes_complete(&ctx.class, &ctx.milestone.course_id)?;
+        self.log_study_event(StudyEventKind::ClassOpened, Some(class_id));
         let doc = self.store.ensure_document_shell(class_id, &ctx.class.title)?;
 
         if let Some(existing) = self.load_reconciled(class_id)? {
@@ -177,14 +182,20 @@ impl NotebookService {
         }
 
         let submission_text = submission_text_of(&submission);
-        let (passed, scaffold_feedback) = match &submission {
-            GateSubmission::InteractivePredictionGate { selected_option } => (grading::grade_prediction_gate(&block, selected_option)?, None),
-            GateSubmission::BranchingScenarioChallenge { selected_choice } => (grading::grade_branching_scenario(&block, selected_choice)?, None),
+        let (passed, scaffold_feedback, criteria) = match &submission {
+            GateSubmission::InteractivePredictionGate { selected_option } => {
+                (grading::grade_prediction_gate(&block, selected_option)?, None, Vec::new())
+            }
+            GateSubmission::BranchingScenarioChallenge { selected_choice } => {
+                (grading::grade_branching_scenario(&block, selected_choice)?, None, Vec::new())
+            }
             GateSubmission::HeuristicErrorAudit { diagnosis_text } => {
-                grading::grade_with_model(&self.orchestrator, app, &block, diagnosis_text, block.attempt_count + 1).await?
+                let g = grading::grade_with_model(&self.orchestrator, app, &block, diagnosis_text, block.attempt_count + 1).await?;
+                (g.passed, g.scaffold_feedback, g.criteria)
             }
             GateSubmission::HandsOnMission { submission_text } => {
-                grading::grade_with_model(&self.orchestrator, app, &block, submission_text, block.attempt_count + 1).await?
+                let g = grading::grade_with_model(&self.orchestrator, app, &block, submission_text, block.attempt_count + 1).await?;
+                (g.passed, g.scaffold_feedback, g.criteria)
             }
         };
 
@@ -196,13 +207,26 @@ impl NotebookService {
             tracing::warn!(error = %e, "failed to load learner memory, using transient defaults");
             crate::domain::learner_memory::LearnerCognitiveMemory::new(LOCAL_LEARNER_ID)
         });
+        let heavy_scaffolding = memory.needs_heavy_scaffolding();
         memory.record_gate_outcome(block.block_type, passed);
         let friction_is_low = memory.friction_is_low();
+
+        // Append the evidence row for THIS attempt — pass, fail or the
+        // attempt that tips the gate into escalation.
+        let will_escalate = !passed && block.attempt_count + 1 >= if friction_is_low { 1 } else { MAX_GATE_ATTEMPTS };
+        let outcome = if passed {
+            EvidenceOutcome::Passed
+        } else if will_escalate {
+            EvidenceOutcome::Escalated
+        } else {
+            EvidenceOutcome::Failed
+        };
+        self.record_gate_evidence(&document.class_id, &block, outcome, criteria, heavy_scaffolding);
         if let Ok(Some(gen_ctx)) = self.store.class_generation_context(&document.class_id) {
             if passed {
-                memory.resolve_misconceptions_for(&gen_ctx.class.title);
+                memory.resolve_misconceptions_for_block(block_id);
             } else if let Some(pattern) = misconception_pattern_from_submission(&block, &submission) {
-                memory.record_misconception(&gen_ctx.class.title, &pattern, &iso_date_from_ms(now_ms()));
+                memory.record_misconception(&gen_ctx.class.title, &pattern, &iso_date_from_ms(now_ms()), block_id);
             }
         }
         if let Err(e) = self.store.save_learner_memory(&memory) {
@@ -283,6 +307,45 @@ impl NotebookService {
         })
     }
 
+    /// Best-effort, like the memory update: failing to log evidence must
+    /// never block the student's grading result.
+    fn append_evidence(&self, evidence: &SkillEvidence) {
+        if let Err(e) = self.store.append_skill_evidence(evidence) {
+            tracing::warn!(error = %e, skill_id = %evidence.skill_id, "failed to append skill evidence");
+        }
+    }
+
+    /// One row per graded gate attempt: the skill (= class), result, how many
+    /// feedback rounds preceded it, the support level the gate was generated
+    /// under (re-derived from the blocks that came before it) and the
+    /// grader's rubric judgment.
+    fn record_gate_evidence(
+        &self,
+        class_id: &str,
+        block: &NotebookBlock,
+        outcome: EvidenceOutcome,
+        rubric: Vec<RubricCriterion>,
+        heavy_scaffolding: bool,
+    ) {
+        let Some(kind) = EvidenceKind::for_block(block.block_type) else { return };
+        let Ok(Some(gen_ctx)) = self.store.class_generation_context(class_id) else { return };
+        let prior: Vec<NotebookBlock> = self
+            .store
+            .load_notebook_by_class(class_id)
+            .ok()
+            .flatten()
+            .map(|p| p.blocks.into_iter().filter(|b| b.order_index < block.order_index).collect())
+            .unwrap_or_default();
+        let support = scaffolding::plan(&prior, heavy_scaffolding).support_level;
+        let evidence = SkillEvidence::new(class_id, &gen_ctx.course.id, kind, outcome)
+            .with_block(&block.id)
+            .with_attempt(block.attempt_count + 1, block.attempt_count)
+            .with_support_level(Some(support.as_str()))
+            .with_transfer(block.content_json.get("isTransfer").and_then(|v| v.as_bool()).unwrap_or(false))
+            .with_rubric(rubric);
+        self.append_evidence(&evidence);
+    }
+
     /// Grades the closing block's free-text reflection via
     /// `closure_feedback_grader`. The submitted reflection is persisted
     /// BEFORE grading (the frontend's debounced save may still be in
@@ -333,6 +396,13 @@ impl NotebookService {
         let graded = grading::grade_closure_with_model(&self.orchestrator, app, &block, reflection, block.attempt_count + 1).await?;
         let status = if graded.passed { BlockStatus::Passed } else { BlockStatus::Failed };
         let updated = self.store.update_block_status(block_id, status, Some(&graded.feedback), true)?;
+        if let Ok(Some(gen_ctx)) = self.store.class_generation_context(&document.class_id) {
+            let outcome = if graded.passed { EvidenceOutcome::Passed } else { EvidenceOutcome::Failed };
+            let evidence = SkillEvidence::new(&document.class_id, &gen_ctx.course.id, EvidenceKind::Closure, outcome)
+                .with_block(block_id)
+                .with_attempt(block.attempt_count + 1, block.attempt_count);
+            self.append_evidence(&evidence);
+        }
 
         // A passed closure means the class's concept is genuinely learned —
         // seed it into the spaced-retrieval queue so a FUTURE class's first
@@ -343,7 +413,9 @@ impl NotebookService {
             if let Ok(Some(gen_ctx)) = self.store.class_generation_context(&document.class_id) {
                 match self.store.get_learner_memory(LOCAL_LEARNER_ID) {
                     Ok(mut memory) => {
-                        memory.queue_retrieval(&document.class_id, &gen_ctx.class.title, now_ms());
+                        // First retrieval is due only after the minimum retention interval,
+                        // so a prompt answered right after the class can't pose as retention.
+                        memory.queue_retrieval(&document.class_id, &gen_ctx.class.title, now_ms() + MIN_RETENTION_INTERVAL_MS);
                         if let Err(e) = self.store.save_learner_memory(&memory) {
                             tracing::warn!(error = %e, "failed to persist learner memory after closure");
                         }
@@ -704,20 +776,9 @@ async fn generate_and_persist_block(
     let content_json = serde_json::to_value(&report.value).map_err(|e| AppError::Persistence(e.to_string()))?;
     let inserted = store.insert_block_if_count(document_id, block_type, &content_json, BlockStatus::Ready, Some(expected_block_count))?;
 
-    // The retrieval block is non-gate content (see
-    // `DynamicBlockType::SpacedInterleavedRetrieval`'s doc comment): reaching
-    // it IS the reactivation, same "no grading needed" philosophy as
-    // `anchored_micro_theory`/`declarative_visual_diagram`. Push each of the
-    // due items' schedule forward now that they've been shown again.
-    if inserted.is_some() && block_type == DynamicBlockType::SpacedInterleavedRetrieval && !due_ids.is_empty() {
-        let mut memory = learner_memory;
-        for id in &due_ids {
-            memory.reactivate_retrieval(id, true, now);
-        }
-        if let Err(e) = store.save_learner_memory(&memory) {
-            tracing::warn!(error = %e, "failed to persist spaced-retrieval reactivation");
-        }
-    }
+    // Showing a `spaced_interleaved_retrieval` block is exposure, not
+    // evidence: mastery only moves once the student reports an outcome
+    // (`NotebookService::record_retrieval_result`).
 
     Ok(inserted)
 }
@@ -801,6 +862,12 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
         if let Some(v) = dominance_violation(candidate, &self.block_type_usage) {
             violations.push(v);
         }
+        violations.extend(scaffolding::transfer_violations(
+            candidate,
+            &self.existing_blocks,
+            self.mastery.complete(),
+            self.is_escalation || self.is_regeneration || self.force_close,
+        ));
         violations.extend(block_guardrail_violations(candidate));
         if !violations.is_empty() {
             tracing::warn!(class_id = %self.class_id, ?violations, "generated block failed deterministic review");

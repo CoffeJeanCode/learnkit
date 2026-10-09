@@ -188,6 +188,22 @@ export const getClassNotebookProgress = (class_id: string) =>
 export const submitGateResponse = (block_id: string, submission: GateSubmission) =>
   invoke("submit_gate_response", { blockId: block_id, submission }).then((v) => GateResultSchema.parse(v));
 
+/**
+ * Grades the student's WRITTEN answer to one retrieval prompt and reveals the
+ * solution only now (the client never receives it before). The only path that
+ * can count as retention evidence.
+ */
+export const submitRetrievalAnswer = (block_id: string, item_index: number, answer: string) =>
+  invoke<{ correct: boolean; expectedAnswer: string }>("submit_retrieval_answer", {
+    blockId: block_id,
+    itemIndex: item_index,
+    answer,
+  });
+
+/** "No lo recuerdo": reveals the solution and records a self-reported miss. */
+export const revealRetrievalAnswer = (block_id: string, item_index: number) =>
+  invoke<string>("reveal_retrieval_answer", { blockId: block_id, itemIndex: item_index });
+
 // Grades the closing block's reflection: the backend persists the submitted
 // text, stores the verdict on the block, and returns the always
 // student-facing feedback. A `passed` verdict is what completes the class.
@@ -276,6 +292,82 @@ export interface LearnerCognitiveMemory {
 }
 
 export const getLearnerMemory = () => invoke<LearnerCognitiveMemory>("get_learner_memory");
+
+// --- Capability map ----------------------------------------------------------
+//
+// Mirrors `domain::capability_map` / `domain::skill_status` /
+// `domain::skill_evidence` in Rust (camelCase fields, snake_case enum values).
+// Everything here is DERIVED from the append-only evidence history.
+
+export interface SkillEvidence {
+  id: string;
+  skillId: string;
+  courseId: string;
+  blockId: string | null;
+  kind: "conceptual_gate" | "practice_gate" | "retrieval" | "closure";
+  outcome: "passed" | "failed" | "escalated" | "self_recalled" | "self_forgot";
+  attemptNumber: number;
+  hintsShown: number;
+  supportLevel: string | null;
+  rubric: { criterion: string; met: boolean; evidence?: string | null }[];
+  isTransfer: boolean;
+  createdAtMs: number;
+}
+
+export interface Achievement {
+  achieved: boolean;
+  achievedAtMs: number | null;
+  evidenceIds: string[];
+}
+
+export interface SkillStatus {
+  skillId: string;
+  solved: Achievement;
+  solvedWithAids: boolean | null;
+  retained: Achievement;
+  retainedAfterDays: number | null;
+  applied: Achievement;
+  attemptsRecorded: number;
+}
+
+export interface CapabilityEntry {
+  skillId: string;
+  title: string;
+  objective: string | null;
+  weekNumber: number;
+  milestoneTitle: string;
+  classComplete: boolean;
+  status: SkillStatus;
+  nextRetrievalAtMs: number | null;
+  evidence: SkillEvidence[];
+}
+
+export interface CapabilityMap {
+  courseId: string;
+  entries: CapabilityEntry[];
+  totals: { skills: number; solved: number; retained: number; applied: number };
+}
+
+// --- Study switch -------------------------------------------------------------
+
+export type StudyVariantMode = "random" | "gamified" | "plain";
+
+export interface StudySettings {
+  participantId: string;
+  mode: StudyVariantMode;
+  /** The version actually in force. */
+  variant: "gamified" | "plain";
+  randomAssignment: "gamified" | "plain" | null;
+  assignedAtMs: number | null;
+}
+
+export const getStudySettings = () => invoke<StudySettings>("get_study_settings");
+export const setStudyVariantMode = (mode: StudyVariantMode) => invoke<StudySettings>("set_study_variant_mode", { mode });
+export const logStudyEvent = (kind: "app_opened") => invoke<void>("log_study_event", { kind });
+/** Writes the participant's report into the app data folder; resolves to its path. */
+export const exportStudyReport = () => invoke<string>("export_study_report");
+
+export const getCapabilityMap = (course_id: string) => invoke<CapabilityMap>("get_capability_map", { courseId: course_id });
 
 // --- Lexical assistant (popover) --------------------------------------------
 //

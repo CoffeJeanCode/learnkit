@@ -134,7 +134,17 @@ documented workarounds in `src-tauri/`:
    (`embed-resource`), because Tauri wires it for bins only; without it, test
    binaries bind `comctl32` v5 and fail at startup.
 
-MSVC builds are unaffected by both. Replace the placeholder icons with
+3. `WebView2Loader.dll` — on `windows-gnu` the exe imports it dynamically (MSVC
+   links a static loader and needs no DLL). If it is missing the app dies at
+   startup with *"no se encontró WebView2Loader.dll"*. `build.rs` copies it next
+   to the exe (`target/<profile>/` and `deps/`) from the `webview2-com-sys`
+   sources, independent of build order, and stages it in `src-tauri/resources/`
+   so `make dist` bundles it into the installer through
+   `src-tauri/tauri.gnu.conf.json` (added only when the Rust host is GNU). If you
+   copy the bare `.exe` somewhere else, copy `WebView2Loader.dll` with it — or
+   use the installer.
+
+MSVC builds are unaffected by all three. Replace the placeholder icons with
 `bunx tauri icon <your-logo.png>` before release.
 
 ## BYOK configuration
@@ -243,16 +253,44 @@ bun install && bun run tauri build -- --bundles deb,appimage
 
 ## Releases and auto-update
 
-Releases ship from a tag: pushing a `vX.Y.Z` tag runs
-`.github/workflows/release.yml`, which builds all three platforms and
-publishes a GitHub Release with the installers **and** the updater
-manifest (`latest.json`). Inside the app, students see a new version in
-two places: the non-blocking "Nueva versión" banner on startup and the
-update button in the top bar.
+Releases ship from a tag. One command bumps the version everywhere, commits
+and tags; pushing the tag runs `.github/workflows/release.yml`, which builds
+Windows, Linux and macOS (Apple Silicon **and** Intel) and publishes a GitHub
+Release with the installers **and** the updater manifest (`latest.json`).
+Inside the app, students see a new version in two places: the non-blocking
+"Nueva versión" banner on startup and the update button in the top bar.
 
 ```bash
-git tag v0.2.0 && git push origin v0.2.0   # ← publishes the release
+bun run release patch --dry-run   # preview: 0.1.0 -> 0.1.1
+bun run release patch             # bump + commit + tag (also: minor | major | X.Y.Z)
+bun run release patch --push      # ...and push the branch + tag (publishes it)
 ```
+
+The version lives in four files that must agree — `package.json`,
+`src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`.
+`bun run release` edits all four; `bun run check:version` (and CI, before a
+release and on every PR) fails if they drift or if the tag does not name that
+version. The updater compares `tauri.conf.json`'s version with `latest.json`,
+so a mismatched tag would offer an update that never ends.
+
+CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`:
+typecheck, frontend build, UI checks and `cargo test --locked`.
+
+### One-time setup on GitHub
+
+1. **Signing secret** (below): add `TAURI_SIGNING_PRIVATE_KEY`.
+2. **Settings → Actions → General → Workflow permissions**: *Read and write
+   permissions* (the workflow publishes the release with `GITHUB_TOKEN`).
+3. **The repository must be public** for updates: the app polls
+   `https://github.com/CoffeJeanCode/learnkit/releases/latest/download/latest.json`
+   without credentials, which a private repo answers with 404 (the startup
+   check fails silently by design).
+4. Publish the first release (`bun run release patch --push` or the tag by
+   hand), then check that the release has the installers **and** `latest.json`.
+
+To test the updater end to end: install version N from the release, publish
+N+1, open the installed N — it should show "Nueva versión vN+1". (A `tauri dev`
+build also checks, but only an installed build can actually replace itself.)
 
 ### Updater signing key
 
@@ -271,6 +309,13 @@ commit; the private half is never in the repo:
 
 Treat the private key as irreplaceable: if it is lost, no update can ever
 be published for copies that already have the app installed.
+
+### Updater permissions
+
+The window's capability (`src-tauri/capabilities/default.json`) must grant
+`updater:default` and `process:allow-restart`; without them Tauri blocks the
+update check and the relaunch, and the silent startup check fails without
+any visible error.
 
 ## Running tests
 

@@ -1,13 +1,15 @@
 {
   "name": "learnkit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "release": "bun scripts/release.ts",
+    "check:version": "bun scripts/check-version.ts"
   },
   "dependencies": {
     "@ai-sdk/react": "^4.0.114",

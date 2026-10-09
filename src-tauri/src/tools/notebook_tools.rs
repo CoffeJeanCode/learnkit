@@ -116,6 +116,12 @@ pub struct GateScaffold {
 pub struct GateGradingResult {
     pub passed: bool,
     pub rationale: String,
+    /// Per-criterion judgment against the block's rubric/reference
+    /// (`evaluationRubricSummary` / `modelSolution`): what was met, with the
+    /// evidence found, and what is still missing. Stored in the skill
+    /// evidence history; never shown to the student.
+    #[serde(default)]
+    pub criteria: Vec<crate::domain::skill_evidence::RubricCriterion>,
     #[serde(default)]
     pub scaffold: Option<GateScaffold>,
 }
@@ -260,6 +266,19 @@ fn grade_gate_submission_json_schema() -> serde_json::Value {
         "properties": {
             "passed": {"type": "boolean"},
             "rationale": {"type": "string", "description": "Justificación breve de la calificación — no se muestra al estudiante si falló, solo se registra"},
+            "criteria": {
+                "type": "array",
+                "description": "Un elemento por criterio de la rúbrica (hands_on_mission) o por componente de la causa raíz (heuristic_error_audit): qué se pidió, si la entrega lo cumple y la evidencia concreta encontrada en ella (o qué falta). 2 a 6 elementos.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "criterion": {"type": "string"},
+                        "met": {"type": "boolean"},
+                        "evidence": {"type": "string", "description": "Cita o hecho concreto de la entrega que lo respalda; si no se cumple, qué falta"}
+                    },
+                    "required": ["criterion", "met"]
+                }
+            },
             "scaffold": {
                 "type": "object",
                 "description": "Obligatorio si passed=false; omitir si passed=true. NUNCA reveles la solución/respuesta correcta aquí.",
@@ -498,6 +517,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "constraints": {"type": "array", "items": {"type": "string"}, "description": "Restricciones reales, no genéricas"},
                     "scaffoldingHints": {"type": "array", "items": {"type": "string"}},
                     "evaluationRubricSummary": {"type": "array", "items": {"type": "string"}},
+                    "isTransfer": {"type": "boolean", "description": "true SOLO para el reto de transferencia: el mismo skill en un caso NUEVO, con restricciones distintas a las de misiones anteriores y scaffoldingHints VACÍO. Omitir (false) en una misión normal."},
                     "visualAid": visual_aid_json_schema()
                 },
                 "required": ["blockType", "challengeStatement", "expectedMilestoneArtifact", "constraints", "scaffoldingHints", "evaluationRubricSummary"],
@@ -608,6 +628,7 @@ mod tests {
         let result = GateGradingResult {
             passed: false,
             rationale: "No identifica la causa raíz".to_string(),
+            criteria: vec![],
             scaffold: Some(GateScaffold { scaffold_type: ScaffoldType::SocraticHint, content: "¿Qué pasa justo antes del error?".to_string() }),
         };
         let ack = tool.call(&mut ToolContext::new(), result).await.expect("infallible");
