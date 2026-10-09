@@ -8,6 +8,10 @@ on:
   push:
     tags:
       - "v*"
+  # Manual run from the Actions tab ("Run workflow" on main): builds the app and
+  # publishes the release for the version inside the files, creating the tag
+  # itself. Same result as pushing the tag, without needing git access.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -17,20 +21,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Never publish from a tag that does not name the version inside the files:
-  # the updater compares `tauri.conf.json`'s version against `latest.json`, so
-  # a mismatch would ship an installer that offers itself as an update forever
-  # (or never offers one).
-  verify:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-      - name: Tag matches the version in every file
-        run: bun scripts/check-version.ts "${{ github.ref_name }}"
-
   release:
-    needs: verify
     strategy:
       fail-fast: false
       matrix:
@@ -53,6 +44,13 @@ jobs:
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
+
+      # Not a test: a tag that does not name the version inside the files would
+      # publish an installer that offers itself as an update forever (the
+      # updater compares tauri.conf.json's version with latest.json). Fails in
+      # seconds, before any compiling.
+      - name: Tag matches the version in every file
+        run: bun scripts/check-version.ts ${{ github.ref_type == 'tag' && github.ref_name || '' }}
 
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
@@ -93,11 +91,14 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "LearnKit ${{ github.ref_name }}"
+          # Tag push: that tag. Manual run: v<version in tauri.conf.json>, which
+          # tauri-action creates on this commit.
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: "LearnKit v__VERSION__"
+          commitish: ${{ github.sha }}
           args: ${{ matrix.args }}
           releaseBody: >-
-            Instaladores de LearnKit ${{ github.ref_name }}.
+            Instaladores de LearnKit.
             Desde la app: 🔄 Actualizaciones en la barra superior, o el aviso
             que aparece al abrirla.
           # Published, not draft: `releases/latest/download/latest.json` only

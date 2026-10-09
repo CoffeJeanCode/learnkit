@@ -268,13 +268,16 @@ bun run release patch --push      # ...and push the branch + tag (publishes it)
 
 The version lives in four files that must agree — `package.json`,
 `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`.
-`bun run release` edits all four; `bun run check:version` (and CI, before a
-release and on every PR) fails if they drift or if the tag does not name that
+`bun run release` edits all four; `bun run check:version` (and the release
+workflow, before it compiles anything) fails if they drift or if the tag does not name that
 version. The updater compares `tauri.conf.json`'s version with `latest.json`,
 so a mismatched tag would offer an update that never ends.
 
-CI (`.github/workflows/ci.yml`) runs on every PR and push to `main`:
-typecheck, frontend build, UI checks and `cargo test --locked`.
+There is no test workflow: the only workflow is the release build. It also
+runs by hand — GitHub → Actions → **Release** → *Run workflow* on `main` builds
+every installer and publishes the release for the version in the files,
+creating the tag itself (no git push needed). Run `make test` locally before
+cutting a release.
 
 ### One-time setup on GitHub
 
