@@ -1,6 +1,6 @@
 [package]
 name = "learnkit"
-version = "0.1.0"
+version = "0.1.1"
 description = "LearnKit — multi-agent desktop boilerplate (Tauri 2 + Rig + React)"
 edition = "2021"
 rust-version = "1.77.2"
