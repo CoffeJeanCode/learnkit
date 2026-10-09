@@ -7,6 +7,14 @@
 SHELL := bash
 MANIFEST := src-tauri/Cargo.toml
 
+# Windows-GNU imports WebView2Loader.dll dynamically (MSVC links it statically),
+# so GNU installers must ship it: tauri.gnu.conf.json adds it as a bundle resource
+# (build.rs stages the file). Left out for MSVC/macOS/Linux builds.
+RUST_HOST := $(shell rustc -vV 2>/dev/null | sed -n 's/^host: //p')
+ifneq (,$(findstring windows-gnu,$(RUST_HOST)))
+TAURI_BUILD_ARGS := --config src-tauri/tauri.gnu.conf.json
+endif
+
 .PHONY: help setup check run build test typecheck dist dist-linux clean clean-all
 
 help: ## show this help
@@ -31,7 +39,7 @@ typecheck: ## tsc --noEmit
 
 dist: ## Windows installer + MSI (NSIS + WiX) — run on Windows
 	@if [ -n "$${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then \
-		bun run tauri build; \
+		bun run tauri build $(TAURI_BUILD_ARGS); \
 	else \
 		key="$$HOME/.tauri/learnkit.key"; \
 		if [ ! -f "$$key" ]; then \
@@ -41,7 +49,7 @@ dist: ## Windows installer + MSI (NSIS + WiX) — run on Windows
 			echo "        release build needs a private key to sign the updater bundle)"; \
 			exit 1; \
 		fi; \
-		TAURI_SIGNING_PRIVATE_KEY="$$key" bun run tauri build; \
+		TAURI_SIGNING_PRIVATE_KEY="$$key" bun run tauri build $(TAURI_BUILD_ARGS); \
 	fi
 
 dist-linux: ## Linux .deb + AppImage inside Docker (Tauri cannot cross-compile)

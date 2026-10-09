@@ -5,3 +5,4 @@ src-tauri/WixTools/
 *.hold
 *.key
 .env
+src-tauri/resources/

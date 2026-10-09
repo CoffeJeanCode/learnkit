@@ -134,7 +134,17 @@ documented workarounds in `src-tauri/`:
    (`embed-resource`), because Tauri wires it for bins only; without it, test
    binaries bind `comctl32` v5 and fail at startup.
 
-MSVC builds are unaffected by both. Replace the placeholder icons with
+3. `WebView2Loader.dll` — on `windows-gnu` the exe imports it dynamically (MSVC
+   links a static loader and needs no DLL). If it is missing the app dies at
+   startup with *"no se encontró WebView2Loader.dll"*. `build.rs` copies it next
+   to the exe (`target/<profile>/` and `deps/`) from the `webview2-com-sys`
+   sources, independent of build order, and stages it in `src-tauri/resources/`
+   so `make dist` bundles it into the installer through
+   `src-tauri/tauri.gnu.conf.json` (added only when the Rust host is GNU). If you
+   copy the bare `.exe` somewhere else, copy `WebView2Loader.dll` with it — or
+   use the installer.
+
+MSVC builds are unaffected by all three. Replace the placeholder icons with
 `bunx tauri icon <your-logo.png>` before release.
 
 ## BYOK configuration
