@@ -31,14 +31,21 @@ fn main() {
     // tauri embeds the Windows resource (app manifest with Common-Controls v6)
     // for binary targets only. Without the manifest in test binaries the
     // loader binds comctl32 v5 and v6-only imports fail at startup
-    // (STATUS_ENTRYPOINT_NOT_FOUND), so link the same resource into every
-    // target as well (merging identical resources is harmless).
+    // (STATUS_ENTRYPOINT_NOT_FOUND), so link the same resource into the NON-bin
+    // targets as well.
+    //
+    // Never into the bins: tauri already did it, and linking it twice gives the
+    // exe two VERSION resources. MinGW's ld merges identical duplicates, but
+    // MSVC's cvtres does not ("CVT1100: duplicate resource type:VERSION",
+    // followed by LNK1123) — it broke the release build on windows-latest.
     #[cfg(windows)]
     {
         let out = std::env::var("OUT_DIR").expect("OUT_DIR set by cargo");
         let rc = std::path::PathBuf::from(out).join("resource.rc");
         if rc.exists() {
-            let _ = embed_resource::compile_for_everything(&rc, embed_resource::NONE);
+            let _ = embed_resource::compile_for_tests(&rc, embed_resource::NONE);
+            let _ = embed_resource::compile_for_examples(&rc, embed_resource::NONE);
+            let _ = embed_resource::compile_for_benchmarks(&rc, embed_resource::NONE);
         }
     }
 }
