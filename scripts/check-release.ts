@@ -37,4 +37,21 @@ assert.equal(versionProblems(files, "v0.2.0").length, 1, "tag newer than the fil
 assert.equal(versionProblems({ ...files, cargoToml: files.cargoToml.replace("0.1.0", "0.1.1") }).length, 1, "drift between files");
 assert.throws(() => writeVersions({ ...files, cargoLock: "" }, "0.2.0"), /Cargo.lock/);
 
+// --- Windows checkouts use CRLF line endings -------------------------------
+const crlf = (f: VersionFiles): VersionFiles => ({
+  packageJson: f.packageJson.replace(/\n/g, "\r\n"),
+  tauriConf: f.tauriConf.replace(/\n/g, "\r\n"),
+  cargoToml: f.cargoToml.replace(/\n/g, "\r\n"),
+  cargoLock: f.cargoLock.replace(/\n/g, "\r\n"),
+});
+const win = crlf(files);
+assert.deepEqual(Object.values(readVersions(win)), ["0.1.0", "0.1.0", "0.1.0", "0.1.0"], "CRLF files are read");
+assert.deepEqual(versionProblems(win, "v0.1.0"), []);
+const winBumped = writeVersions(win, "0.2.0");
+assert.deepEqual(Object.values(readVersions(winBumped)), ["0.2.0", "0.2.0", "0.2.0", "0.2.0"]);
+assert.equal(winBumped.cargoLock, win.cargoLock.replace("0.1.0", "0.2.0"), "CRLF endings are preserved, only the number changes");
+assert.equal(winBumped.cargoToml, win.cargoToml.replace("0.1.0", "0.2.0"));
+// Mixed endings (a repo with autocrlf converting only some files) also work.
+assert.deepEqual(versionProblems({ ...files, cargoLock: win.cargoLock }, "v0.1.0"), []);
+
 console.log("release version logic: OK");
