@@ -517,6 +517,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "constraints": {"type": "array", "items": {"type": "string"}, "description": "Restricciones reales, no genéricas"},
                     "scaffoldingHints": {"type": "array", "items": {"type": "string"}},
                     "evaluationRubricSummary": {"type": "array", "items": {"type": "string"}},
+                    "isTransfer": {"type": "boolean", "description": "true SOLO para el reto de transferencia: el mismo skill en un caso NUEVO, con restricciones distintas a las de misiones anteriores y scaffoldingHints VACÍO. Omitir (false) en una misión normal."},
                     "visualAid": visual_aid_json_schema()
                 },
                 "required": ["blockType", "challengeStatement", "expectedMilestoneArtifact", "constraints", "scaffoldingHints", "evaluationRubricSummary"],

@@ -480,3 +480,19 @@
         assert_eq!(store.list_course_evidence("course-1").expect("course").len(), 3);
         assert!(store.list_skill_evidence("nope").expect("none").is_empty());
     }
+
+    #[test]
+    fn a_skill_evidence_table_from_before_is_transfer_gets_the_column_added() {
+        let conn = rusqlite::Connection::open_in_memory().expect("conn");
+        conn.execute_batch(
+            "CREATE TABLE skill_evidence (id TEXT PRIMARY KEY, skill_id TEXT NOT NULL, course_id TEXT NOT NULL, block_id TEXT,
+             kind TEXT NOT NULL, outcome TEXT NOT NULL, attempt_number INTEGER NOT NULL, hints_shown INTEGER NOT NULL,
+             support_level TEXT, rubric_json TEXT NOT NULL DEFAULT '[]', created_at_ms INTEGER NOT NULL);
+             INSERT INTO skill_evidence VALUES ('e1','s','c',NULL,'practice_gate','passed',1,0,NULL,'[]',5);",
+        )
+        .expect("old shape");
+        migrate_add_evidence_transfer_column(&conn).expect("migrate");
+        migrate_add_evidence_transfer_column(&conn).expect("idempotent");
+        let transfer: i64 = conn.query_row("SELECT is_transfer FROM skill_evidence WHERE id = 'e1'", [], |r| r.get(0)).expect("column exists");
+        assert_eq!(transfer, 0, "old rows default to not-transfer");
+    }

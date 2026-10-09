@@ -14,7 +14,7 @@
 //! formative checks right after a segment, a challenge level that is neither
 //! boring nor frustrating, and adapting to the learner's gaps.
 
-use crate::domain::notebook::{BlockStatus, DynamicBlockType, GateCategory, NotebookBlock};
+use crate::domain::notebook::{BlockStatus, DynamicBlockType, GateCategory, GeneratedSectionBlock, NotebookBlock};
 
 /// How much help the next block must give. Ordered from most to least support;
 /// the ladder only ever fades ONE rung per step (and steps back on struggle).
@@ -131,6 +131,49 @@ pub struct ScaffoldingPlan {
     pub stepped_back: bool,
     pub momentum: Momentum,
     pub gates_passed: usize,
+    /// Both mastery gates are passed and no transfer challenge exists yet:
+    /// the next block must be the transfer mission (`isTransfer`), not the
+    /// closure.
+    pub transfer_due: bool,
+}
+
+/// A transfer mission already exists in the class (attempted, whatever its
+/// outcome — an escalated transfer must not block the closure forever).
+pub fn transfer_attempted(blocks: &[NotebookBlock]) -> bool {
+    blocks.iter().any(|b| b.block_type == DynamicBlockType::HandsOnMission && b.content_json.get("isTransfer").and_then(|v| v.as_bool()) == Some(true))
+}
+
+/// Deterministic rules for the transfer challenge, checked on every candidate
+/// block (see `generation::critique`):
+/// - `isTransfer` only once BOTH mastery gates are passed (it is applied
+///   knowledge, not first contact);
+/// - its constraints must differ from every earlier mission's (a NEW case);
+/// - the closure cannot arrive before a transfer was attempted (forced and
+///   regenerated closures are exempt: `exempt`).
+pub fn transfer_violations(candidate: &GeneratedSectionBlock, existing: &[NotebookBlock], mastery_complete: bool, exempt: bool) -> Vec<String> {
+    let mut v = Vec::new();
+    match candidate {
+        GeneratedSectionBlock::HandsOnMission { is_transfer: true, constraints, .. } => {
+            if !mastery_complete {
+                v.push("isTransfer solo es válido cuando el estudiante ya superó la compuerta conceptual Y la de práctica".to_string());
+            }
+            let prior: Vec<String> = existing
+                .iter()
+                .filter(|b| b.block_type == DynamicBlockType::HandsOnMission)
+                .filter_map(|b| b.content_json.get("constraints").and_then(|c| c.as_array()))
+                .flatten()
+                .filter_map(|c| c.as_str().map(|s| s.trim().to_lowercase()))
+                .collect();
+            if let Some(repeated) = constraints.iter().find(|c| prior.contains(&c.trim().to_lowercase())) {
+                v.push(format!("el reto de transferencia repite la restricción «{repeated}» de una misión anterior — debe ser un caso NUEVO con restricciones distintas"));
+            }
+        }
+        GeneratedSectionBlock::MetacognitiveClosure { .. } if !exempt && mastery_complete && !transfer_attempted(existing) => {
+            v.push("antes del cierre falta el reto de transferencia: genera una hands_on_mission con isTransfer=true (caso nuevo, restricciones distintas, scaffoldingHints vacío)".to_string());
+        }
+        _ => {}
+    }
+    v
 }
 
 fn momentum_of(blocks: &[NotebookBlock]) -> Momentum {
@@ -191,6 +234,7 @@ pub fn plan(blocks: &[NotebookBlock], needs_heavy_scaffolding: bool) -> Scaffold
         level = level.step_back();
     }
 
+    let transfer_due = passed(GateCategory::Conceptual) && passed(GateCategory::Practice) && !transfer_attempted(blocks);
     ScaffoldingPlan {
         step_number: blocks.len() + 1,
         support_level: level,
@@ -199,6 +243,7 @@ pub fn plan(blocks: &[NotebookBlock], needs_heavy_scaffolding: bool) -> Scaffold
         stepped_back,
         momentum: momentum_of(blocks),
         gates_passed: blocks.iter().filter(|b| b.block_type.is_gate() && b.status == BlockStatus::Passed).count(),
+        transfer_due,
     }
 }
 
@@ -230,6 +275,15 @@ impl ScaffoldingPlan {
             out["nextShouldCheck"] = serde_json::Value::String(
                 "El bloque anterior enseñó algo que nadie ha comprobado: prefiere una compuerta/chequeo \
                  sobre ESO antes de añadir teoría nueva."
+                    .to_string(),
+            );
+        }
+        if self.transfer_due {
+            out["transferDue"] = serde_json::Value::String(
+                "Ambas dimensiones de maestría están superadas: el SIGUIENTE bloque debe ser la hands_on_mission de \
+                 TRANSFERENCIA (isTransfer=true): el mismo concepto en un caso NUEVO, restricciones distintas a las \
+                 de las misiones anteriores, scaffoldingHints vacío, nivel de reto apenas mayor que lo ya demostrado. \
+                 Solo después puede venir el cierre."
                     .to_string(),
             );
         }
@@ -332,4 +386,65 @@ mod tests {
         assert_eq!(j["alreadyCovered"][0], "t0");
         assert!(j.get("nextShouldCheck").is_some());
     }
+
+    fn mission(constraints: &[&str], transfer: bool, hints: &[&str]) -> GeneratedSectionBlock {
+        GeneratedSectionBlock::HandsOnMission {
+            challenge_statement: "c".into(),
+            expected_milestone_artifact: "a".into(),
+            constraints: constraints.iter().map(|s| s.to_string()).collect(),
+            scaffolding_hints: hints.iter().map(|s| s.to_string()).collect(),
+            evaluation_rubric_summary: vec!["r".into()],
+            is_transfer: transfer,
+            visual_aid: None,
+        }
+    }
+
+    fn mastered() -> Vec<NotebookBlock> {
+        vec![block(0, InteractivePredictionGate, Passed, 1), {
+            let mut m = block(1, HandsOnMission, Passed, 1);
+            m.content_json = serde_json::json!({ "constraints": ["Sin librerías externas"] });
+            m
+        }]
+    }
+
+    #[test]
+    fn transfer_is_due_once_both_gates_are_passed_until_one_is_attempted() {
+        assert!(!plan(&[block(0, InteractivePredictionGate, Passed, 1)], false).transfer_due, "practice not passed yet");
+        assert!(plan(&mastered(), false).transfer_due);
+        assert!(plan(&mastered(), false).to_json(&mastered()).get("transferDue").is_some());
+
+        let mut with_transfer = mastered();
+        let mut t = block(2, HandsOnMission, Escalated, 3);
+        t.content_json = serde_json::json!({ "isTransfer": true });
+        with_transfer.push(t);
+        assert!(!plan(&with_transfer, false).transfer_due, "an escalated transfer must not block the closure forever");
+    }
+
+    #[test]
+    fn closure_is_rejected_until_a_transfer_was_attempted_unless_exempt() {
+        let closure = GeneratedSectionBlock::MetacognitiveClosure {
+            synthesis_task: "s".into(),
+            prediction_comparison: crate::domain::notebook::PredictionComparison {
+                initial_prediction: "i".into(),
+                final_result: "f".into(),
+                contrast_narrative: "c".into(),
+            },
+            self_evaluation_checklist: vec!["x".into()],
+        };
+        assert_eq!(transfer_violations(&closure, &mastered(), true, false).len(), 1);
+        assert!(transfer_violations(&closure, &mastered(), true, true).is_empty(), "forced/regenerated closures are exempt");
+        assert!(transfer_violations(&closure, &mastered(), false, false).is_empty(), "mastery rule is grounding's job");
+    }
+
+    #[test]
+    fn a_transfer_mission_needs_mastery_and_constraints_unseen_in_earlier_missions() {
+        let fresh = mission(&["Datos con valores nulos"], true, &[]);
+        assert!(transfer_violations(&fresh, &mastered(), true, false).is_empty());
+        assert_eq!(transfer_violations(&fresh, &mastered(), false, false).len(), 1, "too early");
+
+        let repeated = mission(&["  sin librerías EXTERNAS "], true, &[]);
+        assert_eq!(transfer_violations(&repeated, &mastered(), true, false).len(), 1, "same constraint, different case it is not");
+        assert!(transfer_violations(&mission(&["x"], false, &["pista"]), &mastered(), true, false).is_empty(), "ordinary missions untouched");
+    }
 }
+

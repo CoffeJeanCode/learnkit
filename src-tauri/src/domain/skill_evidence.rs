@@ -138,6 +138,10 @@ pub struct SkillEvidence {
     /// self-reports.
     #[serde(default)]
     pub rubric: Vec<RubricCriterion>,
+    /// The activity was a transfer challenge (a NEW case, different
+    /// constraints, no hints) — the only evidence "applied" is built from.
+    #[serde(default)]
+    pub is_transfer: bool,
     pub created_at_ms: i64,
 }
 
@@ -156,6 +160,7 @@ impl SkillEvidence {
             hints_shown: 0,
             support_level: None,
             rubric: Vec::new(),
+            is_transfer: false,
             created_at_ms: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as i64)
@@ -176,6 +181,11 @@ impl SkillEvidence {
 
     pub fn with_support_level(mut self, level: Option<&str>) -> Self {
         self.support_level = level.map(str::to_string);
+        self
+    }
+
+    pub fn with_transfer(mut self, is_transfer: bool) -> Self {
+        self.is_transfer = is_transfer;
         self
     }
 

@@ -42,7 +42,7 @@ function deriveBlockLexicalContext(content: DynamicSectionBlock): { term: string
       return {
         term: content.items[0]?.conceptLabel ?? "",
         fragmentContext: content.items.map((i) => i.prompt).join(" "),
-        answerBearing: content.items.map((i) => i.expectedAnswer),
+        answerBearing: content.items.map((i) => i.expectedAnswer ?? ""),
       };
     case "anchored_micro_theory": {
       // All 4 layers (hook/boundary/rule/error) — `analogyBoundary` is

@@ -110,6 +110,21 @@
             constraints: vec!["Sin librerías externas".to_string()],
             scaffolding_hints: vec!["Empieza por identificar las entidades".to_string()],
             evaluation_rubric_summary: vec!["Cubre el caso base".to_string()],
+            is_transfer: false,
+            visual_aid: None,
+        }
+    }
+
+    /// The transfer challenge that must precede the closure: same skill, NEW
+    /// case, constraints unseen in `hands_on_mission()`, and no hints.
+    fn transfer_mission() -> GeneratedSectionBlock {
+        GeneratedSectionBlock::HandsOnMission {
+            challenge_statement: "Aplica la misma idea a otro dominio".to_string(),
+            expected_milestone_artifact: "Una solución en el caso nuevo".to_string(),
+            constraints: vec!["Datos con valores faltantes".to_string()],
+            scaffolding_hints: vec![],
+            evaluation_rubric_summary: vec!["Adapta la regla al caso nuevo".to_string()],
+            is_transfer: true,
             visual_aid: None,
         }
     }
@@ -408,8 +423,10 @@
         // — so this fixture exercises the full "infinite notebook" arc: gate
         // -> content -> gate -> closure, only once both are actually cleared.
         let runner = Arc::new(ScriptedNotebookRunner {
-            blocks: Mutex::new(vec![Some(prediction_gate("B")), Some(micro_theory()), Some(hands_on_mission()), Some(closure())].into()),
-            grading: Mutex::new(vec![GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), criteria: vec![], scaffold: None }].into()),
+            blocks: Mutex::new(
+                vec![Some(prediction_gate("B")), Some(micro_theory()), Some(hands_on_mission()), Some(transfer_mission()), Some(closure())].into(),
+            ),
+            grading: Mutex::new(vec![GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), criteria: vec![], scaffold: None }, GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), criteria: vec![], scaffold: None }].into()),
             ..Default::default()
         });
         let service = service_with(runner.clone());
@@ -440,14 +457,33 @@
             .expect("submit ok");
         assert!(mission_result.passed, "both mastery dimensions are now satisfied");
 
+        // Mastery is not the end: the transfer challenge comes before the closure.
         let_background_chain_settle().await;
         let progress = service.get_class_notebook_progress(&class_id).expect("progress");
         assert_eq!(progress.blocks.len(), 4);
+        let transfer_block = progress.blocks.last().unwrap();
+        assert_eq!(transfer_block.block_type, DynamicBlockType::HandsOnMission);
+        assert_eq!(transfer_block.content_json["isTransfer"], true);
+
+        let transfer_result = service
+            .submit_gate_response(None, &transfer_block.id, GateSubmission::HandsOnMission { submission_text: "caso nuevo".to_string() })
+            .await
+            .expect("submit ok");
+        assert!(transfer_result.passed);
+
+        let_background_chain_settle().await;
+        let progress = service.get_class_notebook_progress(&class_id).expect("progress");
+        assert_eq!(progress.blocks.len(), 5);
         assert_eq!(
-            progress.document.current_block_index, 4,
-            "advanced past the passed practice gate and the auto-unlocked closing block"
+            progress.document.current_block_index, 5,
+            "advanced past the passed transfer gate and the auto-unlocked closing block"
         );
         assert_eq!(progress.blocks.last().unwrap().block_type, DynamicBlockType::MetacognitiveClosure);
+
+        // The transfer attempt is logged as applied-evidence (first try, independent support, no hints seen).
+        let status = service.get_course_skill_status(&service.list_courses().expect("courses")[0].id).expect("status");
+        assert!(status[0].solved.achieved && status[0].applied.achieved, "{status:?}");
+        assert!(!status[0].retained.achieved, "retention needs a later, written answer");
     }
 
     #[tokio::test]
@@ -608,16 +644,14 @@
         assert_eq!(row.skill_id, class_id);
     }
 
-    #[test]
-    fn a_retrieval_self_report_moves_memory_and_logs_evidence_once_while_showing_the_block_does_neither() {
-        use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome};
-        let service = service_with(Arc::new(ScriptedNotebookRunner::default()));
-        let class_id = first_class_id(&service);
-        let doc = service.store.ensure_document_shell(&class_id, "Clase").expect("shell");
+    /// Persists a retrieval block for `class_id` with one queued concept, the
+    /// way a due-retrieval first block would exist after generation.
+    fn retrieval_fixture(service: &NotebookService, class_id: &str) -> NotebookBlock {
+        let doc = service.store.ensure_document_shell(class_id, "Clase").expect("shell");
         let mut memory = service.store.get_learner_memory(LOCAL_LEARNER_ID).expect("memory");
-        memory.queue_retrieval(&class_id, "Pilas LIFO", 0);
+        memory.queue_retrieval(class_id, "Pilas LIFO", 0);
         service.store.save_learner_memory(&memory).expect("save");
-        let block = service
+        service
             .store
             .insert_block(
                 &doc.id,
@@ -626,22 +660,70 @@
                     "items": [{"conceptLabel": "Pilas LIFO", "prompt": "¿Qué sale primero?", "expectedAnswer": "El último en entrar"}]}),
                 BlockStatus::Ready,
             )
-            .expect("insert");
+            .expect("insert")
+    }
 
-        // Merely having the block persisted: no evidence, mastery untouched.
-        assert!(service.get_skill_evidence(&class_id).expect("evidence").is_empty());
+    #[test]
+    fn the_solution_never_reaches_the_client_before_the_student_answers() {
+        let service = service_with(Arc::new(ScriptedNotebookRunner::default()));
+        let class_id = first_class_id(&service);
+        let block = retrieval_fixture(&service, &class_id);
+
+        let before = grading::redact_block(&block);
+        assert!(before.content_json["items"][0].get("expectedAnswer").is_none(), "answer must be withheld");
+        assert_eq!(before.content_json["items"][0]["prompt"], "¿Qué sale primero?");
+
+        let mut answered = block.clone();
+        answered.content_json["items"][0]["reportedOutcome"] = serde_json::json!("correct");
+        assert!(grading::redact_block(&answered).content_json["items"][0].get("expectedAnswer").is_some(), "revealed once answered");
+    }
+
+    #[tokio::test]
+    async fn a_graded_written_answer_is_retrieval_evidence_and_can_only_be_given_once() {
+        use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome};
+        let runner = Arc::new(ScriptedNotebookRunner {
+            grading: Mutex::new(vec![GateGradingResult { passed: true, rationale: "ok".to_string(), criteria: vec![], scaffold: None }].into()),
+            ..Default::default()
+        });
+        let service = service_with(runner.clone());
+        let class_id = first_class_id(&service);
+        let block = retrieval_fixture(&service, &class_id);
         let before = service.get_learner_memory().expect("memory").retrieval_spaced_queue[0].mastery_level;
 
-        service.record_retrieval_result(&block.id, 0, true).expect("report");
-        service.record_retrieval_result(&block.id, 0, true).expect("repeat is a no-op");
+        // Persisting/showing the block alone changed nothing.
+        assert!(service.get_skill_evidence(&class_id).expect("evidence").is_empty());
+
+        let r = service.submit_retrieval_answer(None, &block.id, 0, "el último que entró").await.expect("graded");
+        assert!(r.correct);
+        assert_eq!(r.expected_answer, "El último en entrar");
+        assert_eq!(*runner.grading_calls.lock().unwrap(), 1);
 
         let evidence = service.get_skill_evidence(&class_id).expect("evidence");
-        assert_eq!(evidence.len(), 1, "a repeated report must not add a second row");
-        assert_eq!((evidence[0].kind, evidence[0].outcome), (EvidenceKind::Retrieval, EvidenceOutcome::SelfRecalled));
-        assert!(!evidence[0].outcome.is_demonstration());
-        let after = service.get_learner_memory().expect("memory").retrieval_spaced_queue[0].mastery_level;
-        assert!(after > before);
-        assert!(service.record_retrieval_result(&block.id, 5, true).is_err(), "out-of-range item");
+        assert_eq!(evidence.len(), 1);
+        assert_eq!((evidence[0].kind, evidence[0].outcome), (EvidenceKind::Retrieval, EvidenceOutcome::Passed));
+        assert!(service.get_learner_memory().expect("memory").retrieval_spaced_queue[0].mastery_level > before);
+
+        assert!(service.submit_retrieval_answer(None, &block.id, 0, "otra vez").await.is_err(), "a second answer is rejected");
+        assert!(matches!(service.submit_retrieval_answer(None, &block.id, 0, "   ").await, Err(AppError::InvalidInput(_))));
+        assert_eq!(service.get_skill_evidence(&class_id).expect("evidence").len(), 1);
+    }
+
+    #[test]
+    fn giving_up_reveals_the_answer_records_a_miss_once_and_never_counts_as_retention() {
+        use crate::domain::skill_evidence::EvidenceOutcome;
+        let service = service_with(Arc::new(ScriptedNotebookRunner::default()));
+        let class_id = first_class_id(&service);
+        let block = retrieval_fixture(&service, &class_id);
+
+        assert_eq!(service.reveal_retrieval_answer(&block.id, 0).expect("reveal"), "El último en entrar");
+        assert_eq!(service.reveal_retrieval_answer(&block.id, 0).expect("idempotent"), "El último en entrar");
+
+        let evidence = service.get_skill_evidence(&class_id).expect("evidence");
+        assert_eq!(evidence.len(), 1, "revealing twice must not log twice");
+        assert_eq!(evidence[0].outcome, EvidenceOutcome::SelfForgot);
+        assert!(service.reveal_retrieval_answer(&block.id, 5).is_err(), "out-of-range item");
+        let status = service.get_course_skill_status(&service.list_courses().expect("courses")[0].id).expect("status");
+        assert!(status.iter().all(|s| !s.retained.achieved));
     }
 
     #[tokio::test]
@@ -916,10 +998,10 @@
         // gate -> closure (grounding rejects a closure before mastery).
         let runner = Arc::new(ScriptedNotebookRunner {
             blocks: Mutex::new(
-                vec![Some(prediction_gate("B")), Some(micro_theory()), Some(hands_on_mission()), Some(closure())].into(),
+                vec![Some(prediction_gate("B")), Some(micro_theory()), Some(hands_on_mission()), Some(transfer_mission()), Some(closure())].into(),
             ),
             grading: Mutex::new(
-                vec![GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), criteria: vec![], scaffold: None }].into(),
+                vec![GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), criteria: vec![], scaffold: None }, GateGradingResult { passed: true, rationale: "cumple la rúbrica".to_string(), criteria: vec![], scaffold: None }].into(),
             ),
             closure_feedback: Mutex::new(
                 vec![
@@ -961,6 +1043,13 @@
             )
             .await
             .expect("practice gate passes");
+        let_background_chain_settle().await;
+        let progress = service.get_class_notebook_progress(&class_id).expect("progress");
+        let transfer = progress.blocks.last().expect("transfer mission buffered after mastery").clone();
+        service
+            .submit_gate_response(None, &transfer.id, GateSubmission::HandsOnMission { submission_text: "caso nuevo".to_string() })
+            .await
+            .expect("transfer gate passes");
         let_background_chain_settle().await;
 
         let progress = service.get_class_notebook_progress(&class_id).expect("progress");

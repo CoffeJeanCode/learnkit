@@ -130,8 +130,8 @@ banderas:
   (heuristic_error_audit o hands_on_mission).
 
 El bloque de cierre (metacognitive_closure) es OBLIGATORIO pero SOLO es válido cuando
-`masteryStatus.canClose` es `true` (ambas banderas en `true`) — el sistema RECHAZA cualquier
-cierre prematuro. Mientras falte una de las dos, sigue generando bloques de teoría/práctica hacia
+`masteryStatus.canClose` es `true` (ambas banderas en `true`) Y ya existe el reto de transferencia
+(ver RETO DE TRANSFERENCIA) — el sistema RECHAZA cualquier cierre prematuro. Mientras falte una de las dos, sigue generando bloques de teoría/práctica hacia
 la que falte: si `hasPassedConceptualGate` es `false`, prioriza otra oportunidad de predicción o
 decisión; si `hasPassedPracticeGate` es `false`, prioriza otra oportunidad de auditoría o misión
 práctica — nunca repitas el mismo blockType dos veces seguidas para lograrlo, varía el ángulo o la
@@ -179,6 +179,23 @@ propio anchored_micro_theory (ese bloque ya no acepta visualAid — ver su entra
 BLOQUES abajo). El diagrama separado ya resuelve solapamiento y anclaje geométrico (ver REGLAS DE
 ORO DE GEOMETRÍA, GROUNDING Y COLISIONES más abajo); duplicar esa lógica dentro de la microteoría
 solo genera el mismo problema dos veces.
+
+## RETO DE TRANSFERENCIA (`scaffolding.transferDue`)
+Dominar un ejercicio no prueba que el estudiante pueda aplicar la idea. Cuando `scaffolding.transferDue`
+viene presente (ambas compuertas de maestría superadas y aún no hubo transferencia), el SIGUIENTE
+bloque es OBLIGATORIAMENTE una `hands_on_mission` con `isTransfer: true` — el sistema rechaza el
+`metacognitive_closure` hasta que exista. Reglas de ese bloque:
+- Es el MISMO concepto en un caso NUEVO: otro dominio, contexto o dato — no una variante cosmética
+  de la misión anterior.
+- `constraints` DISTINTAS a las de toda misión anterior de `contentSoFar` (el sistema rechaza una
+  restricción repetida) y reales, no genéricas.
+- `scaffoldingHints` VACÍO: se evalúa sin pistas. El apoyo ya se atenuó hasta `independent`.
+- Nivel de reto apenas por encima de lo demostrado (obedece `challengeBalance`), nunca el techo.
+- Puede ir justo después de la misión que completó la maestría (esta es la única excepción a "nunca
+  el mismo blockType dos veces seguidas").
+- Abre con la micro-meta: qué podrá hacer el estudiante "sin ayuda" al terminar. Fuera de este caso
+  usa SIEMPRE `isTransfer` ausente/false.
+Si el estudiante no la supera tras sus intentos, el flujo continúa solo; no cuenta como dominio.
 
 ## ANDAMIAJE GRADUAL — PROHIBIDO EL SALTO DE CONOCIMIENTO (`scaffolding`)
 El input trae `scaffolding`, calculado por el sistema: `supportLevel` (full → guided → faded →

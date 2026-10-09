@@ -229,6 +229,26 @@ pub(super) fn render_grading_input(block: &NotebookBlock, submission_text: &str,
     )
 }
 
+/// Input for the gate grader's `spaced_interleaved_retrieval` mode: one
+/// prompt, its reference answer and what the student wrote.
+pub(super) fn render_retrieval_grading_input(item: &serde_json::Value, answer: &str) -> String {
+    let context = serde_json::json!({
+        "blockType": "spaced_interleaved_retrieval",
+        "blockContent": {
+            "conceptLabel": item.get("conceptLabel"),
+            "prompt": item.get("prompt"),
+            "expectedAnswer": item.get("expectedAnswer"),
+        },
+        "studentSubmission": answer,
+        "attemptNumber": 1,
+    });
+    format!(
+        "Califica esta respuesta de repaso llamando a grade_gate_submission según tu system prompt \
+         (modo spaced_interleaved_retrieval).\n\n{}",
+        serde_json::to_string_pretty(&context).unwrap_or_default()
+    )
+}
+
 /// Input for `closure_feedback_grader`'s `grade_closure_submission` call —
 /// the closing block's student reflection against its synthesis task and
 /// self-evaluation checklist. The caller persists `reflection` into the

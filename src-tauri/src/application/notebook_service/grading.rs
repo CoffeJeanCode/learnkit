@@ -52,6 +52,18 @@ pub(super) fn redact_block(block: &NotebookBlock) -> NotebookBlock {
                     obj.remove("modelSolution");
                 }
             }
+            // Retention only counts if the student answered BEFORE seeing the
+            // solution, so each item's `expectedAnswer` stays server-side
+            // until that item has an outcome (`reportedOutcome`).
+            DynamicBlockType::SpacedInterleavedRetrieval => {
+                if let Some(items) = obj.get_mut("items").and_then(|v| v.as_array_mut()) {
+                    for item in items.iter_mut().filter_map(|i| i.as_object_mut()) {
+                        if !item.contains_key("reportedOutcome") {
+                            item.remove("expectedAnswer");
+                        }
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -104,7 +116,22 @@ pub(super) async fn grade_with_model(
     submission_text: &str,
     attempt_number: u32,
 ) -> AppResult<ModelGrade> {
-    let base_input = render::render_grading_input(block, submission_text, attempt_number);
+    run_gate_grader(orchestrator, app, render::render_grading_input(block, submission_text, attempt_number)).await
+}
+
+/// Grades ONE written retrieval answer against the item's `expectedAnswer`
+/// with the same grader agent (it has a `spaced_interleaved_retrieval` mode):
+/// no scaffold on a miss, because the answer is revealed right after.
+pub(super) async fn grade_retrieval_with_model(
+    orchestrator: &Orchestrator,
+    app: Option<&AppHandle>,
+    item: &serde_json::Value,
+    answer: &str,
+) -> AppResult<ModelGrade> {
+    run_gate_grader(orchestrator, app, render::render_retrieval_grading_input(item, answer)).await
+}
+
+async fn run_gate_grader(orchestrator: &Orchestrator, app: Option<&AppHandle>, base_input: String) -> AppResult<ModelGrade> {
     let mut note = String::new();
     let mut last_err: Option<AppError> = None;
     for attempt in 0..MAX_GRADING_ATTEMPTS {

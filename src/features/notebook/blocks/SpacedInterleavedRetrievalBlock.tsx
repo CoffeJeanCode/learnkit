@@ -1,34 +1,50 @@
 import { useState } from "react";
 import type { DynamicSectionBlock } from "../../../lib/schemas";
-import { recordRetrievalResult } from "../../../lib/tauri";
+import { revealRetrievalAnswer, submitRetrievalAnswer } from "../../../lib/tauri";
 import { InlineText } from "./RichText";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "spaced_interleaved_retrieval" }>;
 
-// One reactivated concept: the student recalls FIRST, reveals the expected
-// answer, then says honestly whether they recalled it. That self-report is the
-// ONLY thing that moves their retrieval mastery — merely seeing this block
-// does not (and self-reports count for less than a graded answer).
-function RetrievalItem({
-  blockId,
-  index,
-  item,
-}: {
-  blockId: string;
-  index: number;
-  item: Content["items"][number];
-}) {
-  const [revealed, setRevealed] = useState(false);
-  const [reported, setReported] = useState<"self_recalled" | "self_forgot" | null>(item.reportedOutcome ?? null);
-  const [error, setError] = useState(false);
+type Outcome = "correct" | "incorrect" | "self_recalled" | "self_forgot";
 
-  const report = async (recalled: boolean) => {
+// One reactivated concept. The student WRITES their answer from memory; only
+// then does the backend grade it and reveal the solution (the client never has
+// it before — see `redact_block` in Rust). That is what makes a correct answer
+// evidence of recall. Giving up is allowed ("No lo recuerdo") and is recorded
+// as a miss, without penalty.
+function RetrievalItem({ blockId, index, item }: { blockId: string; index: number; item: Content["items"][number] }) {
+  const [answer, setAnswer] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  const [outcome, setOutcome] = useState<Outcome | null>(item.reportedOutcome ?? null);
+  const [expected, setExpected] = useState<string | null>(item.expectedAnswer ?? null);
+
+  const check = async () => {
+    if (busy || !answer.trim()) return;
+    setBusy(true);
     setError(false);
     try {
-      await recordRetrievalResult(blockId, index, recalled);
-      setReported(recalled ? "self_recalled" : "self_forgot");
+      const r = await submitRetrievalAnswer(blockId, index, answer.trim());
+      setExpected(r.expectedAnswer);
+      setOutcome(r.correct ? "correct" : "incorrect");
     } catch {
       setError(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const giveUp = async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(false);
+    try {
+      setExpected(await revealRetrievalAnswer(blockId, index));
+      setOutcome("self_forgot");
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -40,34 +56,39 @@ function RetrievalItem({
       <p className="retrieval-prompt">
         <InlineText text={item.prompt} />
       </p>
-      {revealed ? (
+      {outcome === null ? (
         <>
-          <p className="retrieval-answer">
-            <InlineText text={item.expectedAnswer} />
-          </p>
-          {reported ? (
-            <p className="hint">
-              {reported === "self_recalled"
-                ? "Anotado: lo recordabas. Te lo volveremos a preguntar más adelante."
-                : "Anotado: lo repasaremos pronto, sin penalización."}
-            </p>
-          ) : (
-            <div className="row">
-              <button className="btn-quiet" onClick={() => void report(true)}>
-                Lo recordaba
-              </button>
-              <button className="btn-quiet" onClick={() => void report(false)}>
-                No lo recordaba
-              </button>
-            </div>
-          )}
-          {error && <p className="hint">No se pudo guardar tu respuesta. Inténtalo de nuevo.</p>}
+          <textarea
+            value={answer}
+            onChange={(e) => setAnswer(e.target.value)}
+            placeholder="Responde de memoria, con tus palabras…"
+            rows={2}
+            disabled={busy}
+          />
+          <div className="row">
+            <button className="btn-primary" onClick={() => void check()} disabled={busy || !answer.trim()}>
+              {busy ? "Comprobando…" : "Comprobar"}
+            </button>
+            <button className="btn-quiet" onClick={() => void giveUp()} disabled={busy}>
+              No lo recuerdo
+            </button>
+          </div>
         </>
       ) : (
-        <button className="btn-quiet" onClick={() => setRevealed(true)}>
-          Ya intenté recordarlo — mostrar respuesta
-        </button>
+        <>
+          <p className="hint">
+            {outcome === "correct"
+              ? "Lo recordaste."
+              : "Todavía no — sin penalización, lo repasaremos de nuevo más adelante."}
+          </p>
+          {expected && (
+            <p className="retrieval-answer">
+              <InlineText text={expected} />
+            </p>
+          )}
+        </>
       )}
+      {error && <p className="hint">No se pudo completar. Inténtalo de nuevo.</p>}
     </li>
   );
 }

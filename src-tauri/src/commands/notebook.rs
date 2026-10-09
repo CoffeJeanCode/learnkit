@@ -4,7 +4,9 @@ use tauri::State;
 
 use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{BlockUpdate, ClassRecord, ClosureFeedback, Course, DiagnosticBatteryState, GateResult, GateSubmission, NotebookPayload};
+use crate::application::notebook_service::RetrievalAnswerResult;
 use crate::domain::skill_evidence::SkillEvidence;
+use crate::domain::skill_status::SkillStatus;
 use crate::error::AppResult;
 use crate::state::AppState;
 
@@ -113,11 +115,29 @@ pub fn reset_class_notebook(state: State<'_, AppState>, class_id: String) -> App
     state.notebook_service.reset_class_notebook(&class_id)
 }
 
-/// The student's self-report on ONE spaced-retrieval prompt, sent after they
-/// saw the answer. The only path that moves retrieval mastery.
+/// Grades the student's WRITTEN answer to one spaced-retrieval prompt and
+/// reveals the solution only now. The only path that can count as retention.
 #[tauri::command]
-pub fn record_retrieval_result(state: State<'_, AppState>, block_id: String, item_index: usize, recalled: bool) -> AppResult<()> {
-    state.notebook_service.record_retrieval_result(&block_id, item_index, recalled)
+pub async fn submit_retrieval_answer(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    block_id: String,
+    item_index: usize,
+    answer: String,
+) -> AppResult<RetrievalAnswerResult> {
+    state.notebook_service.submit_retrieval_answer(Some(&app), &block_id, item_index, &answer).await
+}
+
+/// "No lo recuerdo": reveals the solution and records a self-reported miss.
+#[tauri::command]
+pub fn reveal_retrieval_answer(state: State<'_, AppState>, block_id: String, item_index: usize) -> AppResult<String> {
+    state.notebook_service.reveal_retrieval_answer(&block_id, item_index)
+}
+
+/// Derived solved/retained/applied status of every skill of a course.
+#[tauri::command]
+pub fn get_course_skill_status(state: State<'_, AppState>, course_id: String) -> AppResult<Vec<SkillStatus>> {
+    state.notebook_service.get_course_skill_status(&course_id)
 }
 
 /// Append-only evidence history of one skill (class), oldest first.

@@ -21,6 +21,7 @@ use crate::domain::notebook::{
 };
 use crate::domain::pedagogy_guardrails::{block_guardrail_violations, needs_llm_critic};
 use crate::domain::scaffolding;
+use crate::domain::skill_status::MIN_RETENTION_INTERVAL_MS;
 use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, RubricCriterion, SkillEvidence};
 use crate::error::{AppError, AppResult};
 use crate::notebook_store::{ClassGenerationContext, NotebookStore};
@@ -338,6 +339,7 @@ impl NotebookService {
             .with_block(&block.id)
             .with_attempt(block.attempt_count + 1, block.attempt_count)
             .with_support_level(Some(support.as_str()))
+            .with_transfer(block.content_json.get("isTransfer").and_then(|v| v.as_bool()).unwrap_or(false))
             .with_rubric(rubric);
         self.append_evidence(&evidence);
     }
@@ -409,7 +411,9 @@ impl NotebookService {
             if let Ok(Some(gen_ctx)) = self.store.class_generation_context(&document.class_id) {
                 match self.store.get_learner_memory(LOCAL_LEARNER_ID) {
                     Ok(mut memory) => {
-                        memory.queue_retrieval(&document.class_id, &gen_ctx.class.title, now_ms());
+                        // First retrieval is due only after the minimum retention interval,
+                        // so a prompt answered right after the class can't pose as retention.
+                        memory.queue_retrieval(&document.class_id, &gen_ctx.class.title, now_ms() + MIN_RETENTION_INTERVAL_MS);
                         if let Err(e) = self.store.save_learner_memory(&memory) {
                             tracing::warn!(error = %e, "failed to persist learner memory after closure");
                         }
@@ -856,6 +860,12 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
         if let Some(v) = dominance_violation(candidate, &self.block_type_usage) {
             violations.push(v);
         }
+        violations.extend(scaffolding::transfer_violations(
+            candidate,
+            &self.existing_blocks,
+            self.mastery.complete(),
+            self.is_escalation || self.is_regeneration || self.force_close,
+        ));
         violations.extend(block_guardrail_violations(candidate));
         if !violations.is_empty() {
             tracing::warn!(class_id = %self.class_id, ?violations, "generated block failed deterministic review");

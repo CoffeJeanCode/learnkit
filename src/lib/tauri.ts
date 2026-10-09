@@ -189,11 +189,20 @@ export const submitGateResponse = (block_id: string, submission: GateSubmission)
   invoke("submit_gate_response", { blockId: block_id, submission }).then((v) => GateResultSchema.parse(v));
 
 /**
- * Self-report for one spaced-retrieval prompt, sent AFTER the answer was
- * revealed. Showing the block never changes mastery; only this does.
+ * Grades the student's WRITTEN answer to one retrieval prompt and reveals the
+ * solution only now (the client never receives it before). The only path that
+ * can count as retention evidence.
  */
-export const recordRetrievalResult = (block_id: string, item_index: number, recalled: boolean) =>
-  invoke("record_retrieval_result", { blockId: block_id, itemIndex: item_index, recalled }).then(() => undefined);
+export const submitRetrievalAnswer = (block_id: string, item_index: number, answer: string) =>
+  invoke<{ correct: boolean; expectedAnswer: string }>("submit_retrieval_answer", {
+    blockId: block_id,
+    itemIndex: item_index,
+    answer,
+  });
+
+/** "No lo recuerdo": reveals the solution and records a self-reported miss. */
+export const revealRetrievalAnswer = (block_id: string, item_index: number) =>
+  invoke<string>("reveal_retrieval_answer", { blockId: block_id, itemIndex: item_index });
 
 // Grades the closing block's reflection: the backend persists the submitted
 // text, stores the verdict on the block, and returns the always

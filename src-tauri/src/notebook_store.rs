@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS skill_evidence (
     hints_shown INTEGER NOT NULL,
     support_level TEXT,
     rubric_json TEXT NOT NULL DEFAULT '[]',
+    is_transfer INTEGER NOT NULL DEFAULT 0,
     created_at_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_skill_evidence_skill ON skill_evidence(skill_id, created_at_ms);
@@ -107,6 +108,18 @@ CREATE TABLE IF NOT EXISTS learner_memory (
     updated_at_ms INTEGER NOT NULL
 );
 "#;
+
+/// `skill_evidence` shipped without `is_transfer`; databases created by that
+/// build need the column added (a fresh one already has it).
+fn migrate_add_evidence_transfer_column(conn: &Connection) -> AppResult<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(skill_evidence)")?;
+    let has_column = stmt.query_map([], |row| row.get::<_, String>(1))?.collect::<Result<Vec<_>, _>>()?.iter().any(|n| n == "is_transfer");
+    drop(stmt);
+    if !has_column {
+        conn.execute("ALTER TABLE skill_evidence ADD COLUMN is_transfer INTEGER NOT NULL DEFAULT 0", [])?;
+    }
+    Ok(())
+}
 
 /// One-time migration: an sqlite file written before the fixed-4-section
 /// notebook model was retired has `notebook_blocks.section_type TEXT NOT
@@ -306,6 +319,7 @@ impl NotebookStore {
         migrate_add_class_micromodule_columns(&conn)?;
         migrate_add_block_gating_columns(&conn)?;
         conn.execute_batch(SCHEMA_SQL)?;
+        migrate_add_evidence_transfer_column(&conn)?;
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
@@ -646,8 +660,8 @@ impl NotebookStore {
         let rubric = serde_json::to_string(&e.rubric).map_err(|err| AppError::Persistence(err.to_string()))?;
         self.lock().execute(
             "INSERT INTO skill_evidence
-                (id, skill_id, course_id, block_id, kind, outcome, attempt_number, hints_shown, support_level, rubric_json, created_at_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                (id, skill_id, course_id, block_id, kind, outcome, attempt_number, hints_shown, support_level, rubric_json, is_transfer, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 e.id,
                 e.skill_id,
@@ -659,6 +673,7 @@ impl NotebookStore {
                 e.hints_shown,
                 e.support_level,
                 rubric,
+                e.is_transfer,
                 e.created_at_ms
             ],
         )?;
@@ -678,7 +693,7 @@ impl NotebookStore {
     fn query_skill_evidence(&self, filter: &str, arg: &str) -> AppResult<Vec<SkillEvidence>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(&format!(
-            "SELECT id, skill_id, course_id, block_id, kind, outcome, attempt_number, hints_shown, support_level, rubric_json, created_at_ms
+            "SELECT id, skill_id, course_id, block_id, kind, outcome, attempt_number, hints_shown, support_level, rubric_json, is_transfer, created_at_ms
              FROM skill_evidence {filter} ORDER BY created_at_ms ASC, rowid ASC"
         ))?;
         let rows = stmt.query_map(params![arg], |row| {
@@ -699,7 +714,8 @@ impl NotebookStore {
                     hints_shown: row.get(7)?,
                     support_level: row.get(8)?,
                     rubric: serde_json::from_str(&rubric_json).unwrap_or_default(),
-                    created_at_ms: row.get(10)?,
+                    is_transfer: row.get(10)?,
+                    created_at_ms: row.get(11)?,
                 },
                 kind,
                 outcome,
