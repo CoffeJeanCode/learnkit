@@ -130,12 +130,12 @@ documented workarounds in `src-tauri/`:
 
 1. `shim/memset_explicit.c` — MSVCRT does not export C23 `memset_explicit`,
    required by libsodium (Stronghold engine). Compiled for `windows-gnu` only.
-2. `build.rs` links the app manifest resource into the **test / example /
-   benchmark** targets (`embed-resource`), because Tauri wires it for bins only;
-   without it, test binaries bind `comctl32` v5 and fail at startup. It must NOT
-   also link it into the bins: MinGW merges the duplicate, but MSVC fails with
-   `CVT1100: duplicate resource type:VERSION` (this broke the release build on
-   `windows-latest`).
+2. `build.rs` links the app manifest resource into **every** artifact on
+   `windows-gnu` (`embed-resource`), because Tauri wires it for bins only;
+   without it, test binaries bind `comctl32` v5 and fail at startup. On MSVC it
+   does NOT: the duplicate it creates in the exe is merged by MinGW's ld but
+   rejected by MSVC (`CVT1100: duplicate resource type:VERSION`, which broke the
+   release build on `windows-latest`), so MSVC relies on Tauri's own embedding.
 3. `WebView2Loader.dll` — on `windows-gnu` the exe imports it dynamically (MSVC
    links a static loader and needs no DLL). If it is missing the app dies at
    startup with *"no se encontró WebView2Loader.dll"*. `build.rs` copies it next
@@ -146,7 +146,7 @@ documented workarounds in `src-tauri/`:
    copy the bare `.exe` somewhere else, copy `WebView2Loader.dll` with it — or
    use the installer.
 
-MSVC builds are unaffected by 1 and 3, and handled by the bin exclusion in 2. Replace the placeholder icons with
+MSVC builds skip all three. Replace the placeholder icons with
 `bunx tauri icon <your-logo.png>` before release.
 
 ## BYOK configuration
