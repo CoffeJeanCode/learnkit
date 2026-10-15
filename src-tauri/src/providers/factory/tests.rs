@@ -58,6 +58,7 @@
         assert_eq!(ProviderFactory::output_budget(&ProviderKind::OpenAI), 16384);
         assert_eq!(ProviderFactory::output_budget(&ProviderKind::Gemini), 16384);
         assert_eq!(ProviderFactory::output_budget(&ProviderKind::OpenRouter), 16384);
+        assert_eq!(ProviderFactory::output_budget(&ProviderKind::Xiaomi), 131_072);
     }
 
     #[test]

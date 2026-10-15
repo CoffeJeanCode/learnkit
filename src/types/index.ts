@@ -1,4 +1,4 @@
-export type ProviderKind = "openai" | "anthropic" | "gemini" | "openrouter" | "deepseek";
+export type ProviderKind = "openai" | "anthropic" | "gemini" | "openrouter" | "deepseek" | "xiaomi";
 
 export interface ProviderConfig {
   id: string;
