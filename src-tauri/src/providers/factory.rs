@@ -71,10 +71,12 @@ impl ProviderFactory {
     /// artefactos enormes (un syllabus de 4 semanas + notebook completo
     /// caben justos en 8192 — observado `finish_reason=Length`), así que se
     /// pide 16384 donde el proveedor lo admite. DeepSeek capa a 8192 en su
-    /// API: pedir más falla del lado del proveedor.
+    /// API: pedir más falla del lado del proveedor. MiMo admite hasta
+    /// 131072 tokens de salida.
     pub fn output_budget(provider: &ProviderKind) -> u64 {
         match provider {
             ProviderKind::DeepSeek => 8192,
+            ProviderKind::Xiaomi => 131_072,
             _ => 16384,
         }
     }
@@ -135,6 +137,17 @@ impl ProviderFactory {
             }
             ProviderKind::DeepSeek => {
                 let client = rig_core::providers::deepseek::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with(model, system_prompt, input, tools).await
+            }
+            ProviderKind::Xiaomi => {
+                // MiMo exposes an OpenAI-compatible API: reuse the OpenAI
+                // client with Xiaomi's base URL (Bearer auth, /v1/models).
+                let client = rig_core::providers::openai::Client::builder()
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
@@ -224,6 +237,17 @@ impl ProviderFactory {
             }
             ProviderKind::DeepSeek => {
                 let client = rig_core::providers::deepseek::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_diagnostic_tools(model, system_prompt, input, capture, Self::output_budget(&config.provider), scope).await
+            }
+            ProviderKind::Xiaomi => {
+                // MiMo exposes an OpenAI-compatible API: reuse the OpenAI
+                // client with Xiaomi's base URL (Bearer auth, /v1/models).
+                let client = rig_core::providers::openai::Client::builder()
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
@@ -357,6 +381,17 @@ impl ProviderFactory {
                 let model = client.completion_model(model_name);
                 Self::prompt_with_notebook_block_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider)).await
             }
+            ProviderKind::Xiaomi => {
+                // MiMo exposes an OpenAI-compatible API: reuse the OpenAI
+                // client with Xiaomi's base URL (Bearer auth, /v1/models).
+                let client = rig_core::providers::openai::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_notebook_block_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider)).await
+            }
         }
     }
 
@@ -442,6 +477,17 @@ impl ProviderFactory {
             }
             ProviderKind::DeepSeek => {
                 let client = rig_core::providers::deepseek::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_gate_grading_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::Xiaomi => {
+                // MiMo exposes an OpenAI-compatible API: reuse the OpenAI
+                // client with Xiaomi's base URL (Bearer auth, /v1/models).
+                let client = rig_core::providers::openai::Client::builder()
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
@@ -538,6 +584,17 @@ impl ProviderFactory {
                 let model = client.completion_model(model_name);
                 Self::prompt_with_closure_grading_tool(model, system_prompt, input, capture).await
             }
+            ProviderKind::Xiaomi => {
+                // MiMo exposes an OpenAI-compatible API: reuse the OpenAI
+                // client with Xiaomi's base URL (Bearer auth, /v1/models).
+                let client = rig_core::providers::openai::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_closure_grading_tool(model, system_prompt, input, capture).await
+            }
         }
     }
 
@@ -625,6 +682,17 @@ impl ProviderFactory {
                 let model = client.completion_model(model_name);
                 Self::prompt_with_block_audit_tool(model, system_prompt, input, capture).await
             }
+            ProviderKind::Xiaomi => {
+                // MiMo exposes an OpenAI-compatible API: reuse the OpenAI
+                // client with Xiaomi's base URL (Bearer auth, /v1/models).
+                let client = rig_core::providers::openai::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_block_audit_tool(model, system_prompt, input, capture).await
+            }
         }
     }
 
@@ -658,7 +726,7 @@ impl ProviderFactory {
         let base_url = config.effective_base_url();
 
         let response = match config.provider {
-            ProviderKind::OpenAI | ProviderKind::OpenRouter | ProviderKind::DeepSeek => {
+            ProviderKind::OpenAI | ProviderKind::OpenRouter | ProviderKind::DeepSeek | ProviderKind::Xiaomi => {
                 let mut req = http
                     .get(format!("{}/models", base_url.trim_end_matches('/')))
                     .bearer_auth(api_key);
@@ -706,7 +774,7 @@ impl ProviderFactory {
         let base_url = config.effective_base_url();
 
         match config.provider {
-            ProviderKind::OpenAI | ProviderKind::OpenRouter | ProviderKind::DeepSeek => {
+            ProviderKind::OpenAI | ProviderKind::OpenRouter | ProviderKind::DeepSeek | ProviderKind::Xiaomi => {
                 let mut req = http
                     .get(format!("{}/models", base_url.trim_end_matches('/')))
                     .bearer_auth(api_key);

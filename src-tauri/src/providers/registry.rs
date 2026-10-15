@@ -39,6 +39,7 @@ impl ProviderRegistry {
             ProviderKind::Gemini => "gemini".to_string(),
             ProviderKind::OpenRouter => "openrouter".to_string(),
             ProviderKind::DeepSeek => "deepseek".to_string(),
+            ProviderKind::Xiaomi => "xiaomi".to_string(),
         }
     }
 
@@ -53,6 +54,25 @@ impl ProviderRegistry {
     pub fn upsert(&self, config: ProviderConfig) {
         if let Ok(mut map) = self.inner.write() {
             map.insert(config.id.clone(), config);
+        }
+    }
+
+    /// Insert default slots for built-in providers missing from the
+    /// registry, without touching existing entries. Covers upgrades: a
+    /// `providers.json` persisted before a new provider shipped would
+    /// otherwise shadow it forever via `replace_all`.
+    pub fn ensure_defaults(&self) {
+        for kind in ProviderKind::all() {
+            let id = self.default_id(kind);
+            if self.get(&id).is_err() {
+                self.upsert(ProviderConfig {
+                    id: id.clone(),
+                    provider: *kind,
+                    name: kind.display_name().to_string(),
+                    default_model: None,
+                    base_url: None,
+                });
+            }
         }
     }
 
@@ -111,6 +131,26 @@ mod tests {
     #[test]
     fn defaults_seed_five_providers() {
         let r = ProviderRegistry::with_defaults();
-        assert_eq!(r.list().len(), 5);
+        assert_eq!(r.list().len(), 6);
+    }
+
+    #[test]
+    fn ensure_defaults_backfills_new_builtin_without_touching_existing() {
+        // Simulates a `providers.json` persisted before Xiaomi shipped.
+        let r = ProviderRegistry::new();
+        r.upsert(ProviderConfig {
+            id: "openai".to_string(),
+            provider: ProviderKind::OpenAI,
+            name: "OpenAI".to_string(),
+            default_model: Some("gpt-5".to_string()),
+            base_url: Some("https://custom.example.com".to_string()),
+        });
+        r.ensure_defaults();
+        assert_eq!(r.list().len(), 6);
+        // Existing customizations survive the backfill.
+        let openai = r.get("openai").expect("openai kept");
+        assert_eq!(openai.default_model.as_deref(), Some("gpt-5"));
+        assert_eq!(openai.base_url.as_deref(), Some("https://custom.example.com"));
+        assert_eq!(r.get("xiaomi").expect("xiaomi backfilled").name, "Xiaomi");
     }
 }

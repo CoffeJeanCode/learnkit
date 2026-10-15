@@ -43,6 +43,10 @@ impl AppState {
         if let Ok(saved) = store.load_providers() {
             if !saved.is_empty() {
                 providers.replace_all(saved);
+                // A `providers.json` persisted before a new built-in
+                // provider shipped would shadow it forever — backfill any
+                // missing default slots without touching saved entries.
+                providers.ensure_defaults();
             }
         }
 
@@ -176,6 +180,7 @@ const ENV_KEY_CANDIDATES: &[(&str, &[&str])] = &[
     ("openai", &["OPENAI_API_KEY"]),
     ("gemini", &["GEMINI_API_KEY", "GOOGLE_API_KEY"]),
     ("openrouter", &["OPENROUTER_API_KEY"]),
+    ("xiaomi", &["MIMO_API_KEY", "XIAOMI_API_KEY"]),
 ];
 
 /// Seeds vault keys from environment variables, skipping any provider that
@@ -216,6 +221,7 @@ fn pick_available_model(vault: &dyn SecretVault) -> Option<ModelRef> {
         ("openai", "gpt-5"),
         ("gemini", "gemini-2.5-flash"),
         ("openrouter", "anthropic/claude-sonnet-4"),
+        ("xiaomi", "mimo-v2.6-pro"),
     ];
     MODEL_FOR
         .iter()
