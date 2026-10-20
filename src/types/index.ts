@@ -1,4 +1,4 @@
-export type ProviderKind = "openai" | "anthropic" | "gemini" | "openrouter" | "deepseek";
+export type ProviderKind = "openai" | "anthropic" | "gemini" | "openrouter" | "deepseek" | "xiaomi";
 
 export interface ProviderConfig {
   id: string;
@@ -10,6 +10,8 @@ export interface ProviderConfig {
 
 export interface ProviderWithStatus extends ProviderConfig {
   configured: boolean;
+  /** Built-in agents are currently running on this provider. */
+  active: boolean;
 }
 
 export interface ModelInfo {

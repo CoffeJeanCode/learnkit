@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use crate::agents::roadmap_agent::ROADMAP_AGENT_ID;
 use crate::agents::{AgentRegistry, basic_agent};
@@ -26,6 +26,8 @@ pub struct AppState {
     pub notebook_service: NotebookService,
     pub lexical_assistant_service: LexicalAssistantService,
     pub data_dir: PathBuf,
+    store: FileStore,
+    active_provider: RwLock<Option<String>>,
 }
 
 impl AppState {
@@ -45,6 +47,8 @@ impl AppState {
                 providers.replace_all(saved);
             }
         }
+        // Slots for providers added after providers.json was first written.
+        providers.ensure_defaults();
 
         let agents = Arc::new(AgentRegistry::new());
         match store.load_agents() {
@@ -62,7 +66,7 @@ impl AppState {
         // was persisted with the current code's definition, so a prompt
         // rewrite in a new build can never be shadowed by a stale
         // `agents.json` entry from before the rewrite. `.model` gets
-        // re-pinned right after by `heal_roadmap_agent_model` if the
+        // re-pinned right after by `apply_active_provider` if the
         // default provider here has no key.
         if agents.register(crate::agents::roadmap_agent::definition()).is_ok() {
             let _ = store.save_agents(&agents.list());
@@ -128,40 +132,82 @@ impl AppState {
             notebook_service,
             lexical_assistant_service,
             data_dir,
+            active_provider: RwLock::new(store.load_active_provider()),
+            store,
         };
         // Covers both first run (fresh demo defs) and a stale `agents.json`
         // from before any key existed.
-        state.heal_roadmap_agent_model();
+        state.apply_active_provider();
         Ok(state)
     }
 
-    /// Re-points the roadmap agent (and its execution-only siblings: the
-    /// notebook block generator, the gate grader, the closure feedback
-    /// grader, the lexical assistant) at an available provider if the one
-    /// currently assigned has no key. Called at startup, and again by the
-    /// `save_provider_key` command right after a key is saved — so the
-    /// onboarding sequence (pick provider -> save key -> start) always ends
-    /// with working agents instead of a stale pin to an unconfigured
-    /// provider.
-    pub fn heal_roadmap_agent_model(&self) {
-        self.heal_agent_model(ROADMAP_AGENT_ID);
-        self.heal_agent_model(crate::agents::notebook_agent::NOTEBOOK_AGENT_ID);
-        self.heal_agent_model(crate::agents::notebook_gate_grader_agent::NOTEBOOK_GATE_GRADER_AGENT_ID);
-        self.heal_agent_model(crate::agents::closure_feedback_grader_agent::CLOSURE_FEEDBACK_GRADER_AGENT_ID);
-        self.heal_agent_model(crate::agents::analyst_agent::ANALYST_AGENT_ID);
-        self.heal_agent_model(crate::agents::pedagogical_critic_agent::PEDAGOGICAL_CRITIC_AGENT_ID);
-        self.heal_agent_model(crate::agents::lexical_assistant_agent::LEXICAL_ASSISTANT_AGENT_ID);
+    /// Built-in agents that follow the active provider (the user-authored
+    /// demo agents keep their own pinned model).
+    fn pinned_agent_ids() -> [&'static str; 7] {
+        [
+            ROADMAP_AGENT_ID,
+            crate::agents::notebook_agent::NOTEBOOK_AGENT_ID,
+            crate::agents::notebook_gate_grader_agent::NOTEBOOK_GATE_GRADER_AGENT_ID,
+            crate::agents::closure_feedback_grader_agent::CLOSURE_FEEDBACK_GRADER_AGENT_ID,
+            crate::agents::analyst_agent::ANALYST_AGENT_ID,
+            crate::agents::pedagogical_critic_agent::PEDAGOGICAL_CRITIC_AGENT_ID,
+            crate::agents::lexical_assistant_agent::LEXICAL_ASSISTANT_AGENT_ID,
+        ]
     }
 
-    fn heal_agent_model(&self, agent_id: &str) {
-        let Ok(def) = self.agents.get(agent_id) else { return };
-        if self.vault.has_provider_key(&def.model.provider_id).unwrap_or(false) {
-            return;
+    pub fn active_provider_id(&self) -> Option<String> {
+        self.active_provider.read().ok().and_then(|g| g.clone())
+    }
+
+    /// Makes `provider_id` the one every built-in agent runs on, using that
+    /// provider's configured model (or its first suggestion).
+    pub fn set_active_provider(&self, provider_id: &str) -> AppResult<()> {
+        self.providers.get(provider_id)?;
+        if !self.vault.has_provider_key(provider_id).unwrap_or(false) {
+            return Err(crate::error::AppError::ProviderKeyMissing(provider_id.to_string()));
         }
-        let Some(model) = pick_available_model(self.vault.as_ref()) else { return };
-        let mut updated = def;
-        updated.model = model;
-        if self.agents.register(updated).is_ok() {
+        if let Ok(mut g) = self.active_provider.write() {
+            *g = Some(provider_id.to_string());
+        }
+        self.store.save_active_provider(Some(provider_id))?;
+        self.apply_active_provider();
+        Ok(())
+    }
+
+    /// Re-pins the built-in agents to the active provider and its model.
+    /// Called when the active provider changes, when its model is edited and
+    /// after a key is saved. If no provider is active yet (or its key is
+    /// gone), the first one with a key becomes active — so onboarding
+    /// (pick provider -> save key) always ends with working agents.
+    pub fn apply_active_provider(&self) {
+        let usable = |id: &str| self.vault.has_provider_key(id).unwrap_or(false);
+        let mut active = self.active_provider_id().filter(|id| usable(id));
+        if active.is_none() {
+            active = pick_available_provider(self.vault.as_ref());
+            if let Ok(mut g) = self.active_provider.write() {
+                *g = active.clone();
+            }
+            let _ = self.store.save_active_provider(active.as_deref());
+        }
+        let Some(id) = active else { return };
+        let Ok(config) = self.providers.get(&id) else { return };
+        let model = config
+            .default_model
+            .clone()
+            .filter(|m| !m.trim().is_empty())
+            .or_else(|| config.provider.suggested_models().first().map(|m| m.to_string()));
+        let Some(model) = model else { return };
+        let target = ModelRef::new(id, model);
+        let mut changed = false;
+        for agent_id in Self::pinned_agent_ids() {
+            let Ok(mut def) = self.agents.get(agent_id) else { continue };
+            if def.model.provider_id == target.provider_id && def.model.model == target.model {
+                continue;
+            }
+            def.model = target.clone();
+            changed |= self.agents.register(def).is_ok();
+        }
+        if changed {
             let _ = self.agent_service.persist();
         }
     }
@@ -176,6 +222,7 @@ const ENV_KEY_CANDIDATES: &[(&str, &[&str])] = &[
     ("openai", &["OPENAI_API_KEY"]),
     ("gemini", &["GEMINI_API_KEY", "GOOGLE_API_KEY"]),
     ("openrouter", &["OPENROUTER_API_KEY"]),
+    ("xiaomi", &["XIAOMI_MIMO_API_KEY", "MIMO_API_KEY"]),
 ];
 
 /// Seeds vault keys from environment variables, skipping any provider that
@@ -207,20 +254,13 @@ fn seed_keys_from_env(vault: &dyn SecretVault) {
 }
 
 /// Same priority order as [`ENV_KEY_CANDIDATES`]: the first provider that
-/// actually has a key wins, so the roadmap agent's first-run default model
-/// matches whatever the developer configured rather than a fixed guess.
-fn pick_available_model(vault: &dyn SecretVault) -> Option<ModelRef> {
-    const MODEL_FOR: &[(&str, &str)] = &[
-        ("anthropic", "claude-sonnet-4-6"),
-        ("deepseek", "deepseek-v4-flash"),
-        ("openai", "gpt-5"),
-        ("gemini", "gemini-2.5-flash"),
-        ("openrouter", "anthropic/claude-sonnet-4"),
-    ];
-    MODEL_FOR
+/// actually has a key wins when the user has not picked one explicitly.
+fn pick_available_provider(vault: &dyn SecretVault) -> Option<String> {
+    ENV_KEY_CANDIDATES
         .iter()
-        .find(|(provider_id, _)| vault.has_provider_key(provider_id).unwrap_or(false))
-        .map(|(provider_id, model)| ModelRef::new(*provider_id, *model))
+        .map(|(provider_id, _)| *provider_id)
+        .find(|provider_id| vault.has_provider_key(provider_id).unwrap_or(false))
+        .map(str::to_string)
 }
 
 #[cfg(test)]
@@ -277,14 +317,14 @@ mod tests {
     #[test]
     fn picks_first_available_provider_in_priority_order() {
         let vault = MemoryVault::new();
-        assert!(pick_available_model(&vault).is_none());
+        assert!(pick_available_provider(&vault).is_none());
 
         vault.save_provider_key("gemini", "k").unwrap();
-        assert_eq!(pick_available_model(&vault).unwrap().provider_id, "gemini");
+        assert_eq!(pick_available_provider(&vault).unwrap(), "gemini");
 
         // Anthropic outranks Gemini once both are configured.
         vault.save_provider_key("anthropic", "k").unwrap();
-        assert_eq!(pick_available_model(&vault).unwrap().provider_id, "anthropic");
+        assert_eq!(pick_available_provider(&vault).unwrap(), "anthropic");
     }
 
     #[test]
@@ -298,7 +338,7 @@ mod tests {
         let state = AppState::new(data_dir.clone()).expect("app state initializes");
 
         state.vault.save_provider_key("gemini", "k").expect("configure a key");
-        state.heal_roadmap_agent_model();
+        state.apply_active_provider();
 
         let grader = state
             .agents

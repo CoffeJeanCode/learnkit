@@ -51,6 +51,9 @@ export const saveProvider = (config: {
 export const saveProviderKey = (provider_id: string, api_key: string) =>
   invoke<boolean>("save_provider_key", { providerId: provider_id, apiKey: api_key });
 
+export const setActiveProvider = (provider_id: string) =>
+  invoke<void>("set_active_provider", { providerId: provider_id });
+
 export const providerHasKey = (provider_id: string) =>
   invoke<boolean>("provider_has_key", { providerId: provider_id });
 
