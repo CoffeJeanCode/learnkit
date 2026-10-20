@@ -3,6 +3,7 @@ import {
   deleteProviderKey,
   listModels,
   listProviders,
+  setActiveProvider,
   saveProvider,
   saveProviderKey,
   suggestedModels,
@@ -21,6 +22,7 @@ interface ProvidersState {
   notice: string | null;
   refresh: () => Promise<void>;
   saveConfig: (id: string, patch: Partial<ProviderWithStatus>) => Promise<void>;
+  activate: (id: string) => Promise<void>;
   saveKey: (id: string, key: string) => Promise<void>;
   removeKey: (id: string) => Promise<void>;
   test: (id: string) => Promise<void>;
@@ -67,6 +69,19 @@ export const useProviders = create<ProvidersState>((set, get) => ({
         base_url: patch.base_url !== undefined ? patch.base_url : current.base_url,
       });
       set({ notice: `Provider ${id} saved` });
+      await get().refresh();
+    } catch (e) {
+      set({ error: tauriError(e).message });
+    } finally {
+      set({ busyId: null });
+    }
+  },
+
+  activate: async (id) => {
+    set({ busyId: id, error: null, notice: null });
+    try {
+      await setActiveProvider(id);
+      set({ notice: `Ahora se usa ${id}` });
       await get().refresh();
     } catch (e) {
       set({ error: tauriError(e).message });

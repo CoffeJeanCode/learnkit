@@ -142,6 +142,15 @@ impl ProviderFactory {
                 let model = client.completion_model(model_name);
                 Self::prompt_with(model, system_prompt, input, tools).await
             }
+            ProviderKind::Xiaomi => {
+                let client = rig_core::providers::xiaomimimo::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with(model, system_prompt, input, tools).await
+            }
         }
     }
 
@@ -224,6 +233,15 @@ impl ProviderFactory {
             }
             ProviderKind::DeepSeek => {
                 let client = rig_core::providers::deepseek::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_diagnostic_tools(model, system_prompt, input, capture, Self::output_budget(&config.provider), scope).await
+            }
+            ProviderKind::Xiaomi => {
+                let client = rig_core::providers::xiaomimimo::Client::builder()
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
@@ -357,6 +375,15 @@ impl ProviderFactory {
                 let model = client.completion_model(model_name);
                 Self::prompt_with_notebook_block_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider)).await
             }
+            ProviderKind::Xiaomi => {
+                let client = rig_core::providers::xiaomimimo::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_notebook_block_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider)).await
+            }
         }
     }
 
@@ -442,6 +469,15 @@ impl ProviderFactory {
             }
             ProviderKind::DeepSeek => {
                 let client = rig_core::providers::deepseek::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_gate_grading_tool(model, system_prompt, input, capture).await
+            }
+            ProviderKind::Xiaomi => {
+                let client = rig_core::providers::xiaomimimo::Client::builder()
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
@@ -538,6 +574,15 @@ impl ProviderFactory {
                 let model = client.completion_model(model_name);
                 Self::prompt_with_closure_grading_tool(model, system_prompt, input, capture).await
             }
+            ProviderKind::Xiaomi => {
+                let client = rig_core::providers::xiaomimimo::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_closure_grading_tool(model, system_prompt, input, capture).await
+            }
         }
     }
 
@@ -625,6 +670,15 @@ impl ProviderFactory {
                 let model = client.completion_model(model_name);
                 Self::prompt_with_block_audit_tool(model, system_prompt, input, capture).await
             }
+            ProviderKind::Xiaomi => {
+                let client = rig_core::providers::xiaomimimo::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_block_audit_tool(model, system_prompt, input, capture).await
+            }
         }
     }
 
@@ -658,7 +712,7 @@ impl ProviderFactory {
         let base_url = config.effective_base_url();
 
         let response = match config.provider {
-            ProviderKind::OpenAI | ProviderKind::OpenRouter | ProviderKind::DeepSeek => {
+            ProviderKind::OpenAI | ProviderKind::OpenRouter | ProviderKind::DeepSeek | ProviderKind::Xiaomi => {
                 let mut req = http
                     .get(format!("{}/models", base_url.trim_end_matches('/')))
                     .bearer_auth(api_key);
@@ -706,7 +760,7 @@ impl ProviderFactory {
         let base_url = config.effective_base_url();
 
         match config.provider {
-            ProviderKind::OpenAI | ProviderKind::OpenRouter | ProviderKind::DeepSeek => {
+            ProviderKind::OpenAI | ProviderKind::OpenRouter | ProviderKind::DeepSeek | ProviderKind::Xiaomi => {
                 let mut req = http
                     .get(format!("{}/models", base_url.trim_end_matches('/')))
                     .bearer_auth(api_key);

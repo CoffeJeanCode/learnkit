@@ -268,6 +268,7 @@
                 },
                 guiding_questions: vec![],
                 model_solution: "sol".to_string(),
+                faulty_line_number: None,
                 visual_aid: None,
             },
             &["blockType", "instruction", "flawedRepresentation", "guidingQuestions", "modelSolution"],
@@ -279,6 +280,10 @@
                 options: vec![],
                 conceptual_feedback_map: Default::default(),
                 correct_option: "a".to_string(),
+                interaction_mode: None,
+                shuffled_steps: None,
+                correct_order: None,
+                boundary_cases: None,
                 visual_aid: None,
             },
             &["blockType", "question", "options", "conceptualFeedbackMap", "correctOption"],
@@ -292,6 +297,9 @@
                 scaffolding_hints: vec![],
                 evaluation_rubric_summary: vec![],
                 is_transfer: false,
+                support_level: None,
+                worked_template: None,
+                interactive_steps: None,
                 visual_aid: None,
             },
             &["blockType", "challengeStatement", "expectedMilestoneArtifact", "constraints", "scaffoldingHints", "evaluationRubricSummary"],
@@ -327,6 +335,10 @@
             options: vec!["a".to_string()],
             conceptual_feedback_map: Default::default(),
             correct_option: "a".to_string(),
+            interaction_mode: None,
+            shuffled_steps: None,
+            correct_order: None,
+            boundary_cases: None,
             visual_aid: Some(visual),
         };
         let value = serde_json::to_value(&block).expect("serializes");
@@ -485,4 +497,93 @@
         for (doc, blocks, why) in cases {
             assert!(!class_is_complete(&doc, &blocks), "{why}");
         }
+
+    #[test]
+    fn blocks_persisted_before_the_scaffolding_fields_still_deserialize() {
+        // hands_on_mission / heuristic_error_audit / prediction gate JSON exactly as old builds stored them.
+        let mission: GeneratedSectionBlock = serde_json::from_value(serde_json::json!({
+            "blockType": "hands_on_mission", "challengeStatement": "c", "expectedMilestoneArtifact": "a",
+            "constraints": ["k"], "scaffoldingHints": ["h"], "evaluationRubricSummary": ["r"]
+        }))
+        .expect("old mission parses");
+        match mission {
+            GeneratedSectionBlock::HandsOnMission { support_level, worked_template, interactive_steps, .. } => {
+                assert!(support_level.is_none() && worked_template.is_none() && interactive_steps.is_none());
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let audit: GeneratedSectionBlock = serde_json::from_value(serde_json::json!({
+            "blockType": "heuristic_error_audit", "instruction": "i",
+            "flawedRepresentation": { "context": "c", "buggySnippetOrDiagram": "s", "errorType": "syntax" },
+            "guidingQuestions": ["q"], "modelSolution": "m"
+        }))
+        .expect("old audit parses");
+        assert!(matches!(audit, GeneratedSectionBlock::HeuristicErrorAudit { faulty_line_number: None, .. }));
+
+        let gate: GeneratedSectionBlock = serde_json::from_value(serde_json::json!({
+            "blockType": "interactive_prediction_gate", "question": "q", "options": ["A", "B"],
+            "conceptualFeedbackMap": { "A": "a", "B": "b" }, "correctOption": "B"
+        }))
+        .expect("old gate parses");
+        assert!(matches!(gate, GeneratedSectionBlock::InteractivePredictionGate { interaction_mode: None, .. }));
     }
+
+    #[test]
+    fn new_fields_stay_off_the_wire_when_unset_and_the_mode_accepts_both_spellings() {
+        let gate = GeneratedSectionBlock::InteractivePredictionGate {
+            question: "q".into(),
+            options: vec!["A".into(), "B".into()],
+            conceptual_feedback_map: Default::default(),
+            correct_option: "B".into(),
+            interaction_mode: None,
+            shuffled_steps: None,
+            correct_order: None,
+            boundary_cases: None,
+            visual_aid: None,
+        };
+        let json = serde_json::to_value(&gate).unwrap();
+        for key in ["interactionMode", "shuffledSteps", "correctOrder", "boundaryCases"] {
+            assert!(json.get(key).is_none(), "{key} must be omitted when unset");
+        }
+
+        for spelling in ["boundary_case_audit", "boundary_case_Audit"] {
+            let parsed: GeneratedSectionBlock = serde_json::from_value(serde_json::json!({
+                "blockType": "interactive_prediction_gate", "question": "q", "interactionMode": spelling,
+                "boundaryCases": [{ "statement": "x", "followsRule": true }, { "statement": "y", "followsRule": false }]
+            }))
+            .expect("mode parses without options/correctOption");
+            assert!(matches!(
+                parsed,
+                GeneratedSectionBlock::InteractivePredictionGate { interaction_mode: Some(InteractionMode::BoundaryCaseAudit), .. }
+            ));
+        }
+    }
+
+    #[test]
+    fn gate_submissions_for_the_new_modes_and_fields_parse() {
+        let order: GateSubmission = serde_json::from_value(serde_json::json!({
+            "blockType": "interactive_prediction_gate", "orderedSteps": ["A", "B", "C"]
+        }))
+        .unwrap();
+        assert!(matches!(order, GateSubmission::InteractivePredictionGate { ordered_steps: Some(_), selected_option: None, .. }));
+
+        let verdicts: GateSubmission = serde_json::from_value(serde_json::json!({
+            "blockType": "interactive_prediction_gate", "caseVerdicts": [true, false]
+        }))
+        .unwrap();
+        assert!(matches!(verdicts, GateSubmission::InteractivePredictionGate { case_verdicts: Some(_), .. }));
+
+        let mission: GateSubmission = serde_json::from_value(serde_json::json!({
+            "blockType": "hands_on_mission", "submissionText": "s", "hintsShown": 2
+        }))
+        .unwrap();
+        assert!(matches!(mission, GateSubmission::HandsOnMission { hints_shown: Some(2), .. }));
+
+        let audit: GateSubmission = serde_json::from_value(serde_json::json!({
+            "blockType": "heuristic_error_audit", "diagnosisText": "d", "selectedLine": 3
+        }))
+        .unwrap();
+        assert!(matches!(audit, GateSubmission::HeuristicErrorAudit { selected_line: Some(3), .. }));
+    }
+}

@@ -21,7 +21,7 @@ use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, SkillEvidence
 use crate::domain::study::{resolve_variant, StudyEvent, StudyEventKind, StudySettings, StudyVariant, VariantMode};
 use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{
-    BlockStatus, BlockUpdate, ClassRecord, Course, DiagnosticBattery, DiagnosticBatteryState, DynamicBlockType,
+    BlockStatus, BlockUpdate, ClassRecord, Course, DiagnosticBattery, GateAttempt, DiagnosticBatteryState, DynamicBlockType,
     NotebookBlock, NotebookDocument, NotebookPayload, NotebookStatus, SyllabusMilestone,
 };
 use crate::error::{AppError, AppResult};
@@ -78,6 +78,22 @@ CREATE TABLE IF NOT EXISTS notebook_blocks (
     last_feedback TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_blocks_document ON notebook_blocks(document_id);
+
+-- What the student actually answered on each gate attempt, pass or fail —
+-- the traceability source for the closing block's prediction-vs-result
+-- contrast (the block row only keeps `attempt_count`). Additive table, so
+-- databases created before it just gain it on next open.
+CREATE TABLE IF NOT EXISTS gate_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL REFERENCES notebook_documents(id) ON DELETE CASCADE,
+    block_id TEXT NOT NULL,
+    block_type TEXT NOT NULL,
+    attempt_number INTEGER NOT NULL,
+    answer_text TEXT NOT NULL,
+    passed INTEGER NOT NULL,
+    at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gate_attempts_document ON gate_attempts(document_id, id);
 
 -- One row per learner (today, always `learner_memory::LOCAL_LEARNER_ID` —
 -- see that module's doc comment) — the WHOLE `LearnerCognitiveMemory`
@@ -1028,6 +1044,57 @@ impl NotebookStore {
     /// verbatim. A no-op if one is already recorded — this field is written
     /// exactly once per notebook, by design (see
     /// `NotebookDocument::initial_prediction`).
+    /// Appends one gate attempt to the document's answer history.
+    pub fn append_gate_attempt(&self, attempt: &GateAttempt) -> AppResult<()> {
+        self.lock().execute(
+            "INSERT INTO gate_attempts (document_id, block_id, block_type, attempt_number, answer_text, passed, at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                attempt.document_id,
+                attempt.block_id,
+                attempt.block_type.as_str(),
+                attempt.attempt_number,
+                attempt.answer_text,
+                attempt.passed,
+                attempt.at_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every recorded gate attempt of one document, oldest first.
+    pub fn list_gate_attempts(&self, document_id: &str) -> AppResult<Vec<GateAttempt>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT document_id, block_id, block_type, attempt_number, answer_text, passed, at_ms
+             FROM gate_attempts WHERE document_id = ?1 ORDER BY id ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![document_id], |row| {
+                let block_type: String = row.get(2)?;
+                Ok((
+                    GateAttempt {
+                        document_id: row.get(0)?,
+                        block_id: row.get(1)?,
+                        block_type: DynamicBlockType::InteractivePredictionGate,
+                        attempt_number: row.get(3)?,
+                        answer_text: row.get(4)?,
+                        passed: row.get(5)?,
+                        at_ms: row.get(6)?,
+                    },
+                    block_type,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(mut a, bt)| {
+                a.block_type = DynamicBlockType::parse(&bt)?;
+                Some(a)
+            })
+            .collect())
+    }
+
     pub fn set_document_initial_prediction(&self, document_id: &str, value: &str) -> AppResult<()> {
         self.lock().execute(
             "UPDATE notebook_documents SET initial_prediction = ?1 WHERE id = ?2 AND initial_prediction IS NULL",
@@ -1102,6 +1169,54 @@ impl NotebookStore {
         tx.execute("UPDATE notebook_documents SET updated_at_ms = ?1 WHERE id = ?2", params![now_ms(), notebook_id])?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Merges the learner's own annotations into ONE block's stored content:
+    /// `studentNote` (free text) and `studentState` (the UI selection to
+    /// restore — chosen/discarded options, ordering, drafts). Only these two
+    /// keys are ever touched, so the answer keys the redacted client copy
+    /// lacks (`correctOption`, ...) survive — unlike `update_block_contents`,
+    /// which overwrites the whole payload. `None` leaves a key as it was; an
+    /// empty note or a `null` state removes it. Returns `false` when the block
+    /// doesn't belong to `notebook_id`.
+    pub fn merge_block_annotation(
+        &self,
+        notebook_id: &str,
+        block_id: &str,
+        note: Option<&str>,
+        state: Option<&serde_json::Value>,
+    ) -> AppResult<bool> {
+        let conn = self.lock();
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT content_json FROM notebook_blocks WHERE id = ?1 AND document_id = ?2",
+                params![block_id, notebook_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(stored) = stored else { return Ok(false) };
+        let mut content: serde_json::Value = serde_json::from_str(&stored).map_err(|e| AppError::Persistence(e.to_string()))?;
+        let Some(obj) = content.as_object_mut() else {
+            return Err(AppError::Persistence("block content is not an object".to_string()));
+        };
+        if let Some(note) = note {
+            if note.trim().is_empty() {
+                obj.remove("studentNote");
+            } else {
+                obj.insert("studentNote".to_string(), serde_json::Value::String(note.to_string()));
+            }
+        }
+        if let Some(state) = state {
+            if state.is_null() {
+                obj.remove("studentState");
+            } else {
+                obj.insert("studentState".to_string(), state.clone());
+            }
+        }
+        let text = serde_json::to_string(&content).map_err(|e| AppError::Persistence(e.to_string()))?;
+        conn.execute("UPDATE notebook_blocks SET content_json = ?1 WHERE id = ?2", params![text, block_id])?;
+        conn.execute("UPDATE notebook_documents SET updated_at_ms = ?1 WHERE id = ?2", params![now_ms(), notebook_id])?;
+        Ok(true)
     }
 
     /// Replaces ONE block's payload in place — the "regenerate this broken

@@ -15,6 +15,11 @@ use crate::domain::notebook::DynamicBlockType;
 /// (the model still needs the natural-language version) and is not wired into
 /// any runtime rejection/guardrail — it's a parallel, testable source of truth
 /// for what the prompt already says.
+///
+/// It IS wired into generation as a hint, though: `infer_profile` +
+/// `suggest_next_block` feed `notebook_service::render` a `compositionHint`
+/// (profile, chain, and the block that belongs at the next position), so the
+/// generator stops defaulting to the same template for every class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DisciplineProfile {
@@ -111,6 +116,96 @@ pub fn suggested_sequence(profile: DisciplineProfile) -> &'static [DynamicBlockT
     }
 }
 
+/// Keyword table for [`infer_profile`]: lowercase stems, matched as substrings.
+const PROFILE_KEYWORDS: [(DisciplineProfile, &[&str]); 5] = [
+    (
+        DisciplineProfile::SoftwareDebugging,
+        &[
+            "programa", "código", "codigo", "software", "rust", "python", "javascript", "typescript", "api", "bug", "depur", "algoritm",
+            "base de datos", "sql", "react", "backend", "frontend", "compil", "función", "funcion", "git", "docker", "estructura de datos",
+        ],
+    ),
+    (
+        DisciplineProfile::QuantitativeMath,
+        &[
+            "cálculo", "calculo", "álgebra", "algebra", "ecuaci", "derivad", "integral", "matemát", "matemat", "estadíst", "estadist",
+            "probabilidad", "optimiz", "fórmula", "formula", "geometr", "aritmétic", "aritmetic", "trigonom", "límite", "limite",
+        ],
+    ),
+    (
+        DisciplineProfile::CyclicSystemic,
+        &["ciclo", "cíclic", "ciclic", "balance", "flujo", "retroaliment", "ecosistema", "cadena de suministro", "homeostasis", "sistémic", "sistemic", "inventario"],
+    ),
+    (
+        DisciplineProfile::SpatialBiological,
+        &[
+            "anatom", "biolog", "célula", "celula", "fisiolog", "física", "fisica", "mecánica", "mecanica", "campo", "química", "quimica",
+            "órgano", "organo", "neurona", "molécula", "molecula", "geolog", "astronom", "óptica", "optica",
+        ],
+    ),
+    (
+        DisciplineProfile::LeadershipDecisions,
+        &[
+            "liderazgo", "líder", "lider", "gestión", "gestion", "equipo", "negociaci", "estrategia", "decisi", "ética", "etica", "management",
+            "comunicaci", "sociolog", "política", "politica", "historia", "conflicto",
+        ],
+    ),
+];
+
+/// Best-effort guess of the class's [`DisciplineProfile`] from its own text
+/// (the class title first, then milestone / course titles and goal).
+/// Deterministic and deliberately dumb: it only seeds a hint the generator may
+/// override in its `pedagogicalRationale`. `None` when no keyword matches, in
+/// which case the generator falls back to the prose in its system prompt.
+pub fn infer_profile(class_title: &str, other_context: &[&str]) -> Option<DisciplineProfile> {
+    let class_lower = class_title.to_lowercase();
+    let other_lower = other_context.join(" ").to_lowercase();
+    // Stems match at WORD starts (so `api` never fires inside `capacidad`);
+    // multi-word stems match as phrases.
+    let mentions = |text: &str, stem: &str| {
+        if stem.contains(' ') {
+            text.contains(stem)
+        } else {
+            text.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(stem))
+        }
+    };
+    // The class title is decisive: a course about code can still have a day
+    // on derivatives. Course/milestone text only breaks ties between profiles
+    // the title matches equally, or decides when the title matches nothing.
+    let mut best: Option<(DisciplineProfile, (usize, usize))> = None;
+    for (profile, stems) in PROFILE_KEYWORDS {
+        let in_class = stems.iter().filter(|stem| mentions(&class_lower, stem)).count();
+        let in_context = stems.iter().filter(|stem| mentions(&other_lower, stem)).count();
+        let score = (in_class, in_context);
+        if score != (0, 0) && best.is_none_or(|(_, top)| score > top) {
+            best = Some((profile, score));
+        }
+    }
+    best.map(|(profile, _)| profile)
+}
+
+/// The block that belongs at the class's NEXT position under `profile`'s chain,
+/// given the types already generated (`prior`). Returns `None` when the chain
+/// is exhausted (mastery loops legitimately run past it) or nothing in it is
+/// currently allowed. Skips what the generator could not use anyway: a repeat
+/// of the previous block, a closing block before mastery (`can_close`), and
+/// anything in `avoid` (types already dominating the course's earlier classes).
+/// `SpacedInterleavedRetrieval` openers do not consume a chain position.
+pub fn suggest_next_block(
+    profile: DisciplineProfile,
+    prior: &[DynamicBlockType],
+    can_close: bool,
+    avoid: &[DynamicBlockType],
+) -> Option<DynamicBlockType> {
+    let seq = suggested_sequence(profile);
+    let done: Vec<DynamicBlockType> = prior.iter().copied().filter(|t| *t != DynamicBlockType::SpacedInterleavedRetrieval).collect();
+    let last = done.last().copied();
+    let allowed = |t: DynamicBlockType| {
+        Some(t) != last && (can_close || t != DynamicBlockType::MetacognitiveClosure) && !avoid.contains(&t)
+    };
+    seq.iter().skip(done.len()).copied().find(|t| allowed(*t))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,5 +281,46 @@ mod tests {
         let seq = suggested_sequence(DisciplineProfile::LeadershipDecisions);
         assert!(index_of(seq, DynamicBlockType::BranchingScenarioChallenge) < index_of(seq, DynamicBlockType::HandsOnMission));
         assert_eq!(seq.last(), Some(&DynamicBlockType::MetacognitiveClosure));
+    }
+
+    #[test]
+    fn infers_the_profile_from_class_and_course_text() {
+        assert_eq!(infer_profile("Depurar un bug en Rust", &["Curso de programación"]), Some(DisciplineProfile::SoftwareDebugging));
+        assert_eq!(infer_profile("Derivadas e integrales", &[]), Some(DisciplineProfile::QuantitativeMath));
+        assert_eq!(infer_profile("Anatomía de la célula", &["Biología"]), Some(DisciplineProfile::SpatialBiological));
+        assert_eq!(infer_profile("Liderazgo en crisis", &["Gestión de equipos"]), Some(DisciplineProfile::LeadershipDecisions));
+        assert_eq!(infer_profile("Introducción", &["Bienvenida"]), None);
+    }
+
+    #[test]
+    fn the_class_title_outweighs_the_course_context() {
+        // The course is about code, but today's class is a derivative.
+        assert_eq!(
+            infer_profile("Derivadas", &["Curso de programación en Rust y Python", "software"]),
+            Some(DisciplineProfile::QuantitativeMath)
+        );
+    }
+
+    #[test]
+    fn suggests_the_chain_position_matching_the_blocks_so_far() {
+        use DynamicBlockType::*;
+        let p = DisciplineProfile::QuantitativeMath;
+        assert_eq!(suggest_next_block(p, &[], false, &[]), Some(AnchoredMicroTheory));
+        assert_eq!(suggest_next_block(p, &[AnchoredMicroTheory], false, &[]), Some(InteractivePredictionGate));
+        // A retrieval opener does not consume a chain position.
+        assert_eq!(suggest_next_block(p, &[SpacedInterleavedRetrieval, AnchoredMicroTheory], false, &[]), Some(InteractivePredictionGate));
+        // Chain exhausted: no suggestion, mastery decides.
+        assert_eq!(suggest_next_block(p, &[AnchoredMicroTheory, InteractivePredictionGate, HeuristicErrorAudit, HandsOnMission], false, &[]), None);
+    }
+
+    #[test]
+    fn never_suggests_a_closure_before_mastery_nor_a_dominant_type() {
+        use DynamicBlockType::*;
+        let p = DisciplineProfile::CyclicSystemic;
+        let prior = [AnchoredMicroTheory, DeclarativeVisualDiagram, HeuristicErrorAudit];
+        assert_eq!(suggest_next_block(p, &prior, false, &[]), None);
+        assert_eq!(suggest_next_block(p, &prior, true, &[]), Some(MetacognitiveClosure));
+        // HeuristicErrorAudit dominates earlier classes -> skipped for this slot.
+        assert_eq!(suggest_next_block(p, &[AnchoredMicroTheory, DeclarativeVisualDiagram], false, &[HeuristicErrorAudit]), None);
     }
 }

@@ -53,6 +53,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::providers::list_providers,
             commands::providers::save_provider,
+            commands::providers::set_active_provider,
             commands::providers::delete_provider,
             commands::providers::save_provider_key,
             commands::providers::provider_has_key,
@@ -85,6 +86,7 @@ pub fn run() {
             commands::notebook::start_class_notebook,
             commands::notebook::get_class_notebook_progress,
             commands::notebook::submit_gate_response,
+            commands::notebook::request_easier_step,
             commands::notebook::submit_retrieval_answer,
             commands::notebook::reveal_retrieval_answer,
             commands::notebook::get_course_skill_status,
@@ -100,6 +102,7 @@ pub fn run() {
             commands::notebook::regenerate_notebook_block,
             commands::notebook::reset_class_notebook,
             commands::notebook::save_notebook_state,
+            commands::notebook::save_block_annotation,
             commands::notebook::get_course_diagnostic_battery,
             commands::notebook::save_diagnostic_battery_answers,
             commands::notebook::get_learner_memory,

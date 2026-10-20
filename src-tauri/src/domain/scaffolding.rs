@@ -395,6 +395,9 @@ mod tests {
             scaffolding_hints: hints.iter().map(|s| s.to_string()).collect(),
             evaluation_rubric_summary: vec!["r".into()],
             is_transfer: transfer,
+            support_level: None,
+            worked_template: None,
+            interactive_steps: None,
             visual_aid: None,
         }
     }

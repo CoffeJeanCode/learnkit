@@ -32,6 +32,23 @@ impl ProviderRegistry {
         registry
     }
 
+    /// Add any built-in slot missing from a registry restored from an older
+    /// `providers.json` (e.g. a provider shipped after the file was saved).
+    pub fn ensure_defaults(&self) {
+        for kind in ProviderKind::all() {
+            let id = self.default_id(kind);
+            if self.get(&id).is_err() {
+                self.upsert(ProviderConfig {
+                    id,
+                    provider: *kind,
+                    name: kind.display_name().to_string(),
+                    default_model: None,
+                    base_url: None,
+                });
+            }
+        }
+    }
+
     fn default_id(&self, kind: &ProviderKind) -> String {
         match kind {
             ProviderKind::OpenAI => "openai".to_string(),
@@ -39,6 +56,7 @@ impl ProviderRegistry {
             ProviderKind::Gemini => "gemini".to_string(),
             ProviderKind::OpenRouter => "openrouter".to_string(),
             ProviderKind::DeepSeek => "deepseek".to_string(),
+            ProviderKind::Xiaomi => "xiaomi".to_string(),
         }
     }
 
@@ -109,8 +127,8 @@ mod tests {
     }
 
     #[test]
-    fn defaults_seed_five_providers() {
+    fn defaults_seed_all_providers() {
         let r = ProviderRegistry::with_defaults();
-        assert_eq!(r.list().len(), 5);
+        assert_eq!(r.list().len(), 6);
     }
 }

@@ -18,6 +18,11 @@ pub fn needs_llm_critic(block_type: DynamicBlockType) -> bool {
         DynamicBlockType::AnchoredMicroTheory
             | DynamicBlockType::InteractivePredictionGate
             | DynamicBlockType::BranchingScenarioChallenge
+            // Exercises are where an unmodeled step hides: the critic checks
+            // each one only demands what earlier blocks of the class modeled
+            // (scaffolding monotonicity / "delta +1 variable").
+            | DynamicBlockType::HeuristicErrorAudit
+            | DynamicBlockType::HandsOnMission
     )
 }
 
@@ -64,6 +69,7 @@ pub fn block_guardrail_violations(block: &GeneratedSectionBlock) -> Vec<String> 
             flawed_representation,
             guiding_questions,
             model_solution,
+            faulty_line_number: _,
             visual_aid,
         } => {
             scan_text("instruction", instruction, &mut v);
@@ -86,9 +92,19 @@ pub fn block_guardrail_violations(block: &GeneratedSectionBlock) -> Vec<String> 
             options,
             conceptual_feedback_map,
             correct_option: _,
+            interaction_mode: _,
+            shuffled_steps,
+            correct_order: _,
+            boundary_cases,
             visual_aid,
         } => {
             scan_text("question", question, &mut v);
+            if let Some(steps) = shuffled_steps {
+                scan_list("shuffledSteps", steps, &mut v);
+            }
+            for (i, case) in boundary_cases.iter().flatten().enumerate() {
+                scan_text(&format!("boundaryCases[{i}].statement"), &case.statement, &mut v);
+            }
             v.extend(option_set_violations("options", options));
             for (option, feedback) in conceptual_feedback_map {
                 scan_text(&format!("conceptualFeedbackMap[\"{option}\"]"), feedback, &mut v);
@@ -104,8 +120,17 @@ pub fn block_guardrail_violations(block: &GeneratedSectionBlock) -> Vec<String> 
             scaffolding_hints,
             evaluation_rubric_summary,
             is_transfer,
+            support_level: _,
+            worked_template,
+            interactive_steps,
             visual_aid,
         } => {
+            if let Some(template) = worked_template {
+                scan_text("workedTemplate", template, &mut v);
+            }
+            for (i, step) in interactive_steps.iter().flatten().enumerate() {
+                scan_text(&format!("interactiveSteps[{i}].prompt"), &step.prompt, &mut v);
+            }
             if *is_transfer && !scaffolding_hints.is_empty() {
                 v.push("hands_on_mission de transferencia (isTransfer): scaffoldingHints debe ir vacío — la transferencia se evalúa sin pistas".to_string());
             }
@@ -273,6 +298,10 @@ mod tests {
                 ("No".to_string(), "Exacto: difusión neta hacia adentro".to_string()),
             ]),
             correct_option: "No".to_string(),
+            interaction_mode: None,
+            shuffled_steps: None,
+            correct_order: None,
+            boundary_cases: None,
             visual_aid: None,
         }
     }
@@ -385,8 +414,8 @@ mod tests {
         assert!(needs_llm_critic(DynamicBlockType::InteractivePredictionGate));
         assert!(needs_llm_critic(DynamicBlockType::BranchingScenarioChallenge));
         assert!(!needs_llm_critic(DynamicBlockType::DeclarativeVisualDiagram));
-        assert!(!needs_llm_critic(DynamicBlockType::HeuristicErrorAudit));
-        assert!(!needs_llm_critic(DynamicBlockType::HandsOnMission));
+        assert!(needs_llm_critic(DynamicBlockType::HeuristicErrorAudit));
+        assert!(needs_llm_critic(DynamicBlockType::HandsOnMission));
         assert!(!needs_llm_critic(DynamicBlockType::MetacognitiveClosure));
     }
 
@@ -448,6 +477,9 @@ mod tests {
             scaffolding_hints: hints,
             evaluation_rubric_summary: vec!["Adapta la regla".to_string()],
             is_transfer: transfer,
+            support_level: None,
+            worked_template: None,
+            interactive_steps: None,
             visual_aid: None,
         };
         let hint = vec!["Empieza por el caso base".to_string()];

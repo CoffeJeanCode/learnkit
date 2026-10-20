@@ -51,6 +51,9 @@ export const saveProvider = (config: {
 export const saveProviderKey = (provider_id: string, api_key: string) =>
   invoke<boolean>("save_provider_key", { providerId: provider_id, apiKey: api_key });
 
+export const setActiveProvider = (provider_id: string) =>
+  invoke<void>("set_active_provider", { providerId: provider_id });
+
 export const providerHasKey = (provider_id: string) =>
   invoke<boolean>("provider_has_key", { providerId: provider_id });
 
@@ -187,6 +190,22 @@ export const getClassNotebookProgress = (class_id: string) =>
  */
 export const submitGateResponse = (block_id: string, submission: GateSubmission) =>
   invoke("submit_gate_response", { blockId: block_id, submission }).then((v) => GateResultSchema.parse(v));
+
+/**
+ * Saves the student's own note and/or selection state for one block. Only those
+ * two keys are merged server-side, so the gate's answer keys stay intact (unlike
+ * `saveNotebookState`, which overwrites the whole payload).
+ */
+export const saveBlockAnnotation = (notebook_id: string, block_id: string, patch: { note?: string; selection?: Record<string, unknown> }) =>
+  invoke<void>("save_block_annotation", { notebookId: notebook_id, blockId: block_id, note: patch.note, selection: patch.selection });
+
+/**
+ * Voluntary de-escalation: leaves the active gate WITHOUT failing it 3 times.
+ * The backend locks the gate (`escalated`, answer never revealed) and generates
+ * a more scaffolded block right away; same result shape as `submitGateResponse`.
+ */
+export const requestEasierStep = (block_id: string, hints_shown: number, draft: string) =>
+  invoke("request_easier_step", { blockId: block_id, hintsShown: hints_shown, draft: draft.trim() || null }).then((v) => GateResultSchema.parse(v));
 
 /**
  * Grades the student's WRITTEN answer to one retrieval prompt and reveals the

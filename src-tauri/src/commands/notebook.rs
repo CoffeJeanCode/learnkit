@@ -72,6 +72,33 @@ pub async fn submit_gate_response(
     state.notebook_service.submit_gate_response(Some(&app), &block_id, submission).await
 }
 
+/// Saves the student's own note and/or selection state for one block. Merges
+/// only those two keys into the stored content (answer keys stay intact).
+#[tauri::command]
+pub fn save_block_annotation(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    block_id: String,
+    note: Option<String>,
+    selection: Option<serde_json::Value>,
+) -> AppResult<()> {
+    state.notebook_service.save_block_annotation(&notebook_id, &block_id, note.as_deref(), selection.as_ref())
+}
+
+/// Voluntary de-escalation: the student asks for an easier, more guided step
+/// instead of failing the active gate 3 times. Returns the same shape as
+/// `submit_gate_response` (the locked gate + the freshly generated block).
+#[tauri::command]
+pub async fn request_easier_step(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    block_id: String,
+    hints_shown: Option<u32>,
+    draft: Option<String>,
+) -> AppResult<GateResult> {
+    state.notebook_service.request_easier_step(Some(&app), &block_id, hints_shown, draft).await
+}
+
 /// Grades the closing block's reflection (`closure_feedback_grader`):
 /// persists the submitted reflection, stores the verdict on the block
 /// (status + `last_feedback`), and returns the ALWAYS student-facing

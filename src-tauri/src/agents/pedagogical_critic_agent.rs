@@ -9,7 +9,8 @@ pub const PEDAGOGICAL_CRITIC_AGENT_ID: &str = "pedagogical_critic";
 /// `notebook_service::grounding`) already passed in Rust. Invoked solely
 /// for the block types where a rubric needs judgment rather than syntax
 /// (`needs_llm_critic`): `anchored_micro_theory`,
-/// `interactive_prediction_gate`, `branching_scenario_challenge`. On any
+/// `interactive_prediction_gate`, `branching_scenario_challenge`,
+/// `heuristic_error_audit`, `hands_on_mission`. On any
 /// critic failure the caller fail-opens (accepts with a warning), so a
 /// flaky provider can never block a class.
 const SYSTEM_PROMPT: &str = r#"Eres el Crítico Pedagógico de LearnKit. Revisas UN bloque de notebook
@@ -57,6 +58,22 @@ Coherencia transversal:
   (b) el reto contradice `momentum` (más difícil con `struggling`, o igual de fácil con `rising`),
   (c) el ejemplo no tiene relación alguna con el targetGoal (relevancia nula), o (d) el tono es
   condescendiente, culpabilizador o de adulación vacía. Solo señala lo que realmente falla.
+
+- MONOTONICIDAD DEL ANDAMIAJE (delta +1 variable), para `hands_on_mission` y `heuristic_error_audit`
+  (y cualquier compuerta): comprueba, contra el CONTENIDO de blocksSoFar, que el ejercicio no exige
+  sintaxis, fórmulas, operadores, funciones o pasos que ningún bloque anterior de esta clase haya
+  modelado explícitamente, y que añade como MÁXIMO UNA variable nueva respecto al último ejemplo
+  modelado. Es RECHAZO si (a) hay que aplicar algo que solo aparece en el enunciado del propio
+  ejercicio, (b) cambia a la vez el caso Y la técnica, o (c) es una `hands_on_mission` con
+  `supportLevel` `independent` que no es transferencia, o la primera práctica tras teoría/diagrama
+  sin `guided`/`faded` y sin `workedTemplate`/`interactiveSteps` que le den por dónde empezar.
+  En `guided`/`faded`, `workedTemplate` e `interactiveSteps` deben resolverse solo con lo ya
+  modelado, y cada hueco debe tener una única respuesta defendible. Nombra el elemento exacto que
+  falta modelar antes.
+- MODOS INTERACTIVOS de `interactive_prediction_gate`: `causal_chain_order` exige que el orden
+  correcto sea realmente causal (no una lista arbitraria) y que cada eslabón se pueda ubicar con lo
+  ya enseñado; `boundary_case_audit` exige casos límite con una única clasificación defendible y
+  que el contraste sea real (no triviales ni ambiguos).
 
 # VEREDICTO
 - `accepted: true` y `feedback: []` si el bloque cumple todo lo anterior.

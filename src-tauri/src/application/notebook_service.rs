@@ -82,6 +82,34 @@ impl NotebookService {
         self.store.update_block_contents(notebook_id, blocks)
     }
 
+    /// Longest note / serialized selection state accepted per block — these
+    /// are small UI payloads, never a place to park documents.
+    const MAX_NOTE_CHARS: usize = 4_000;
+    const MAX_STATE_BYTES: usize = 20_000;
+
+    /// Persists what the student did with a question that is NOT a graded
+    /// answer: their free-text note and the selection state to restore on
+    /// reload. Never touches gating state or the answer keys (see
+    /// `NotebookStore::merge_block_annotation`).
+    pub fn save_block_annotation(
+        &self,
+        notebook_id: &str,
+        block_id: &str,
+        note: Option<&str>,
+        state: Option<&serde_json::Value>,
+    ) -> AppResult<()> {
+        if note.is_some_and(|n| n.chars().count() > Self::MAX_NOTE_CHARS) {
+            return Err(AppError::InvalidInput(format!("la nota supera los {} caracteres", Self::MAX_NOTE_CHARS)));
+        }
+        if state.is_some_and(|s| s.to_string().len() > Self::MAX_STATE_BYTES) {
+            return Err(AppError::InvalidInput("el estado de la selección es demasiado grande".to_string()));
+        }
+        if !self.store.merge_block_annotation(notebook_id, block_id, note, state)? {
+            return Err(AppError::InvalidInput(format!("block not found in notebook: {block_id}")));
+        }
+        Ok(())
+    }
+
     /// The course's diagnostic battery (goalAlignment + questions) plus
     /// whatever the student has answered so far — what the roadmap plan
     /// screen renders, `None` if this course has no battery on record.

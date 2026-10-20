@@ -361,6 +361,56 @@ pub struct RetrievalPrompt {
     pub expected_answer: String,
 }
 
+/// How much help a `hands_on_mission` gives, declared by the generator so
+/// the rule "theory never jumps straight to an independent mission" (see
+/// `notebook_service::grounding`) is checkable. Mirrors the rungs of
+/// `domain::scaffolding::SupportLevel`; `Option` on the block so missions
+/// persisted before this field existed still deserialize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MissionSupportLevel {
+    Full,
+    Guided,
+    Faded,
+    Independent,
+}
+
+/// One cloze micro-step of a scaffolded mission: the student completes a
+/// single hole (typed, or picked from `options`) before facing the full
+/// challenge. Formative only — never a gate — so `expected_token` is sent
+/// to the client and verified there.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InteractiveStep {
+    pub prompt: String,
+    pub expected_token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub options: Option<Vec<String>>,
+}
+
+/// How an `interactive_prediction_gate` is answered. `MultipleChoice` is the
+/// default (and what every block persisted before this field existed is).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractionMode {
+    MultipleChoice,
+    /// Reorder 3-4 shuffled links of a mechanism into the causal chain.
+    CausalChainOrder,
+    /// Classify 2-3 edge cases as following / breaking the rule.
+    #[serde(alias = "boundary_case_Audit")]
+    BoundaryCaseAudit,
+}
+
+/// One micro-case of a `boundary_case_audit` gate. `follows_rule` is the
+/// answer key — server-only, stripped by `grading::redact_block`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoundaryCase {
+    pub statement: String,
+    #[serde(default)]
+    pub follows_rule: bool,
+}
+
 /// One block the model proposes, in the order it should appear — the
 /// agent-facing / tool-args shape. Deliberately has NO `id`: like every
 /// other backend-owned identifier in this app, block ids are assigned at
@@ -438,6 +488,13 @@ pub enum GeneratedSectionBlock {
         flawed_representation: FlawedRepresentation,
         guiding_questions: Vec<String>,
         model_solution: String,
+        /// 1-based line of `flawed_representation.buggy_snippet_or_diagram`
+        /// where the root cause lives — the student clicks a line before
+        /// writing the diagnosis. Server-only until the gate is passed
+        /// (`grading::redact_block`); the grader sees it next to the line
+        /// the student picked.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        faulty_line_number: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         visual_aid: Option<StaticVisualSpec>,
     },
@@ -449,7 +506,10 @@ pub enum GeneratedSectionBlock {
     #[serde(rename = "interactive_prediction_gate", rename_all = "camelCase")]
     InteractivePredictionGate {
         question: String,
+        /// `multiple_choice` only (empty in the other modes).
+        #[serde(default)]
         options: Vec<String>,
+        #[serde(default)]
         conceptual_feedback_map: HashMap<String, String>,
         /// The answer key — server-only. MUST be stripped by
         /// `notebook_service::grading::redact_answer_key` before any
@@ -457,7 +517,22 @@ pub enum GeneratedSectionBlock {
         /// grade_prediction_gate`) compares the student's `GateSubmission`
         /// against this field directly from the store, never re-derived
         /// from client input.
+        #[serde(default)]
         correct_option: String,
+        /// Absent = `multiple_choice`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interaction_mode: Option<InteractionMode>,
+        /// `causal_chain_order`: the 3-4 links in the order shown to the
+        /// student (never the right one).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shuffled_steps: Option<Vec<String>>,
+        /// `causal_chain_order` answer key — the same links in causal order.
+        /// Server-only, stripped by `grading::redact_block`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        correct_order: Option<Vec<String>>,
+        /// `boundary_case_audit`: 2-3 micro-cases at the edge of the rule.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        boundary_cases: Option<Vec<BoundaryCase>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         visual_aid: Option<StaticVisualSpec>,
     },
@@ -479,6 +554,17 @@ pub enum GeneratedSectionBlock {
         /// `domain::skill_status`). Omitted from the payload when false.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         is_transfer: bool,
+        /// How much help this mission gives (see [`MissionSupportLevel`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        support_level: Option<MissionSupportLevel>,
+        /// A solution ~70% worked out with `___` / `TODO` holes
+        /// (`guided`/`faded`): pre-fills the student's editor so they never
+        /// face a blank page.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worked_template: Option<String>,
+        /// Cloze micro-steps to complete before the full challenge.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        interactive_steps: Option<Vec<InteractiveStep>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         visual_aid: Option<StaticVisualSpec>,
     },
@@ -688,7 +774,19 @@ impl BlockStatus {
 #[serde(tag = "blockType")]
 pub enum GateSubmission {
     #[serde(rename = "interactive_prediction_gate", rename_all = "camelCase")]
-    InteractivePredictionGate { selected_option: String },
+    InteractivePredictionGate {
+        /// `multiple_choice` answer.
+        #[serde(default)]
+        selected_option: Option<String>,
+        /// `causal_chain_order` answer: the links in the order the student
+        /// arranged them.
+        #[serde(default)]
+        ordered_steps: Option<Vec<String>>,
+        /// `boundary_case_audit` answer: one verdict per case, `true` =
+        /// "cumple la regla".
+        #[serde(default)]
+        case_verdicts: Option<Vec<bool>>,
+    },
     #[serde(rename = "branching_scenario_challenge", rename_all = "camelCase")]
     BranchingScenarioChallenge { selected_choice: String },
     /// Free-text root-cause diagnosis, graded by
@@ -696,11 +794,23 @@ pub enum GateSubmission {
     /// — not multiple choice, per the confirmed product decision to keep
     /// this pedagogically richer even though it's non-deterministic.
     #[serde(rename = "heuristic_error_audit", rename_all = "camelCase")]
-    HeuristicErrorAudit { diagnosis_text: String },
+    HeuristicErrorAudit {
+        diagnosis_text: String,
+        /// 1-based line the student flagged as the faulty one (`Bug Bounty`
+        /// click) — context for the grader, not graded on its own.
+        #[serde(default)]
+        selected_line: Option<u32>,
+    },
     /// Free-text solution, graded by `notebook_gate_grader` against
     /// `HandsOnMission::evaluation_rubric_summary`.
     #[serde(rename = "hands_on_mission", rename_all = "camelCase")]
-    HandsOnMission { submission_text: String },
+    HandsOnMission {
+        submission_text: String,
+        /// Progressive hints the student opened before submitting — feeds
+        /// `SkillEvidence::hints_shown`.
+        #[serde(default)]
+        hints_shown: Option<u32>,
+    },
 }
 
 impl GateSubmission {
@@ -712,6 +822,21 @@ impl GateSubmission {
             Self::HandsOnMission { .. } => DynamicBlockType::HandsOnMission,
         }
     }
+}
+
+/// One recorded gate submission (pass or fail) — what the student actually
+/// answered, kept so the closing block can quote it verbatim instead of the
+/// model inventing a "prediction". `answer_text` is the same flattened text
+/// `NotebookDocument::initial_prediction` uses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GateAttempt {
+    pub document_id: String,
+    pub block_id: String,
+    pub block_type: DynamicBlockType,
+    pub attempt_number: u32,
+    pub answer_text: String,
+    pub passed: bool,
+    pub at_ms: i64,
 }
 
 /// What `NotebookService::submit_gate_response` returns: the graded
