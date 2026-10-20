@@ -489,6 +489,11 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                         "type": "string",
                         "description": "Clave de calificación — nunca se envía al estudiante hasta que apruebe el diagnóstico que escriba"
                     },
+                    "faultyLineNumber": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Línea (desde 1) de buggySnippetOrDiagram donde está la causa raíz. Inclúyelo SIEMPRE que el snippet sea de varias líneas: el estudiante primero hace clic en la línea defectuosa y luego escribe su diagnóstico. Clave de calificación, no se envía al estudiante hasta que apruebe."
+                    },
                     "visualAid": visual_aid_json_schema()
                 },
                 "required": ["blockType", "instruction", "flawedRepresentation", "guidingQuestions", "modelSolution"],
@@ -498,16 +503,37 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                 "properties": {
                     "blockType": {"const": "interactive_prediction_gate"},
                     "question": {"type": "string"},
-                    "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4},
-                    "conceptualFeedbackMap": {"type": "object", "description": "Una entrada por cada opción de options"},
+                    "interactionMode": {
+                        "type": "string",
+                        "enum": ["multiple_choice", "causal_chain_order", "boundary_case_audit"],
+                        "description": "Cómo responde el estudiante. Omitir = multiple_choice. causal_chain_order: ordena 3-4 eslabones de un mecanismo (usa shuffledSteps + correctOrder, SIN options). boundary_case_audit: clasifica 2-3 micro-casos al borde de la regla como «cumple»/«rompe» (usa boundaryCases, SIN options). Varía el modo entre compuertas: no uses multiple_choice por defecto."
+                    },
+                    "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4, "description": "SOLO multiple_choice"},
+                    "conceptualFeedbackMap": {"type": "object", "description": "SOLO multiple_choice: una entrada por cada opción de options"},
                     "correctOption": {
                         "type": "string",
-                        "description": "Debe ser EXACTAMENTE uno de los valores de options — clave de calificación, nunca se envía al estudiante"
+                        "description": "SOLO multiple_choice. Debe ser EXACTAMENTE uno de los valores de options — clave de calificación, nunca se envía al estudiante"
+                    },
+                    "shuffledSteps": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 4, "description": "SOLO causal_chain_order: los eslabones del mecanismo en un orden DISTINTO al causal"},
+                    "correctOrder": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 4, "description": "SOLO causal_chain_order: los MISMOS eslabones, textualmente idénticos, en orden causal — clave de calificación, nunca se envía al estudiante"},
+                    "boundaryCases": {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 3,
+                        "description": "SOLO boundary_case_audit: al menos un caso que cumple la regla y uno que la rompe, ambos aparentemente parecidos",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "statement": {"type": "string", "description": "El micro-caso concreto, autocontenido"},
+                                "followsRule": {"type": "boolean", "description": "true si cumple la regla — clave de calificación, nunca se envía al estudiante"}
+                            },
+                            "required": ["statement", "followsRule"]
+                        }
                     },
                     "visualAid": visual_aid_json_schema()
                 },
-                "required": ["blockType", "question", "options", "conceptualFeedbackMap", "correctOption"],
-                "description": "La respuesta se registra ANTES de revelar conceptualFeedbackMap — bloquea el avance hasta que el estudiante elija correctOption. visualAid es opcional — solo si la predicción realmente depende de leer un diagrama primero."
+                "required": ["blockType", "question"],
+                "description": "La respuesta se registra ANTES de revelar nada — bloquea el avance hasta acertar. En multiple_choice (por defecto) exige options + conceptualFeedbackMap + correctOption; en causal_chain_order exige shuffledSteps + correctOrder; en boundary_case_audit exige boundaryCases. visualAid es opcional — solo si la predicción realmente depende de leer un diagrama primero."
             },
             {
                 "properties": {
@@ -518,9 +544,31 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "scaffoldingHints": {"type": "array", "items": {"type": "string"}},
                     "evaluationRubricSummary": {"type": "array", "items": {"type": "string"}},
                     "isTransfer": {"type": "boolean", "description": "true SOLO para el reto de transferencia: el mismo skill en un caso NUEVO, con restricciones distintas a las de misiones anteriores y scaffoldingHints VACÍO. Omitir (false) en una misión normal."},
+                    "supportLevel": {
+                        "type": "string",
+                        "enum": ["full", "guided", "faded", "independent"],
+                        "description": "OBLIGATORIO: cuánto apoyo da esta misión (sigue scaffolding.supportLevel). La primera misión tras una teoría/diagrama es SIEMPRE guided o faded, nunca independent. independent solo en la misión de transferencia (isTransfer=true)."
+                    },
+                    "workedTemplate": {
+                        "type": "string",
+                        "description": "guided/faded: plantilla o solución resuelta al ~70% con huecos marcados con ___ (o /* TODO */) — se precarga en el editor del estudiante para que no empiece en blanco. Omitir en independent/transferencia."
+                    },
+                    "interactiveSteps": {
+                        "type": "array",
+                        "description": "guided/faded (recomendado): 2-4 micro-pasos de completar un hueco ANTES del reto completo, ordenados de lo más modelado a lo menos. Solo pueden exigir lo ya enseñado en contentSoFar (un paso nuevo a la vez).",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "prompt": {"type": "string", "description": "El hueco a completar, con contexto mínimo"},
+                                "expectedToken": {"type": "string", "description": "La respuesta corta esperada (una palabra, símbolo o expresión breve)"},
+                                "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4, "description": "Opcional: fichas para elegir; si las pones deben incluir expectedToken"}
+                            },
+                            "required": ["prompt", "expectedToken"]
+                        }
+                    },
                     "visualAid": visual_aid_json_schema()
                 },
-                "required": ["blockType", "challengeStatement", "expectedMilestoneArtifact", "constraints", "scaffoldingHints", "evaluationRubricSummary"],
+                "required": ["blockType", "challengeStatement", "expectedMilestoneArtifact", "constraints", "scaffoldingHints", "evaluationRubricSummary", "supportLevel"],
                 "description": "El estudiante entrega su solución en texto libre para desbloquear el siguiente bloque — lo califica notebook_gate_grader contra evaluationRubricSummary. visualAid es opcional — un diagrama de referencia del objetivo, solo si ayuda."
             },
             {
@@ -679,6 +727,10 @@ mod tests {
                 .into_iter()
                 .collect(),
             correct_option: "B".to_string(),
+            interaction_mode: None,
+            shuffled_steps: None,
+            correct_order: None,
+            boundary_cases: None,
             visual_aid: None,
         };
         tool.call(&mut ToolContext::new(), block).await.expect("infallible");

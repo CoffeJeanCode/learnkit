@@ -29,6 +29,8 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 export type SubmitGate = (blockId: string, submission: GateSubmission) => Promise<GateResult>;
+/** Voluntary de-escalation: lock the active gate and get a more guided block. */
+export type RequestEasierStep = (blockId: string, hintsShown: number, draft: string) => Promise<GateResult>;
 
 const TERM_MAX_CHARS = 100;
 
@@ -67,7 +69,11 @@ function deriveBlockLexicalContext(content: DynamicSectionBlock): { term: string
         answerBearing: content.modelSolution ? [content.modelSolution] : [],
       };
     case "interactive_prediction_gate":
-      return { term: content.question, fragmentContext: content.options.join(", "), answerBearing: content.options };
+      return {
+        term: content.question,
+        fragmentContext: [...content.options, ...(content.shuffledSteps ?? []), ...(content.boundaryCases ?? []).map((c) => c.statement)].join(", "),
+        answerBearing: [...content.options, ...(content.shuffledSteps ?? [])],
+      };
     case "hands_on_mission":
       return { term: content.challengeStatement, fragmentContext: content.expectedMilestoneArtifact, answerBearing: [] };
     case "metacognitive_closure":
@@ -86,6 +92,7 @@ export function DynamicNotebookBlock({
   isActive,
   lessonKeyConcepts,
   onSubmitGate,
+  onRequestEasierStep,
   onSave,
   onRequestClosureFeedback,
   onContinueModule,
@@ -98,6 +105,7 @@ export function DynamicNotebookBlock({
   isActive: boolean;
   lessonKeyConcepts: string[];
   onSubmitGate: SubmitGate;
+  onRequestEasierStep?: RequestEasierStep;
   onSave: (blockId: string, content: Record<string, unknown>) => void;
   onRequestClosureFeedback: (blockId: string, reflection: string) => Promise<{ passed: boolean; feedback: string }>;
   onContinueModule: () => void;
@@ -177,7 +185,13 @@ export function DynamicNotebookBlock({
           <InteractivePredictionGateBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} />
         )}
         {content.blockType === "hands_on_mission" && (
-          <HandsOnMissionBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} />
+          <HandsOnMissionBlock
+            block={block}
+            content={content}
+            isActive={isActive}
+            onSubmitGate={onSubmitGate}
+            onRequestEasierStep={onRequestEasierStep}
+          />
         )}
         {content.blockType === "metacognitive_closure" && (
           <MetacognitiveClosureBlock

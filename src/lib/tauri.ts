@@ -192,6 +192,14 @@ export const submitGateResponse = (block_id: string, submission: GateSubmission)
   invoke("submit_gate_response", { blockId: block_id, submission }).then((v) => GateResultSchema.parse(v));
 
 /**
+ * Voluntary de-escalation: leaves the active gate WITHOUT failing it 3 times.
+ * The backend locks the gate (`escalated`, answer never revealed) and generates
+ * a more scaffolded block right away; same result shape as `submitGateResponse`.
+ */
+export const requestEasierStep = (block_id: string, hints_shown: number, draft: string) =>
+  invoke("request_easier_step", { blockId: block_id, hintsShown: hints_shown, draft: draft.trim() || null }).then((v) => GateResultSchema.parse(v));
+
+/**
  * Grades the student's WRITTEN answer to one retrieval prompt and reveals the
  * solution only now (the client never receives it before). The only path that
  * can count as retention evidence.

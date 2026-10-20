@@ -1,4 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { DynamicSectionBlockSchema, GateSubmissionSchema } from "../src/lib/schemas";
+import type { GateResult, NotebookBlock } from "../src/lib/schemas";
+import { DeclarativeVisualDiagramBlock } from "../src/features/notebook/blocks/DeclarativeVisualDiagramBlock";
+import { HandsOnMissionBlock } from "../src/features/notebook/blocks/HandsOnMissionBlock";
+import { HeuristicErrorAuditBlock } from "../src/features/notebook/blocks/HeuristicErrorAuditBlock";
+import { InteractivePredictionGateBlock } from "../src/features/notebook/blocks/InteractivePredictionGateBlock";
+import { BranchingScenarioChallengeBlock } from "../src/features/notebook/blocks/BranchingScenarioChallengeBlock";
+import { moveItem, splitSnippetLines, tokenMatches } from "../src/features/notebook/blocks/interaction";
 import { InlineText, RichText } from "../src/features/notebook/blocks/RichText";
 
 const question = [
@@ -119,6 +127,237 @@ checks["fence still renders <pre><code>"] = fencedAfter.includes(
 );
 checks["fence content stays literal"] = fencedAfter.includes("const a = **x**;") && !fencedAfter.includes("<strong>");
 checks["fence prose stays a paragraph"] = fencedAfter.includes('<span class="inline-text">intro</span>');
+
+
+// --- Notebook interaction mechanics -----------------------------------------
+// Static markup shows each component's FIRST paint (initial state), which is
+// where the scaffolding promises live: a pre-filled editor instead of a blank
+// one, hints hidden until asked for, numbered lines to click, a one-step-at-
+// a-time walkthrough, and one control per interaction mode.
+
+const noopSubmit = async (): Promise<GateResult> => {
+  throw new Error("not used in static rendering");
+};
+
+function fakeBlock(block_type: NotebookBlock["block_type"], content: unknown, status: NotebookBlock["status"] = "ready"): NotebookBlock {
+  return {
+    id: "b1",
+    document_id: "d1",
+    block_type,
+    content_json: content as Record<string, unknown>,
+    order_index: 0,
+    status,
+    attempt_count: 0,
+    last_feedback: null,
+  } as NotebookBlock;
+}
+
+function parseBlock<T extends string>(content: Record<string, unknown>, type: T) {
+  const parsed = DynamicSectionBlockSchema.parse(content);
+  if (parsed.blockType !== type) throw new Error(`expected ${type}`);
+  return parsed as Extract<typeof parsed, { blockType: T }>;
+}
+
+// 1) hands_on_mission: backward compatibility, then the scaffolded variants.
+const oldMission = {
+  blockType: "hands_on_mission",
+  challengeStatement: "Resuelve el caso",
+  expectedMilestoneArtifact: "Una función",
+  constraints: ["Sin librerías"],
+  scaffoldingHints: ["Pista general", "Pista concreta", "Casi la respuesta"],
+  evaluationRubricSummary: ["Cubre el caso base"],
+};
+const legacy = parseBlock(oldMission, "hands_on_mission");
+checks["old mission (no scaffolding fields) still parses"] = !legacy.supportLevel && !legacy.workedTemplate && !legacy.interactiveSteps;
+
+const legacyHtml = renderToStaticMarkup(
+  <HandsOnMissionBlock block={fakeBlock("hands_on_mission", oldMission)} content={legacy} isActive onSubmitGate={noopSubmit} />,
+);
+checks["hints start hidden behind a counter button"] = legacyHtml.includes("Pedir pista") && legacyHtml.includes("(0/3)");
+checks["no hint text is shown up front"] = !legacyHtml.includes("Pista general") && !legacyHtml.includes("Casi la respuesta");
+checks["no de-escalation button without a handler"] = !legacyHtml.includes("paso previo más guiado");
+checks["old mission opens on an empty editor"] = /<textarea[^>]*><\/textarea>/.test(legacyHtml);
+
+const scaffolded = parseBlock(
+  {
+    ...oldMission,
+    supportLevel: "faded",
+    workedTemplate: "function suma(a, b) {\n  return ___;\n}",
+    interactiveSteps: [
+      { prompt: "¿Qué operador suma?", expectedToken: "+", options: ["+", "-"] },
+      { prompt: "Nombre del parámetro", expectedToken: "a" },
+    ],
+  },
+  "hands_on_mission",
+);
+const noSteps = { ...scaffolded, interactiveSteps: null };
+const templateHtml = renderToStaticMarkup(
+  <HandsOnMissionBlock
+    block={fakeBlock("hands_on_mission", scaffolded)}
+    content={noSteps}
+    isActive
+    onSubmitGate={noopSubmit}
+    onRequestEasierStep={noopSubmit}
+  />,
+);
+checks["worked template pre-fills the editor"] = templateHtml.includes("return ___;");
+checks["template editor is the monospace one"] = templateHtml.includes("mission-editor-code");
+checks["restore-template button is offered"] = templateHtml.includes("Restaurar plantilla");
+checks["de-escalation button next to submit"] = templateHtml.includes("Necesito un paso previo más guiado") && templateHtml.includes("Enviar mi solución");
+checks["unchanged template can't be sent"] = /<button[^>]*disabled[^>]*>Enviar mi solución/.test(templateHtml);
+checks["support level is labelled"] = templateHtml.includes("Con menos apoyo");
+
+const stepsHtml = renderToStaticMarkup(
+  <HandsOnMissionBlock block={fakeBlock("hands_on_mission", scaffolded)} content={scaffolded} isActive onSubmitGate={noopSubmit} />,
+);
+checks["cloze micro-steps render before the editor"] = stepsHtml.includes("¿Qué operador suma?") && stepsHtml.includes("cloze-chips");
+checks["editor stays closed until the steps are solved"] = !stepsHtml.includes("<textarea") && stepsHtml.includes("Resuelve los micro-pasos");
+checks["later steps are locked"] = (stepsHtml.match(/is-locked/g) ?? []).length === 1;
+
+checks["cloze token matching ignores case and spacing"] = tokenMatches("  Return   X ", "return x") && !tokenMatches("a", "b");
+
+// 2) heuristic_error_audit: bug bounty.
+const audit = parseBlock(
+  {
+    blockType: "heuristic_error_audit",
+    instruction: "Audita este código",
+    flawedRepresentation: { context: "Suma", buggySnippetOrDiagram: "let a = 1;\nlet b = a +;\nreturn b;", errorType: "syntax" },
+    guidingQuestions: ["¿Qué falta?"],
+  },
+  "heuristic_error_audit",
+);
+const auditHtml = renderToStaticMarkup(
+  <HeuristicErrorAuditBlock block={fakeBlock("heuristic_error_audit", audit)} content={audit} isActive onSubmitGate={noopSubmit} />,
+);
+checks["audit renders one clickable row per line"] = (auditHtml.match(/class="bug-line"/g) ?? []).length === 3;
+checks["audit rows are numbered"] = auditHtml.includes('bug-line-no">2<');
+checks["audit asks to point at a line first"] = auditHtml.includes("Señala la línea");
+checks["audit blocks sending until a line is picked"] = /<button[^>]*disabled[^>]*>Enviar diagnóstico/.test(auditHtml);
+
+const oneLiner = { ...audit, flawedRepresentation: { ...audit.flawedRepresentation, buggySnippetOrDiagram: "x = x + 1" } };
+const oneLinerHtml = renderToStaticMarkup(
+  <HeuristicErrorAuditBlock block={fakeBlock("heuristic_error_audit", oneLiner)} content={oneLiner} isActive onSubmitGate={noopSubmit} />,
+);
+checks["a one-line snippet keeps the plain flow"] = oneLinerHtml.includes("flawed-snippet") && !oneLinerHtml.includes("bug-line");
+checks["snippet lines ignore a trailing newline"] = splitSnippetLines("a\nb\n").length === 2 && splitSnippetLines("solo").length === 1;
+
+const faultyKey = DynamicSectionBlockSchema.safeParse({ ...audit, faultyLineNumber: 2 });
+checks["faultyLineNumber is accepted (and optional)"] = faultyKey.success && DynamicSectionBlockSchema.safeParse(audit).success;
+const passedAuditHtml = renderToStaticMarkup(
+  <HeuristicErrorAuditBlock
+    block={fakeBlock("heuristic_error_audit", audit, "passed")}
+    content={{ ...audit, faultyLineNumber: 2, modelSolution: "Falta el operando" }}
+    isActive
+    onSubmitGate={noopSubmit}
+  />,
+);
+checks["the real faulty line is highlighted once passed"] = /bug-line is-faulty"[^>]*aria-label="Línea 2"/.test(passedAuditHtml);
+
+// 3) declarative_visual_diagram: stepper + spotlight.
+const diagram = parseBlock(
+  {
+    blockType: "declarative_visual_diagram",
+    title: "La célula",
+    visualAid: {
+      renderEngine: "declarative_svg",
+      viewBox: "0 0 100 50",
+      groups: [
+        { groupId: "membrana", pedagogicalRole: "barrera", elements: [{ tag: "rect", props: { x: 0, y: 0, width: 10, height: 10 } }] },
+        { groupId: "nucleo", pedagogicalRole: "control", elements: [{ tag: "circle", props: { cx: 5, cy: 5, r: 3 } }] },
+      ],
+      caption: "Una célula",
+    },
+    guidedWalkthrough: [
+      { stepNumber: 2, targetVisualElement: "nucleo", pedagogicalInsight: "El núcleo guarda el ADN" },
+      { stepNumber: 1, targetVisualElement: "membrana", pedagogicalInsight: "La membrana filtra" },
+    ],
+  },
+  "declarative_visual_diagram",
+);
+const diagramHtml = renderToStaticMarkup(<DeclarativeVisualDiagramBlock content={diagram} />);
+checks["walkthrough starts on step 1 of N, sorted by stepNumber"] = diagramHtml.includes("Paso 1 de 2") && diagramHtml.indexOf("La membrana filtra") < diagramHtml.indexOf("El núcleo guarda");
+checks["the active step's group is spotlighted, the rest dimmed"] =
+  /data-group-id="membrana"[^>]*class="svg-group is-active"/.test(diagramHtml) && /data-group-id="nucleo"[^>]*class="svg-group is-dim"/.test(diagramHtml);
+checks["stepper offers next, and previous is disabled on step 1"] = diagramHtml.includes("Siguiente paso") && /<button[^>]*disabled[^>]*>Paso anterior/.test(diagramHtml);
+checks["the full list stays reachable"] = diagramHtml.includes("Ver todos los pasos");
+
+const ghostStep = { ...diagram, guidedWalkthrough: [{ stepNumber: 1, targetVisualElement: "no-existe", pedagogicalInsight: "x" }] };
+const ghostHtml = renderToStaticMarkup(<DeclarativeVisualDiagramBlock content={ghostStep} />);
+checks["a step naming no group never dims the figure"] = !ghostHtml.includes("is-dim");
+
+// 4) interactive_prediction_gate: one control set per mode, old blocks intact.
+const oldGate = parseBlock(
+  {
+    blockType: "interactive_prediction_gate",
+    question: "¿Qué pasa?",
+    options: ["A", "B"],
+    conceptualFeedbackMap: { A: "porque a", B: "porque b" },
+  },
+  "interactive_prediction_gate",
+);
+const oldGateHtml = renderToStaticMarkup(
+  <InteractivePredictionGateBlock block={fakeBlock("interactive_prediction_gate", oldGate)} content={oldGate} isActive onSubmitGate={noopSubmit} />,
+);
+checks["multiple choice is still the default"] = !oldGate.interactionMode && oldGateHtml.includes("prediction-options") && !oldGateHtml.includes("option-discarded");
+
+const chain = parseBlock(
+  { blockType: "interactive_prediction_gate", question: "Ordena", interactionMode: "causal_chain_order", shuffledSteps: ["Paso B", "Paso A", "Paso C"] },
+  "interactive_prediction_gate",
+);
+checks["a chain gate parses without options or answer key"] = chain.options.length === 0 && Object.keys(chain.conceptualFeedbackMap).length === 0;
+const chainHtml = renderToStaticMarkup(
+  <InteractivePredictionGateBlock block={fakeBlock("interactive_prediction_gate", chain)} content={chain} isActive onSubmitGate={noopSubmit} />,
+);
+checks["chain gate lists the shuffled links with up/down controls"] =
+  (chainHtml.match(/chain-item/g) ?? []).length === 3 && chainHtml.includes("↑") && chainHtml.includes("↓") && chainHtml.includes("Comprobar secuencia");
+checks["chain gate keeps the shuffled order on first paint"] = chainHtml.indexOf("Paso B") < chainHtml.indexOf("Paso A");
+checks["moveItem swaps neighbours and clamps at the edges"] =
+  moveItem(["a", "b", "c"], 1, -1).join("") === "bac" && moveItem(["a", "b", "c"], 0, -1).join("") === "abc" && moveItem(["a", "b", "c"], 2, 1).join("") === "abc";
+
+const boundary = parseBlock(
+  {
+    blockType: "interactive_prediction_gate",
+    question: "¿Cumple la regla?",
+    interactionMode: "boundary_case_audit",
+    boundaryCases: [{ statement: "Caso uno" }, { statement: "Caso dos" }],
+  },
+  "interactive_prediction_gate",
+);
+const boundaryHtml = renderToStaticMarkup(
+  <InteractivePredictionGateBlock block={fakeBlock("interactive_prediction_gate", boundary)} content={boundary} isActive onSubmitGate={noopSubmit} />,
+);
+checks["boundary gate shows both verdict buttons per case"] =
+  (boundaryHtml.match(/>Cumple la regla<\/button>/g) ?? []).length === 2 && (boundaryHtml.match(/>Rompe la regla<\/button>/g) ?? []).length === 2;
+checks["boundary gate can't be checked before every case is classified"] = /<button[^>]*disabled[^>]*>Comprobar casos/.test(boundaryHtml);
+
+const branching = parseBlock(
+  {
+    blockType: "branching_scenario_challenge",
+    scenario: "Tu equipo se retrasa",
+    decisionPoint: "¿Qué haces?",
+    branches: [
+      { choice: "Hablar", consequence: "Se aclara" },
+      { choice: "Ignorar", consequence: "Empeora" },
+    ],
+  },
+  "branching_scenario_challenge",
+);
+const branchingHtml = renderToStaticMarkup(
+  <BranchingScenarioChallengeBlock block={fakeBlock("branching_scenario_challenge", branching)} content={branching} isActive onSubmitGate={noopSubmit} />,
+);
+checks["branching gate starts with every branch available"] = !branchingHtml.includes("option-discarded") && (branchingHtml.match(/<button/g) ?? []).length === 2;
+
+// 5) Submission contracts (wire shape used by the Tauri commands).
+checks["prediction submissions: choice, order or verdicts"] =
+  GateSubmissionSchema.safeParse({ blockType: "interactive_prediction_gate", selectedOption: "A" }).success &&
+  GateSubmissionSchema.safeParse({ blockType: "interactive_prediction_gate", orderedSteps: ["a", "b"] }).success &&
+  GateSubmissionSchema.safeParse({ blockType: "interactive_prediction_gate", caseVerdicts: [true, false] }).success;
+checks["mission submission carries hintsShown, audit carries selectedLine"] =
+  GateSubmissionSchema.safeParse({ blockType: "hands_on_mission", submissionText: "x", hintsShown: 2 }).success &&
+  GateSubmissionSchema.safeParse({ blockType: "heuristic_error_audit", diagnosisText: "x", selectedLine: 3 }).success;
+checks["Option<T> fields accept an explicit null (Rust sends null)"] =
+  DynamicSectionBlockSchema.safeParse({ ...oldMission, supportLevel: null, workedTemplate: null, interactiveSteps: null }).success &&
+  DynamicSectionBlockSchema.safeParse({ ...audit, faultyLineNumber: null }).success;
 
 const failed = Object.entries(checks).filter(([, ok]) => !ok);
 for (const [name, ok] of Object.entries(checks)) console.log(`${ok ? "[ok]" : "[!!]"} ${name}`);

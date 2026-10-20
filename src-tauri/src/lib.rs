@@ -86,6 +86,7 @@ pub fn run() {
             commands::notebook::start_class_notebook,
             commands::notebook::get_class_notebook_progress,
             commands::notebook::submit_gate_response,
+            commands::notebook::request_easier_step,
             commands::notebook::submit_retrieval_answer,
             commands::notebook::reveal_retrieval_answer,
             commands::notebook::get_course_skill_status,

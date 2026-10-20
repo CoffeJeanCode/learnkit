@@ -99,6 +99,10 @@
                 .into_iter()
                 .collect(),
             correct_option: correct.to_string(),
+            interaction_mode: None,
+            shuffled_steps: None,
+            correct_order: None,
+            boundary_cases: None,
             visual_aid: None,
         }
     }
@@ -111,6 +115,9 @@
             scaffolding_hints: vec!["Empieza por identificar las entidades".to_string()],
             evaluation_rubric_summary: vec!["Cubre el caso base".to_string()],
             is_transfer: false,
+            support_level: Some(crate::domain::notebook::MissionSupportLevel::Faded),
+            worked_template: Some("Completa: ___".to_string()),
+            interactive_steps: None,
             visual_aid: None,
         }
     }
@@ -125,6 +132,9 @@
             scaffolding_hints: vec![],
             evaluation_rubric_summary: vec!["Adapta la regla al caso nuevo".to_string()],
             is_transfer: true,
+            support_level: Some(crate::domain::notebook::MissionSupportLevel::Independent),
+            worked_template: None,
+            interactive_steps: None,
             visual_aid: None,
         }
     }
@@ -409,7 +419,7 @@
             .find(|b| b.block_type == DynamicBlockType::InteractivePredictionGate)
             .expect("the buffered gate is returned");
         let result = service
-            .submit_gate_response(None, &gate.id, GateSubmission::InteractivePredictionGate { selected_option: "B".to_string() })
+            .submit_gate_response(None, &gate.id, GateSubmission::InteractivePredictionGate { selected_option: Some("B".to_string()), ordered_steps: None, case_verdicts: None })
             .await
             .expect("the gate is submittable again");
         assert!(result.passed, "cursor heal restores the normal flow");
@@ -438,7 +448,7 @@
         let gate_id = gate_block.id.clone();
 
         let result = service
-            .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: "B".to_string() })
+            .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: Some("B".to_string()), ordered_steps: None, case_verdicts: None })
             .await
             .expect("submit ok");
         assert!(result.passed);
@@ -452,7 +462,7 @@
         assert_eq!(mission_block.block_type, DynamicBlockType::HandsOnMission);
 
         let mission_result = service
-            .submit_gate_response(None, &mission_block.id, GateSubmission::HandsOnMission { submission_text: "mi solución".to_string() })
+            .submit_gate_response(None, &mission_block.id, GateSubmission::HandsOnMission { submission_text: "mi solución".to_string(), hints_shown: None })
             .await
             .expect("submit ok");
         assert!(mission_result.passed, "both mastery dimensions are now satisfied");
@@ -466,7 +476,7 @@
         assert_eq!(transfer_block.content_json["isTransfer"], true);
 
         let transfer_result = service
-            .submit_gate_response(None, &transfer_block.id, GateSubmission::HandsOnMission { submission_text: "caso nuevo".to_string() })
+            .submit_gate_response(None, &transfer_block.id, GateSubmission::HandsOnMission { submission_text: "caso nuevo".to_string(), hints_shown: None })
             .await
             .expect("submit ok");
         assert!(transfer_result.passed);
@@ -495,7 +505,7 @@
         let gate_id = payload.blocks[0].id.clone();
 
         let result = service
-            .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: "A".to_string() })
+            .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: Some("A".to_string()), ordered_steps: None, case_verdicts: None })
             .await
             .expect("submit ok");
         assert!(!result.passed);
@@ -516,7 +526,7 @@
 
         for _ in 0..2 {
             let r = service
-                .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: "A".to_string() })
+                .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: Some("A".to_string()), ordered_steps: None, case_verdicts: None })
                 .await
                 .expect("submit ok");
             assert!(!r.passed);
@@ -526,7 +536,7 @@
         // 3rd fail: the mock's next scripted block IS the re-approach block.
         runner.blocks.lock().unwrap().push_back(Some(hands_on_mission()));
         let third = service
-            .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: "A".to_string() })
+            .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: Some("A".to_string()), ordered_steps: None, case_verdicts: None })
             .await
             .expect("submit ok");
         assert!(!third.passed);
@@ -548,7 +558,7 @@
 
         // Resubmitting the same escalated gate is rejected — it's locked forever, never retried.
         let err = service
-            .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: "B".to_string() })
+            .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: Some("B".to_string()), ordered_steps: None, case_verdicts: None })
             .await
             .expect_err("must reject a resolved gate");
         assert!(matches!(err, AppError::InvalidInput(_)));
@@ -567,6 +577,7 @@
                     },
                     guiding_questions: vec!["¿Qué falta?".to_string()],
                     model_solution: "La condición del bucle nunca se vuelve falsa".to_string(),
+                    faulty_line_number: None,
                     visual_aid: None,
                 })]
                 .into(),
@@ -592,7 +603,7 @@
         let block_id = payload.blocks[0].id.clone();
 
         let result = service
-            .submit_gate_response(None, &block_id, GateSubmission::HeuristicErrorAudit { diagnosis_text: "algo está mal".to_string() })
+            .submit_gate_response(None, &block_id, GateSubmission::HeuristicErrorAudit { diagnosis_text: "algo está mal".to_string(), selected_line: None })
             .await
             .expect("submit ok");
         assert!(!result.passed);
@@ -630,7 +641,7 @@
         let block_id = payload.blocks[0].id.clone();
 
         service
-            .submit_gate_response(None, &block_id, GateSubmission::HandsOnMission { submission_text: "mi solución".to_string() })
+            .submit_gate_response(None, &block_id, GateSubmission::HandsOnMission { submission_text: "mi solución".to_string(), hints_shown: None })
             .await
             .expect("submit ok");
 
@@ -735,7 +746,7 @@
         service.start_class_notebook(None, &class_id).await.expect("start");
 
         let err = service
-            .submit_gate_response(None, "does-not-exist", GateSubmission::InteractivePredictionGate { selected_option: "B".to_string() })
+            .submit_gate_response(None, "does-not-exist", GateSubmission::InteractivePredictionGate { selected_option: Some("B".to_string()), ordered_steps: None, case_verdicts: None })
             .await
             .expect_err("must fail for an unknown block id");
         assert!(matches!(err, AppError::InvalidInput(_)));
@@ -1025,7 +1036,7 @@
         let payload = service.start_class_notebook(None, &class_id).await.expect("start");
         let gate = &payload.blocks[0];
         service
-            .submit_gate_response(None, &gate.id, GateSubmission::InteractivePredictionGate { selected_option: "B".to_string() })
+            .submit_gate_response(None, &gate.id, GateSubmission::InteractivePredictionGate { selected_option: Some("B".to_string()), ordered_steps: None, case_verdicts: None })
             .await
             .expect("prediction gate passes");
         let_background_chain_settle().await;
@@ -1039,7 +1050,7 @@
             .submit_gate_response(
                 None,
                 &mission.id,
-                GateSubmission::HandsOnMission { submission_text: "mi solución".to_string() },
+                GateSubmission::HandsOnMission { submission_text: "mi solución".to_string(), hints_shown: None },
             )
             .await
             .expect("practice gate passes");
@@ -1047,7 +1058,7 @@
         let progress = service.get_class_notebook_progress(&class_id).expect("progress");
         let transfer = progress.blocks.last().expect("transfer mission buffered after mastery").clone();
         service
-            .submit_gate_response(None, &transfer.id, GateSubmission::HandsOnMission { submission_text: "caso nuevo".to_string() })
+            .submit_gate_response(None, &transfer.id, GateSubmission::HandsOnMission { submission_text: "caso nuevo".to_string(), hints_shown: None })
             .await
             .expect("transfer gate passes");
         let_background_chain_settle().await;
@@ -1113,4 +1124,108 @@
         assert!(again.passed, "an approved closure never re-opens");
         assert_eq!(again.feedback, passed.feedback, "the stored verdict stands");
         assert_eq!(*runner.closure_calls.lock().unwrap(), calls_before, "no second grader call after approval");
+
+    #[tokio::test]
+    async fn the_first_gate_attempt_is_the_real_initial_prediction_even_when_wrong_and_every_attempt_is_kept() {
+        let runner = Arc::new(ScriptedNotebookRunner { blocks: Mutex::new(vec![Some(prediction_gate("B"))].into()), ..Default::default() });
+        let service = service_with(runner);
+        let class_id = first_class_id(&service);
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start");
+        let gate_id = payload.blocks[0].id.clone();
+        let doc_id = payload.document.id.clone();
+
+        let wrong = GateSubmission::InteractivePredictionGate { selected_option: Some("A".to_string()), ordered_steps: None, case_verdicts: None };
+        assert!(!service.submit_gate_response(None, &gate_id, wrong).await.expect("submit").passed);
+        let right = GateSubmission::InteractivePredictionGate { selected_option: Some("B".to_string()), ordered_steps: None, case_verdicts: None };
+        assert!(service.submit_gate_response(None, &gate_id, right).await.expect("submit").passed);
+
+        let doc = service.store.get_document(&doc_id).expect("read").expect("present");
+        assert_eq!(doc.initial_prediction.as_deref(), Some("A"), "the FIRST answer, not the first passing one");
+        let attempts = service.store.list_gate_attempts(&doc_id).expect("attempts");
+        assert_eq!(
+            attempts.iter().map(|a| (a.attempt_number, a.answer_text.as_str(), a.passed)).collect::<Vec<_>>(),
+            vec![(1, "A", false), (2, "B", true)]
+        );
     }
+
+    #[tokio::test]
+    async fn asking_for_an_easier_step_escalates_without_failures_and_logs_the_hints_used() {
+        use crate::domain::notebook::MissionSupportLevel;
+        use crate::domain::skill_evidence::EvidenceOutcome;
+        let easier = match hands_on_mission() {
+            GeneratedSectionBlock::HandsOnMission { support_level: _, .. } => {
+                let mut m = hands_on_mission();
+                if let GeneratedSectionBlock::HandsOnMission { support_level, worked_template, interactive_steps, .. } = &mut m {
+                    *support_level = Some(MissionSupportLevel::Faded);
+                    *worked_template = Some("fn f() { ___ }".to_string());
+                    *interactive_steps = Some(vec![crate::domain::notebook::InteractiveStep {
+                        prompt: "Completa".to_string(),
+                        expected_token: "x".to_string(),
+                        options: None,
+                    }]);
+                }
+                m
+            }
+            other => other,
+        };
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(vec![Some(hands_on_mission()), Some(easier)].into()),
+            ..Default::default()
+        });
+        let service = service_with(runner.clone());
+        let class_id = first_class_id(&service);
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start");
+        let mission = payload.blocks[0].clone();
+        assert_eq!(mission.block_type, DynamicBlockType::HandsOnMission);
+
+        let result = service.request_easier_step(None, &mission.id, Some(2), Some("mi borrador".to_string())).await.expect("easier step");
+        assert!(!result.passed);
+        assert_eq!(result.block.status, BlockStatus::Escalated);
+        assert_eq!(result.block.attempt_count, 0, "no failed attempts were needed");
+        let next = result.escalation_block.expect("the easier step is generated right away");
+        assert_eq!(next.block_type, DynamicBlockType::HandsOnMission, "a more scaffolded mission may follow the mission");
+        assert_eq!(next.content_json["supportLevel"], "faded");
+        assert!(next.content_json["workedTemplate"].as_str().unwrap().contains("___"));
+
+        let evidence = service.get_skill_evidence(&class_id).expect("evidence");
+        let row = evidence.iter().find(|e| e.block_id.as_deref() == Some(mission.id.as_str())).expect("evidence row");
+        assert_eq!((row.outcome, row.hints_shown), (EvidenceOutcome::Escalated, 2));
+        assert!(!row.outcome.is_demonstration(), "asking for help is never mastery evidence");
+
+        // The gate is locked for good, and the new block is the active one.
+        let again = service.request_easier_step(None, &mission.id, None, None).await.expect_err("already resolved");
+        assert!(matches!(again, AppError::InvalidInput(_)));
+        let progress = service.get_class_notebook_progress(&class_id).expect("progress");
+        assert_eq!(progress.document.current_block_index, next.order_index);
+    }
+
+    #[tokio::test]
+    async fn the_easier_step_is_refused_for_non_gates_and_when_the_gate_was_never_active() {
+        let runner = Arc::new(ScriptedNotebookRunner { blocks: Mutex::new(vec![Some(micro_theory())].into()), ..Default::default() });
+        let service = service_with(runner);
+        let class_id = first_class_id(&service);
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start");
+        let err = service.request_easier_step(None, &payload.blocks[0].id, None, None).await.expect_err("theory is not a gate");
+        assert!(matches!(err, AppError::InvalidInput(_)));
+    }
+
+    #[tokio::test]
+    async fn hints_opened_in_the_ui_are_added_to_the_evidence_of_a_graded_mission() {
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(vec![Some(hands_on_mission())].into()),
+            grading: Mutex::new(vec![GateGradingResult { passed: true, rationale: "ok".to_string(), criteria: vec![], scaffold: None }].into()),
+            ..Default::default()
+        });
+        let service = service_with(runner);
+        let class_id = first_class_id(&service);
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start");
+        let mission_id = payload.blocks[0].id.clone();
+        service
+            .submit_gate_response(None, &mission_id, GateSubmission::HandsOnMission { submission_text: "listo".to_string(), hints_shown: Some(2) })
+            .await
+            .expect("graded");
+        let evidence = service.get_skill_evidence(&class_id).expect("evidence");
+        let row = evidence.iter().find(|e| e.block_id.as_deref() == Some(mission_id.as_str())).expect("row");
+        assert_eq!(row.hints_shown, 2, "first attempt, but two progressive hints were opened");
+    }
+}

@@ -21,7 +21,7 @@ use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, SkillEvidence
 use crate::domain::study::{resolve_variant, StudyEvent, StudyEventKind, StudySettings, StudyVariant, VariantMode};
 use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{
-    BlockStatus, BlockUpdate, ClassRecord, Course, DiagnosticBattery, DiagnosticBatteryState, DynamicBlockType,
+    BlockStatus, BlockUpdate, ClassRecord, Course, DiagnosticBattery, GateAttempt, DiagnosticBatteryState, DynamicBlockType,
     NotebookBlock, NotebookDocument, NotebookPayload, NotebookStatus, SyllabusMilestone,
 };
 use crate::error::{AppError, AppResult};
@@ -78,6 +78,22 @@ CREATE TABLE IF NOT EXISTS notebook_blocks (
     last_feedback TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_blocks_document ON notebook_blocks(document_id);
+
+-- What the student actually answered on each gate attempt, pass or fail —
+-- the traceability source for the closing block's prediction-vs-result
+-- contrast (the block row only keeps `attempt_count`). Additive table, so
+-- databases created before it just gain it on next open.
+CREATE TABLE IF NOT EXISTS gate_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL REFERENCES notebook_documents(id) ON DELETE CASCADE,
+    block_id TEXT NOT NULL,
+    block_type TEXT NOT NULL,
+    attempt_number INTEGER NOT NULL,
+    answer_text TEXT NOT NULL,
+    passed INTEGER NOT NULL,
+    at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gate_attempts_document ON gate_attempts(document_id, id);
 
 -- One row per learner (today, always `learner_memory::LOCAL_LEARNER_ID` —
 -- see that module's doc comment) — the WHOLE `LearnerCognitiveMemory`
@@ -1028,6 +1044,57 @@ impl NotebookStore {
     /// verbatim. A no-op if one is already recorded — this field is written
     /// exactly once per notebook, by design (see
     /// `NotebookDocument::initial_prediction`).
+    /// Appends one gate attempt to the document's answer history.
+    pub fn append_gate_attempt(&self, attempt: &GateAttempt) -> AppResult<()> {
+        self.lock().execute(
+            "INSERT INTO gate_attempts (document_id, block_id, block_type, attempt_number, answer_text, passed, at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                attempt.document_id,
+                attempt.block_id,
+                attempt.block_type.as_str(),
+                attempt.attempt_number,
+                attempt.answer_text,
+                attempt.passed,
+                attempt.at_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every recorded gate attempt of one document, oldest first.
+    pub fn list_gate_attempts(&self, document_id: &str) -> AppResult<Vec<GateAttempt>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT document_id, block_id, block_type, attempt_number, answer_text, passed, at_ms
+             FROM gate_attempts WHERE document_id = ?1 ORDER BY id ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![document_id], |row| {
+                let block_type: String = row.get(2)?;
+                Ok((
+                    GateAttempt {
+                        document_id: row.get(0)?,
+                        block_id: row.get(1)?,
+                        block_type: DynamicBlockType::InteractivePredictionGate,
+                        attempt_number: row.get(3)?,
+                        answer_text: row.get(4)?,
+                        passed: row.get(5)?,
+                        at_ms: row.get(6)?,
+                    },
+                    block_type,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(mut a, bt)| {
+                a.block_type = DynamicBlockType::parse(&bt)?;
+                Some(a)
+            })
+            .collect())
+    }
+
     pub fn set_document_initial_prediction(&self, document_id: &str, value: &str) -> AppResult<()> {
         self.lock().execute(
             "UPDATE notebook_documents SET initial_prediction = ?1 WHERE id = ?2 AND initial_prediction IS NULL",

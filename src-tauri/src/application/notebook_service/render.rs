@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 
 use crate::domain::learner_memory::LearnerCognitiveMemory;
-use crate::domain::notebook::{BlockStatus, GeneratedSectionBlock, NotebookBlock};
+use crate::domain::lesson_composition::{infer_profile, suggest_next_block, suggested_sequence};
+use crate::domain::notebook::{BlockStatus, DynamicBlockType, GateAttempt, GeneratedSectionBlock, NotebookBlock};
 use crate::domain::scaffolding;
 use crate::notebook_store::ClassGenerationContext;
 
@@ -79,6 +80,83 @@ fn render_learner_memory_context(memory: &LearnerCognitiveMemory, ctx: &ClassGen
     out
 }
 
+/// The student's real answers on this class's gates, oldest first — what the
+/// closing block must quote instead of inventing a "prediction". `blockNumber`
+/// is the 1-based position the student saw; answers are capped so a long
+/// free-text mission can't bloat every generation call.
+fn gate_history_json(existing_blocks: &[NotebookBlock], attempts: &[GateAttempt]) -> serde_json::Value {
+    const MAX_ANSWER_CHARS: usize = 400;
+    let rows: Vec<serde_json::Value> = attempts
+        .iter()
+        .map(|a| {
+            let block = existing_blocks.iter().find(|b| b.id == a.block_id);
+            let prompt = block.and_then(|b| {
+                ["question", "challengeStatement", "scenario", "instruction"]
+                    .iter()
+                    .find_map(|k| b.content_json.get(*k).and_then(|v| v.as_str()))
+                    .map(|s| s.chars().take(160).collect::<String>())
+            });
+            serde_json::json!({
+                "blockNumber": block.map(|b| b.order_index + 1),
+                "blockType": a.block_type.as_str(),
+                "gatePrompt": prompt,
+                "attempt": a.attempt_number,
+                "studentAnswer": a.answer_text.chars().take(MAX_ANSWER_CHARS).collect::<String>(),
+                "passed": a.passed,
+            })
+        })
+        .collect();
+    let first_failed = attempts.first().is_some_and(|a| !a.passed);
+    serde_json::json!({
+        "attempts": rows,
+        "firstAttemptWasWrong": first_failed,
+        "note": "Respuestas REALES del estudiante, en orden. Cítalas textualmente (predictionComparison.initialPrediction = la primera; \
+                 contrastNarrative debe mencionar en qué intento acertó y qué cambió); nunca inventes una predicción.",
+    })
+}
+
+/// The `compositionHint` for the next block: the class's inferred
+/// [`DisciplineProfile`](crate::domain::lesson_composition::DisciplineProfile),
+/// its suggested chain, and the block that belongs at the next position —
+/// minus anything that already dominates the course's earlier classes. Only a
+/// starting disposition: the generator may deviate (and must say why in
+/// `pedagogicalRationale`). `None` when the class text matches no profile.
+fn composition_hint(
+    ctx: &ClassGenerationContext,
+    existing_blocks: &[NotebookBlock],
+    mastery: MasteryProgress,
+    (usage, total_classes): &(HashMap<String, i64>, i64),
+) -> Option<serde_json::Value> {
+    let profile = infer_profile(&ctx.class.title, &[&ctx.milestone.title, &ctx.course.title, &ctx.course.target_goal])?;
+    let prior: Vec<DynamicBlockType> = existing_blocks.iter().map(|b| b.block_type).collect();
+    // Practice-family types that already dominate this course (same >50% rule
+    // as `grounding::dominance_violation`, which would reject them anyway).
+    let dominant: Vec<DynamicBlockType> = if *total_classes >= 2 {
+        usage
+            .iter()
+            .filter(|(_, n)| (**n as f64) / (*total_classes as f64) > 0.5)
+            .filter_map(|(k, _)| DynamicBlockType::parse(k))
+            .filter(|t| {
+                matches!(t, DynamicBlockType::HeuristicErrorAudit | DynamicBlockType::HandsOnMission | DynamicBlockType::BranchingScenarioChallenge)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let suggested = suggest_next_block(profile, &prior, mastery.complete(), &dominant);
+    Some(serde_json::json!({
+        "disciplineProfile": profile.as_str(),
+        "profileSequence": suggested_sequence(profile).iter().map(|t| t.as_str()).collect::<Vec<_>>(),
+        "nextPosition": prior.iter().filter(|t| **t != DynamicBlockType::SpacedInterleavedRetrieval).count() + 1,
+        "suggestedBlockType": suggested.map(|t| t.as_str()),
+        "avoidBlockTypes": dominant.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
+        "guidance": "Perfil inferido por palabras clave del tema (corrígelo en pedagogicalRationale si el tema de HOY es de otro perfil). \
+                     suggestedBlockType es el punto de partida para ESTA posición, no un molde: respétalo salvo que scaffolding, \
+                     masteryStatus o contentSoFar pidan otra cosa. No uses el mismo tipo de práctica que en las clases anteriores \
+                     (avoidBlockTypes) ni dos veces seguidas.",
+    }))
+}
+
 /// Input for a normal (non-escalation) `publish_notebook_block` call — used
 /// for both the very first block (`existing_blocks` empty) and every
 /// subsequent one. `initial_prediction`/`final_result_so_far` are always
@@ -99,6 +177,7 @@ pub(super) fn render_next_block_input(
     mastery: MasteryProgress,
     learner_memory: &LearnerCognitiveMemory,
     now_ms: i64,
+    gate_attempts: &[GateAttempt],
 ) -> String {
     let mut context = serde_json::json!({
         "course": {
@@ -130,6 +209,12 @@ pub(super) fn render_next_block_input(
         context["diagnosticProfile"] = profile.clone();
     }
     context["learnerMemory"] = render_learner_memory_context(learner_memory, ctx, now_ms);
+    if let Some(hint) = composition_hint(ctx, existing_blocks, mastery, block_type_usage) {
+        context["compositionHint"] = hint;
+    }
+    if !gate_attempts.is_empty() {
+        context["gateHistory"] = gate_history_json(existing_blocks, gate_attempts);
+    }
     context["scaffolding"] = scaffolding::plan(existing_blocks, learner_memory.needs_heavy_scaffolding()).to_json(existing_blocks);
     if let Some(last) = existing_blocks.last() {
         if last.block_type.is_gate() && last.status == BlockStatus::Passed {
@@ -165,8 +250,9 @@ pub(super) fn render_forced_closure_input(
     initial_prediction: Option<&str>,
     final_result_so_far: &str,
     mastery: MasteryProgress,
+    gate_attempts: &[GateAttempt],
 ) -> String {
-    let context = serde_json::json!({
+    let mut context = serde_json::json!({
         "course": { "title": ctx.course.title, "targetGoal": ctx.course.target_goal },
         "class": { "title": ctx.class.title },
         "blocksSoFar": existing_blocks.iter().map(|b| b.block_type.as_str()).collect::<Vec<_>>(),
@@ -177,6 +263,9 @@ pub(super) fn render_forced_closure_input(
             "hasPassedPracticeGate": mastery.has_passed_practice,
         },
     });
+    if !gate_attempts.is_empty() {
+        context["gateHistory"] = gate_history_json(existing_blocks, gate_attempts);
+    }
     format!(
         "Se alcanzó el tope de seguridad de bloques de esta clase. Debes CERRAR AHORA MISMO llamando \
          a publish_notebook_block con metacognitive_closure — sin excepción, aunque el estudiante no \
@@ -193,7 +282,12 @@ pub(super) fn render_forced_closure_input(
 /// `domain::notebook::NotebookBlock`, which tracks `attempt_count` but not a
 /// full submission history), so the input is honest about that instead of
 /// claiming to carry all 3.
-pub(super) fn render_escalation_block_input(ctx: &ClassGenerationContext, failed_block: &NotebookBlock, recent_wrong_submission: &str) -> String {
+pub(super) fn render_escalation_block_input(
+    ctx: &ClassGenerationContext,
+    failed_block: &NotebookBlock,
+    recent_wrong_submission: &str,
+    voluntary: bool,
+) -> String {
     let context = serde_json::json!({
         "course": {
             "title": ctx.course.title,
@@ -207,22 +301,34 @@ pub(super) fn render_escalation_block_input(ctx: &ClassGenerationContext, failed
             "mostRecentWrongSubmission": recent_wrong_submission,
         },
     });
-    format!(
+    let intro = if voluntary {
+        "El estudiante PIDIÓ un paso previo más guiado en esta compuerta (sin haber fallado 3 veces). Genera el \
+         bloque de apoyo según la sección MODO ESCALACIÓN → «paso previo pedido por el estudiante» de tu system \
+         prompt: la MISMA habilidad con MÁS andamiaje (una hands_on_mission con supportLevel \"faded\", \
+         workedTemplate e interactiveSteps cuando el bloque original era una misión), nunca revelando la solución \
+         del bloque original. Llama a publish_notebook_block."
+    } else {
         "El estudiante falló la misma compuerta 3 veces. Genera el bloque de re-enfoque según la \
-         sección MODO ESCALACIÓN de tu system prompt, llamando a publish_notebook_block.\n\n{}",
-        serde_json::to_string_pretty(&context).unwrap_or_default()
-    )
+         sección MODO ESCALACIÓN de tu system prompt, llamando a publish_notebook_block."
+    };
+    format!("{intro}\n\n{}", serde_json::to_string_pretty(&context).unwrap_or_default())
 }
 
 /// Input for `notebook_gate_grader`'s `grade_gate_submission` call — one
 /// free-text submission against its block's reference solution/rubric.
-pub(super) fn render_grading_input(block: &NotebookBlock, submission_text: &str, attempt_number: u32) -> String {
-    let context = serde_json::json!({
+pub(super) fn render_grading_input(block: &NotebookBlock, submission_text: &str, attempt_number: u32, selected_line: Option<u32>) -> String {
+    let mut context = serde_json::json!({
         "blockType": block.block_type.as_str(),
         "blockContent": block.content_json,
         "studentSubmission": submission_text,
         "attemptNumber": attempt_number,
     });
+    // `heuristic_error_audit` "Bug Bounty": the line the student pointed at
+    // before writing the diagnosis (compared by the grader against
+    // `blockContent.faultyLineNumber`, when the block has one).
+    if let Some(line) = selected_line {
+        context["studentSelectedLine"] = serde_json::json!(line);
+    }
     format!(
         "Califica esta entrega llamando a grade_gate_submission según tu system prompt.\n\n{}",
         serde_json::to_string_pretty(&context).unwrap_or_default()
@@ -299,7 +405,10 @@ pub(super) fn synthesize_final_result_so_far(existing_blocks: &[NotebookBlock]) 
     let passed: Vec<String> = existing_blocks
         .iter()
         .filter(|b| b.block_type.is_gate() && b.status == BlockStatus::Passed)
-        .map(|b| format!("{} (superada)", b.block_type.as_str()))
+        .map(|b| match b.attempt_count {
+            0 | 1 => format!("{} (superada al primer intento)", b.block_type.as_str()),
+            n => format!("{} (superada en el intento {n})", b.block_type.as_str()),
+        })
         .collect();
     if passed.is_empty() {
         "El estudiante todavía no ha superado ninguna compuerta en esta clase.".to_string()
@@ -348,5 +457,33 @@ mod tests {
         assert_eq!(digest[0]["content"]["systemRule"], "LIFO: el último en entrar sale primero.");
         assert_eq!(digest[1]["content"]["title"], "Mapa de la pila");
         assert!(digest[1]["content"].get("visualAid").is_none());
+    }
+
+    #[test]
+    fn gate_history_quotes_the_real_answers_in_order_and_flags_a_wrong_first_attempt() {
+        let gate = block(2, DynamicBlockType::InteractivePredictionGate, serde_json::json!({ "question": "¿Qué pasa primero?" }));
+        let attempts = [
+            GateAttempt { document_id: "doc".into(), block_id: gate.id.clone(), block_type: gate.block_type, attempt_number: 1, answer_text: "A".into(), passed: false, at_ms: 1 },
+            GateAttempt { document_id: "doc".into(), block_id: gate.id.clone(), block_type: gate.block_type, attempt_number: 2, answer_text: "B".into(), passed: true, at_ms: 2 },
+        ];
+        let history = gate_history_json(&[gate], &attempts);
+        assert_eq!(history["firstAttemptWasWrong"], true);
+        assert_eq!(history["attempts"][0]["studentAnswer"], "A");
+        assert_eq!(history["attempts"][0]["blockNumber"], 3);
+        assert_eq!(history["attempts"][0]["gatePrompt"], "¿Qué pasa primero?");
+        assert_eq!(history["attempts"][1]["passed"], true);
+    }
+
+    #[test]
+    fn final_result_says_which_attempt_passed() {
+        let mut first_try = block(0, DynamicBlockType::InteractivePredictionGate, serde_json::json!({}));
+        first_try.status = BlockStatus::Passed;
+        first_try.attempt_count = 1;
+        let mut third_try = block(1, DynamicBlockType::HandsOnMission, serde_json::json!({}));
+        third_try.status = BlockStatus::Passed;
+        third_try.attempt_count = 3;
+        let text = synthesize_final_result_so_far(&[first_try, third_try]);
+        assert!(text.contains("interactive_prediction_gate (superada al primer intento)"), "{text}");
+        assert!(text.contains("hands_on_mission (superada en el intento 3)"), "{text}");
     }
 }

@@ -110,6 +110,7 @@ export function ClassNotebookView() {
     error,
     stage,
     submitGate,
+    requestEasierStep,
     retryPendingBlock,
     cancelBuffer,
     regenerateBlock,
@@ -183,6 +184,17 @@ export function ClassNotebookView() {
     }
     // The submission may have flipped this class's last unresolved gate —
     // re-sync the path so the next class's lock state updates immediately.
+    void refreshClasses();
+    return result;
+  };
+
+  // Voluntary de-escalation: the locked gate is replaced by a freshly
+  // generated, more guided block, which reveals like any escalation.
+  const handleRequestEasierStep = async (blockId: string, hintsShown: number, draft: string) => {
+    const result = await requestEasierStep(blockId, hintsShown, draft);
+    if (result.escalation_block) {
+      setVisibleCount((n) => n + 1);
+    }
     void refreshClasses();
     return result;
   };
@@ -326,6 +338,7 @@ export function ClassNotebookView() {
                   isActive={block.id === lastVisible?.id}
                   lessonKeyConcepts={lessonKeyConcepts}
                   onSubmitGate={handleSubmitGate}
+                  onRequestEasierStep={handleRequestEasierStep}
                   onSave={handleSaveReflection}
                   onRequestClosureFeedback={handleRequestClosureFeedback}
                   onContinueModule={handleContinueModule}
