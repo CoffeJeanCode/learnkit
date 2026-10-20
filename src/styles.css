@@ -944,6 +944,14 @@ pre.output, .quickrun pre {
 .discarded-list li::before { content: "✗ "; color: var(--red-chalk); }
 .discarded-option { text-decoration: line-through; text-decoration-color: var(--red-chalk); color: var(--chalk); }
 
+/* "Mis notas" — private scratchpad under each question */
+.block-note { margin-top: 10px; border-top: 1px dashed var(--chalk-faint); padding-top: 8px; }
+.block-note summary { cursor: pointer; font-family: var(--font-hand); font-size: 17px; color: var(--chalk-soft); }
+.block-note summary:hover { color: var(--chalk); }
+.block-note-dot { color: var(--gold-chalk); }
+.block-note textarea { width: 100%; margin-top: 6px; }
+.block-note-status { display: block; min-height: 1.2em; font-size: 13px; }
+
 /* interactive_prediction_gate · causal_chain_order */
 .chain-list { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .chain-item {

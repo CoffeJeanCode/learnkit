@@ -29,6 +29,9 @@ fn prior_blocks_content(existing_blocks: &[NotebookBlock]) -> Vec<serde_json::Va
             let mut content = b.content_json.clone();
             if let Some(obj) = content.as_object_mut() {
                 obj.remove("visualAid");
+                // The learner's private notes/selection never feed the model.
+                obj.remove("studentNote");
+                obj.remove("studentState");
             }
             serde_json::json!({ "blockType": b.block_type.as_str(), "content": content })
         })
@@ -317,9 +320,14 @@ pub(super) fn render_escalation_block_input(
 /// Input for `notebook_gate_grader`'s `grade_gate_submission` call — one
 /// free-text submission against its block's reference solution/rubric.
 pub(super) fn render_grading_input(block: &NotebookBlock, submission_text: &str, attempt_number: u32, selected_line: Option<u32>) -> String {
+    let mut content = block.content_json.clone();
+    if let Some(obj) = content.as_object_mut() {
+        obj.remove("studentNote");
+        obj.remove("studentState");
+    }
     let mut context = serde_json::json!({
         "blockType": block.block_type.as_str(),
-        "blockContent": block.content_json,
+        "blockContent": content,
         "studentSubmission": submission_text,
         "attemptNumber": attempt_number,
     });

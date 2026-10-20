@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { SubmitGate } from "./index";
 import { splitSnippetLines } from "./interaction";
+import { asNullableString, asNumber, usePersistedState } from "./persist";
+import type { Annotate } from "./persist";
 import { InlineText, RichText } from "./RichText";
 import { StaticVisual } from "./StaticVisual";
 
@@ -52,22 +54,30 @@ export function HeuristicErrorAuditBlock({
   content,
   isActive,
   onSubmitGate,
+  onAnnotate,
 }: {
   block: NotebookBlock;
   content: Content;
   isActive: boolean;
   onSubmitGate: SubmitGate;
+  onAnnotate?: Annotate;
 }) {
-  const [diagnosis, setDiagnosis] = useState("");
-  const [selectedLine, setSelectedLine] = useState<number | null>(null);
+  // The flagged line and the diagnosis draft survive a reload.
+  const [saved, patch] = usePersistedState(block.id, content.studentState, { selectedLine: 0, diagnosis: "" }, onAnnotate);
+  const diagnosis = asNullableString(saved.diagnosis) ?? "";
+  const storedLine = asNumber(saved.selectedLine);
+  const selectedLine = storedLine > 0 ? storedLine : null;
+  const setDiagnosis = (value: string) => patch({ diagnosis: value });
+  const setSelectedLine = (line: number) => patch({ selectedLine: line });
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<{ passed: boolean; feedback: string | null } | null>(null);
   const resolved = block.status === "passed" || block.status === "escalated";
 
   const lines = splitSnippetLines(content.flawedRepresentation.buggySnippetOrDiagram);
+  const lineInRange = selectedLine !== null && selectedLine <= lines.length;
   // A one-liner has nothing to point at: it keeps the plain diagnosis flow.
   const pickable = lines.length > 1;
-  const needsLine = pickable && selectedLine === null;
+  const needsLine = pickable && !lineInRange;
 
   const submit = async () => {
     if (!isActive || busy || resolved || !diagnosis.trim() || needsLine) return;

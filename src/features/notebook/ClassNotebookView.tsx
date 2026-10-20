@@ -111,6 +111,7 @@ export function ClassNotebookView() {
     stage,
     submitGate,
     requestEasierStep,
+    annotateBlock,
     retryPendingBlock,
     cancelBuffer,
     regenerateBlock,
@@ -339,6 +340,7 @@ export function ClassNotebookView() {
                   lessonKeyConcepts={lessonKeyConcepts}
                   onSubmitGate={handleSubmitGate}
                   onRequestEasierStep={handleRequestEasierStep}
+                  onAnnotate={annotateBlock}
                   onSave={handleSaveReflection}
                   onRequestClosureFeedback={handleRequestClosureFeedback}
                   onContinueModule={handleContinueModule}

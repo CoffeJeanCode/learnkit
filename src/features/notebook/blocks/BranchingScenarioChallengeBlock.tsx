@@ -1,6 +1,8 @@
 import { useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { SubmitGate } from "./index";
+import { asNullableString, asStringArray, usePersistedState } from "./persist";
+import type { Annotate } from "./persist";
 import { InlineText, RichText } from "./RichText";
 import { StaticVisual } from "./StaticVisual";
 
@@ -17,28 +19,31 @@ export function BranchingScenarioChallengeBlock({
   content,
   isActive,
   onSubmitGate,
+  onAnnotate,
 }: {
   block: NotebookBlock;
   content: Content;
   isActive: boolean;
   onSubmitGate: SubmitGate;
+  onAnnotate?: Annotate;
 }) {
-  const [chosen, setChosen] = useState<string | null>(null);
-  // Branches already tried and failed, in the order tried.
-  const [failedChoices, setFailedChoices] = useState<string[]>([]);
+  const [saved, patch] = usePersistedState(block.id, content.studentState, { chosen: null as string | null, failedChoices: [] as string[] }, onAnnotate);
+  const chosen = asNullableString(saved.chosen);
+  // Branches already tried and failed, in the order tried (kept across reloads).
+  const failedChoices = asStringArray(saved.failedChoices);
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<{ passed: boolean; feedback: string | null } | null>(null);
   const resolved = block.status === "passed" || block.status === "escalated";
 
   const choose = async (choice: string) => {
     if (!isActive || busy || resolved || failedChoices.includes(choice)) return;
-    setChosen(choice);
+    patch({ chosen: choice });
     setBusy(true);
     setOutcome(null);
     try {
       const result = await onSubmitGate(block.id, { blockType: "branching_scenario_challenge", selectedChoice: choice });
       setOutcome({ passed: result.passed, feedback: result.feedback ?? null });
-      if (!result.passed) setFailedChoices((f) => [...f, choice]);
+      if (!result.passed) patch({ failedChoices: [...failedChoices, choice] });
     } finally {
       setBusy(false);
     }

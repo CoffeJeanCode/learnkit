@@ -2,6 +2,8 @@ import { useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { SubmitGate } from "./index";
 import { answerKey, moveItem } from "./interaction";
+import { asNullableString, asStringArray, usePersistedState } from "./persist";
+import type { Annotate } from "./persist";
 import { InlineText, RichText } from "./RichText";
 import { StaticVisual } from "./StaticVisual";
 
@@ -21,23 +23,38 @@ export function InteractivePredictionGateBlock({
   content,
   isActive,
   onSubmitGate,
+  onAnnotate,
 }: {
   block: NotebookBlock;
   content: Content;
   isActive: boolean;
   onSubmitGate: SubmitGate;
+  onAnnotate?: Annotate;
 }) {
   const mode = content.interactionMode ?? "multiple_choice";
   const [busy, setBusy] = useState(false);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
-  // Multiple choice: the options already tried and failed, in the order tried.
-  const [failedOptions, setFailedOptions] = useState<string[]>([]);
-  const [lastOption, setLastOption] = useState<string | null>(null);
-  // Causal chain / boundary cases: answers already tried and failed.
-  const [failedKeys, setFailedKeys] = useState<string[]>([]);
-  const [order, setOrder] = useState<string[]>(content.shuffledSteps ?? []);
+  const shuffled = content.shuffledSteps ?? [];
   const cases = content.boundaryCases ?? [];
-  const [verdicts, setVerdicts] = useState<(boolean | null)[]>(() => cases.map(() => null));
+  // Everything the student has selected survives a reload: wrong picks stay
+  // discarded, the arranged order and the case verdicts are restored.
+  const [saved, patch] = usePersistedState(
+    block.id,
+    content.studentState,
+    { failedOptions: [] as string[], lastOption: null as string | null, failedKeys: [] as string[], order: shuffled, verdicts: cases.map(() => null as boolean | null) },
+    onAnnotate,
+  );
+  // Multiple choice: the options already tried and failed, in the order tried.
+  const failedOptions = asStringArray(saved.failedOptions);
+  const lastOption = asNullableString(saved.lastOption);
+  // Causal chain / boundary cases: answers already tried and failed.
+  const failedKeys = asStringArray(saved.failedKeys);
+  const storedOrder = asStringArray(saved.order);
+  const order = storedOrder.length === shuffled.length && [...storedOrder].sort().join("\u0000") === [...shuffled].sort().join("\u0000") ? storedOrder : shuffled;
+  const verdicts: (boolean | null)[] =
+    Array.isArray(saved.verdicts) && saved.verdicts.length === cases.length
+      ? saved.verdicts.map((v) => (typeof v === "boolean" ? v : null))
+      : cases.map(() => null);
   const resolved = block.status === "passed" || block.status === "escalated";
 
   const send = async (submission: Parameters<SubmitGate>[1], onWrong: () => void) => {
@@ -54,18 +71,20 @@ export function InteractivePredictionGateBlock({
   };
 
   const choose = (option: string) => {
-    setLastOption(option);
-    void send({ blockType: "interactive_prediction_gate", selectedOption: option }, () => setFailedOptions((f) => (f.includes(option) ? f : [...f, option])));
+    patch({ lastOption: option });
+    void send({ blockType: "interactive_prediction_gate", selectedOption: option }, () =>
+      patch({ failedOptions: failedOptions.includes(option) ? failedOptions : [...failedOptions, option] }),
+    );
   };
 
   const orderKey = answerKey(order);
   const checkOrder = () =>
-    void send({ blockType: "interactive_prediction_gate", orderedSteps: order }, () => setFailedKeys((f) => [...f, orderKey]));
+    void send({ blockType: "interactive_prediction_gate", orderedSteps: order }, () => patch({ failedKeys: [...failedKeys, orderKey] }));
 
   const allClassified = verdicts.every((v) => v !== null);
   const verdictKey = answerKey(verdicts);
   const checkCases = () =>
-    void send({ blockType: "interactive_prediction_gate", caseVerdicts: verdicts.map((v) => v === true) }, () => setFailedKeys((f) => [...f, verdictKey]));
+    void send({ blockType: "interactive_prediction_gate", caseVerdicts: verdicts.map((v) => v === true) }, () => patch({ failedKeys: [...failedKeys, verdictKey] }));
 
   const header = (
     <>
@@ -108,12 +127,12 @@ export function InteractivePredictionGateBlock({
                 <InlineText text={step} />
               </span>
               <span className="chain-moves">
-                <button className="btn-quiet" onClick={() => setOrder((o) => moveItem(o, i, -1))} disabled={!isActive || busy || i === 0} aria-label={`Subir el paso ${i + 1}`}>
+                <button className="btn-quiet" onClick={() => patch({ order: moveItem(order, i, -1) })} disabled={!isActive || busy || i === 0} aria-label={`Subir el paso ${i + 1}`}>
                   ↑
                 </button>
                 <button
                   className="btn-quiet"
-                  onClick={() => setOrder((o) => moveItem(o, i, 1))}
+                  onClick={() => patch({ order: moveItem(order, i, 1) })}
                   disabled={!isActive || busy || i === order.length - 1}
                   aria-label={`Bajar el paso ${i + 1}`}
                 >
@@ -153,7 +172,7 @@ export function InteractivePredictionGateBlock({
                     key={String(value)}
                     className={verdicts[i] === value ? "btn-primary" : ""}
                     aria-pressed={verdicts[i] === value}
-                    onClick={() => setVerdicts((v) => v.map((x, j) => (j === i ? value : x)))}
+                    onClick={() => patch({ verdicts: verdicts.map((x, j) => (j === i ? value : x)) })}
                     disabled={!isActive || busy}
                   >
                     {value ? "Cumple la regla" : "Rompe la regla"}

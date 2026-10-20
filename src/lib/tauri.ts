@@ -192,6 +192,14 @@ export const submitGateResponse = (block_id: string, submission: GateSubmission)
   invoke("submit_gate_response", { blockId: block_id, submission }).then((v) => GateResultSchema.parse(v));
 
 /**
+ * Saves the student's own note and/or selection state for one block. Only those
+ * two keys are merged server-side, so the gate's answer keys stay intact (unlike
+ * `saveNotebookState`, which overwrites the whole payload).
+ */
+export const saveBlockAnnotation = (notebook_id: string, block_id: string, patch: { note?: string; selection?: Record<string, unknown> }) =>
+  invoke<void>("save_block_annotation", { notebookId: notebook_id, blockId: block_id, note: patch.note, selection: patch.selection });
+
+/**
  * Voluntary de-escalation: leaves the active gate WITHOUT failing it 3 times.
  * The backend locks the gate (`escalated`, answer never revealed) and generates
  * a more scaffolded block right away; same result shape as `submitGateResponse`.

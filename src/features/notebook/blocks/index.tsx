@@ -10,6 +10,8 @@ import { InteractivePredictionGateBlock } from "./InteractivePredictionGateBlock
 import { MetacognitiveClosureBlock } from "./MetacognitiveClosureBlock";
 import { SpacedInterleavedRetrievalBlock } from "./SpacedInterleavedRetrievalBlock";
 import { BlockLexicalAssistant, TheorySelectionAssistant } from "../LexicalAssistantPopover";
+import { BlockNote } from "./persist";
+import type { Annotate } from "./persist";
 
 const BLOCK_LABEL: Record<string, string> = {
   spaced_interleaved_retrieval: "Repaso rápido",
@@ -33,6 +35,10 @@ export type SubmitGate = (blockId: string, submission: GateSubmission) => Promis
 export type RequestEasierStep = (blockId: string, hintsShown: number, draft: string) => Promise<GateResult>;
 
 const TERM_MAX_CHARS = 100;
+
+/** Block types that ask the student a question — the ones that get private notes. */
+const isQuestion = (t: string) =>
+  t === "interactive_prediction_gate" || t === "branching_scenario_challenge" || t === "heuristic_error_audit" || t === "hands_on_mission";
 
 /** What the popover assistant needs to answer well FOR THIS SPECIFIC BLOCK —
  *  never the whole lesson's content, just this block's own. `answerBearing`
@@ -93,6 +99,7 @@ export function DynamicNotebookBlock({
   lessonKeyConcepts,
   onSubmitGate,
   onRequestEasierStep,
+  onAnnotate,
   onSave,
   onRequestClosureFeedback,
   onContinueModule,
@@ -106,6 +113,8 @@ export function DynamicNotebookBlock({
   lessonKeyConcepts: string[];
   onSubmitGate: SubmitGate;
   onRequestEasierStep?: RequestEasierStep;
+  /** Persists the student's notes and selection state on question blocks. */
+  onAnnotate?: Annotate;
   onSave: (blockId: string, content: Record<string, unknown>) => void;
   onRequestClosureFeedback: (blockId: string, reflection: string) => Promise<{ passed: boolean; feedback: string }>;
   onContinueModule: () => void;
@@ -176,13 +185,13 @@ export function DynamicNotebookBlock({
         {content.blockType === "anchored_micro_theory" && <AnchoredMicroTheoryBlock content={content} />}
         {content.blockType === "declarative_visual_diagram" && <DeclarativeVisualDiagramBlock content={content} />}
         {content.blockType === "branching_scenario_challenge" && (
-          <BranchingScenarioChallengeBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} />
+          <BranchingScenarioChallengeBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} onAnnotate={onAnnotate} />
         )}
         {content.blockType === "heuristic_error_audit" && (
-          <HeuristicErrorAuditBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} />
+          <HeuristicErrorAuditBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} onAnnotate={onAnnotate} />
         )}
         {content.blockType === "interactive_prediction_gate" && (
-          <InteractivePredictionGateBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} />
+          <InteractivePredictionGateBlock block={block} content={content} isActive={isActive} onSubmitGate={onSubmitGate} onAnnotate={onAnnotate} />
         )}
         {content.blockType === "hands_on_mission" && (
           <HandsOnMissionBlock
@@ -191,7 +200,11 @@ export function DynamicNotebookBlock({
             isActive={isActive}
             onSubmitGate={onSubmitGate}
             onRequestEasierStep={onRequestEasierStep}
+            onAnnotate={onAnnotate}
           />
+        )}
+        {isQuestion(content.blockType) && (
+          <BlockNote blockId={block.id} saved={"studentNote" in content ? content.studentNote : null} onAnnotate={onAnnotate} />
         )}
         {content.blockType === "metacognitive_closure" && (
           <MetacognitiveClosureBlock

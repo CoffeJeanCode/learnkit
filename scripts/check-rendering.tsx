@@ -359,6 +359,55 @@ checks["Option<T> fields accept an explicit null (Rust sends null)"] =
   DynamicSectionBlockSchema.safeParse({ ...oldMission, supportLevel: null, workedTemplate: null, interactiveSteps: null }).success &&
   DynamicSectionBlockSchema.safeParse({ ...audit, faultyLineNumber: null }).success;
 
+
+// 6) Persistence + private notes on questions.
+import { BlockNote } from "../src/features/notebook/blocks/persist";
+const noopAnnotate = () => {};
+
+const savedGate = parseBlock(
+  { ...oldGate, blockType: "interactive_prediction_gate", studentNote: "Ojo con B", studentState: { failedOptions: ["A"], lastOption: "A" } },
+  "interactive_prediction_gate",
+);
+checks["notes and selection state parse on a question"] = savedGate.studentNote === "Ojo con B" && !!savedGate.studentState;
+checks["old blocks without notes still parse"] = DynamicSectionBlockSchema.safeParse(oldMission).success && !oldGate.studentNote;
+const restoredGate = renderToStaticMarkup(
+  <InteractivePredictionGateBlock block={fakeBlock("interactive_prediction_gate", savedGate)} content={savedGate} isActive onSubmitGate={noopSubmit} onAnnotate={noopAnnotate} />,
+);
+checks["a saved wrong pick comes back discarded, with its reason"] =
+  restoredGate.includes("option-discarded") && restoredGate.includes("discarded-list") && restoredGate.includes("porque a");
+
+const restoredChain = parseBlock({ ...chain, studentState: { order: ["Paso C", "Paso B", "Paso A"], failedKeys: [] } }, "interactive_prediction_gate");
+const restoredChainHtml = renderToStaticMarkup(
+  <InteractivePredictionGateBlock block={fakeBlock("interactive_prediction_gate", restoredChain)} content={restoredChain} isActive onSubmitGate={noopSubmit} onAnnotate={noopAnnotate} />,
+);
+checks["a saved order is restored"] = restoredChainHtml.indexOf("Paso C") < restoredChainHtml.indexOf("Paso B") && restoredChainHtml.indexOf("Paso B") < restoredChainHtml.indexOf("Paso A");
+const corruptChain = parseBlock({ ...chain, studentState: { order: ["otro", "paso"] } }, "interactive_prediction_gate");
+const corruptHtml = renderToStaticMarkup(
+  <InteractivePredictionGateBlock block={fakeBlock("interactive_prediction_gate", corruptChain)} content={corruptChain} isActive onSubmitGate={noopSubmit} onAnnotate={noopAnnotate} />,
+);
+checks["a stale/corrupt saved order falls back to the shuffled one"] = corruptHtml.indexOf("Paso B") < corruptHtml.indexOf("Paso A");
+
+const restoredAudit = parseBlock({ ...audit, studentState: { selectedLine: 2, diagnosis: "borrador" } }, "heuristic_error_audit");
+const restoredAuditHtml = renderToStaticMarkup(
+  <HeuristicErrorAuditBlock block={fakeBlock("heuristic_error_audit", restoredAudit)} content={restoredAudit} isActive onSubmitGate={noopSubmit} onAnnotate={noopAnnotate} />,
+);
+checks["the flagged line and the draft diagnosis are restored"] = /bug-line is-selected"[^>]*aria-label="Línea 2"/.test(restoredAuditHtml) && restoredAuditHtml.includes(">borrador</textarea>");
+const outOfRange = parseBlock({ ...audit, studentState: { selectedLine: 99 } }, "heuristic_error_audit");
+checks["an out-of-range saved line is ignored"] = !renderToStaticMarkup(
+  <HeuristicErrorAuditBlock block={fakeBlock("heuristic_error_audit", outOfRange)} content={outOfRange} isActive onSubmitGate={noopSubmit} onAnnotate={noopAnnotate} />,
+).includes("is-selected");
+
+const restoredMission = parseBlock({ ...scaffolded, interactiveSteps: null, studentState: { submission: "mi avance", hintsShown: 2 } }, "hands_on_mission");
+const restoredMissionHtml = renderToStaticMarkup(
+  <HandsOnMissionBlock block={fakeBlock("hands_on_mission", restoredMission)} content={restoredMission} isActive onSubmitGate={noopSubmit} onAnnotate={noopAnnotate} />,
+);
+checks["mission draft and opened hints are restored"] = restoredMissionHtml.includes(">mi avance</textarea>") && restoredMissionHtml.includes("(2/3)") && (restoredMissionHtml.match(/hint-revealed"/g) ?? []).length === 2;
+
+const noteHtml = renderToStaticMarkup(<BlockNote blockId="b1" saved="Mi apunte" onAnnotate={noopAnnotate} />);
+checks["a saved note is shown, its panel open"] = noteHtml.includes("Mi apunte") && noteHtml.includes("<details") && noteHtml.includes(" open");
+checks["an empty note starts collapsed"] = !renderToStaticMarkup(<BlockNote blockId="b1" onAnnotate={noopAnnotate} />).includes(" open");
+checks["no notes UI without a save handler"] = renderToStaticMarkup(<BlockNote blockId="b1" saved="x" />) === "";
+
 const failed = Object.entries(checks).filter(([, ok]) => !ok);
 for (const [name, ok] of Object.entries(checks)) console.log(`${ok ? "[ok]" : "[!!]"} ${name}`);
 console.log(failed.length === 0 ? "\nPASS" : `\nFAIL (${failed.length})`);

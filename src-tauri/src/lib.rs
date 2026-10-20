@@ -102,6 +102,7 @@ pub fn run() {
             commands::notebook::regenerate_notebook_block,
             commands::notebook::reset_class_notebook,
             commands::notebook::save_notebook_state,
+            commands::notebook::save_block_annotation,
             commands::notebook::get_course_diagnostic_battery,
             commands::notebook::save_diagnostic_battery_answers,
             commands::notebook::get_learner_memory,

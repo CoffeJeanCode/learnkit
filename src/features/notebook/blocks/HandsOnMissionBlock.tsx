@@ -3,6 +3,8 @@ import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { RequestEasierStep, SubmitGate } from "./index";
 import { usePresentation } from "../../../stores/study";
 import { tokenMatches } from "./interaction";
+import { asNumber, asNullableString, usePersistedState } from "./persist";
+import type { Annotate } from "./persist";
 import { InlineText, RichText } from "./RichText";
 import { StaticVisual } from "./StaticVisual";
 
@@ -111,21 +113,32 @@ export function HandsOnMissionBlock({
   isActive,
   onSubmitGate,
   onRequestEasierStep,
+  onAnnotate,
 }: {
   block: NotebookBlock;
   content: Content;
   isActive: boolean;
   onSubmitGate: SubmitGate;
   onRequestEasierStep?: RequestEasierStep;
+  onAnnotate?: Annotate;
 }) {
   const { showTransferFraming } = usePresentation();
   const template = content.workedTemplate?.trim() ? content.workedTemplate : null;
   const steps = content.interactiveSteps ?? [];
   const hints = content.scaffoldingHints;
 
-  const [submission, setSubmission] = useState(template ?? "");
-  const [solvedSteps, setSolvedSteps] = useState(0);
-  const [hintsShown, setHintsShown] = useState(0);
+  // Draft, solved micro-steps and opened hints survive a reload (an opened
+  // hint stays opened, so `hintsShown` evidence can't be reset by reloading).
+  const [saved, patch] = usePersistedState(
+    block.id,
+    content.studentState,
+    { submission: template ?? "", solvedSteps: 0, hintsShown: 0 },
+    onAnnotate,
+  );
+  const submission = asNullableString(saved.submission) ?? (template ?? "");
+  const solvedSteps = Math.min(steps.length, asNumber(saved.solvedSteps));
+  const hintsShown = Math.min(hints.length, asNumber(saved.hintsShown));
+  const setSubmission = (value: string) => patch({ submission: value });
   const [busy, setBusy] = useState(false);
   const [easing, setEasing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -203,7 +216,7 @@ export function HandsOnMissionBlock({
                     index={i}
                     done={i < solvedSteps}
                     locked={i > solvedSteps || !isActive}
-                    onSolved={() => setSolvedSteps((n) => Math.max(n, i + 1))}
+                    onSolved={() => patch({ solvedSteps: Math.max(solvedSteps, i + 1) })}
                   />
                 ))}
               </ol>
@@ -219,7 +232,7 @@ export function HandsOnMissionBlock({
               ))}
               <button
                 className="btn-quiet"
-                onClick={() => setHintsShown((n) => Math.min(hints.length, n + 1))}
+                onClick={() => patch({ hintsShown: Math.min(hints.length, hintsShown + 1) })}
                 disabled={!isActive || busy || easing || hintsShown >= hints.length}
               >
                 💡 {hintsShown >= hints.length ? "Sin más pistas" : "Pedir pista"} ({hintsShown}/{hints.length})

@@ -72,6 +72,19 @@ pub async fn submit_gate_response(
     state.notebook_service.submit_gate_response(Some(&app), &block_id, submission).await
 }
 
+/// Saves the student's own note and/or selection state for one block. Merges
+/// only those two keys into the stored content (answer keys stay intact).
+#[tauri::command]
+pub fn save_block_annotation(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    block_id: String,
+    note: Option<String>,
+    selection: Option<serde_json::Value>,
+) -> AppResult<()> {
+    state.notebook_service.save_block_annotation(&notebook_id, &block_id, note.as_deref(), selection.as_ref())
+}
+
 /// Voluntary de-escalation: the student asks for an easier, more guided step
 /// instead of failing the active gate 3 times. Returns the same shape as
 /// `submit_gate_response` (the locked gate + the freshly generated block).

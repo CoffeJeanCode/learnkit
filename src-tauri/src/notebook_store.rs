@@ -1171,6 +1171,54 @@ impl NotebookStore {
         Ok(())
     }
 
+    /// Merges the learner's own annotations into ONE block's stored content:
+    /// `studentNote` (free text) and `studentState` (the UI selection to
+    /// restore — chosen/discarded options, ordering, drafts). Only these two
+    /// keys are ever touched, so the answer keys the redacted client copy
+    /// lacks (`correctOption`, ...) survive — unlike `update_block_contents`,
+    /// which overwrites the whole payload. `None` leaves a key as it was; an
+    /// empty note or a `null` state removes it. Returns `false` when the block
+    /// doesn't belong to `notebook_id`.
+    pub fn merge_block_annotation(
+        &self,
+        notebook_id: &str,
+        block_id: &str,
+        note: Option<&str>,
+        state: Option<&serde_json::Value>,
+    ) -> AppResult<bool> {
+        let conn = self.lock();
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT content_json FROM notebook_blocks WHERE id = ?1 AND document_id = ?2",
+                params![block_id, notebook_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(stored) = stored else { return Ok(false) };
+        let mut content: serde_json::Value = serde_json::from_str(&stored).map_err(|e| AppError::Persistence(e.to_string()))?;
+        let Some(obj) = content.as_object_mut() else {
+            return Err(AppError::Persistence("block content is not an object".to_string()));
+        };
+        if let Some(note) = note {
+            if note.trim().is_empty() {
+                obj.remove("studentNote");
+            } else {
+                obj.insert("studentNote".to_string(), serde_json::Value::String(note.to_string()));
+            }
+        }
+        if let Some(state) = state {
+            if state.is_null() {
+                obj.remove("studentState");
+            } else {
+                obj.insert("studentState".to_string(), state.clone());
+            }
+        }
+        let text = serde_json::to_string(&content).map_err(|e| AppError::Persistence(e.to_string()))?;
+        conn.execute("UPDATE notebook_blocks SET content_json = ?1 WHERE id = ?2", params![text, block_id])?;
+        conn.execute("UPDATE notebook_documents SET updated_at_ms = ?1 WHERE id = ?2", params![now_ms(), notebook_id])?;
+        Ok(true)
+    }
+
     /// Replaces ONE block's payload in place — the "regenerate this broken
     /// block" path. Keeps `id`, `order_index` and `document_id`, so the gate
     /// cursor, the pacing and the student's position in the class are all

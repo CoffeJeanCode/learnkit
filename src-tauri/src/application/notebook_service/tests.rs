@@ -1124,6 +1124,7 @@
         assert!(again.passed, "an approved closure never re-opens");
         assert_eq!(again.feedback, passed.feedback, "the stored verdict stands");
         assert_eq!(*runner.closure_calls.lock().unwrap(), calls_before, "no second grader call after approval");
+    }
 
     #[tokio::test]
     async fn the_first_gate_attempt_is_the_real_initial_prediction_even_when_wrong_and_every_attempt_is_kept() {
@@ -1228,4 +1229,48 @@
         let row = evidence.iter().find(|e| e.block_id.as_deref() == Some(mission_id.as_str())).expect("row");
         assert_eq!(row.hints_shown, 2, "first attempt, but two progressive hints were opened");
     }
-}
+
+    #[tokio::test]
+    async fn annotating_a_gate_keeps_the_answer_key_and_never_blocks_grading() {
+        let runner = Arc::new(ScriptedNotebookRunner { blocks: Mutex::new(vec![Some(prediction_gate("B"))].into()), ..Default::default() });
+        let service = service_with(runner);
+        let class_id = first_class_id(&service);
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start");
+        let (doc_id, gate_id) = (payload.document.id.clone(), payload.blocks[0].id.clone());
+
+        let state = serde_json::json!({ "failedOptions": ["A"], "lastOption": "A" });
+        service.save_block_annotation(&doc_id, &gate_id, Some("Recordar: A confunde X con Y"), Some(&state)).expect("saved");
+
+        let shown = service.get_class_notebook_progress(&class_id).expect("progress").blocks.remove(0);
+        assert_eq!(shown.content_json["studentNote"], "Recordar: A confunde X con Y");
+        assert_eq!(shown.content_json["studentState"], state, "the selection comes back after a reload");
+        assert!(shown.content_json.get("correctOption").is_none(), "the key is still redacted for the client");
+        assert!(service.store.get_block(&gate_id).unwrap().unwrap().content_json.get("correctOption").is_some(), "and still stored");
+
+        // Grading still works (it reads the stored key), and the note survives it.
+        let right = GateSubmission::InteractivePredictionGate { selected_option: Some("B".to_string()), ordered_steps: None, case_verdicts: None };
+        assert!(service.submit_gate_response(None, &gate_id, right).await.expect("graded").passed);
+        let after = service.store.get_block(&gate_id).unwrap().unwrap();
+        assert_eq!(after.content_json["studentNote"], "Recordar: A confunde X con Y");
+
+        // `None` leaves a key alone; an empty note / null state removes it.
+        service.save_block_annotation(&doc_id, &gate_id, Some("  "), None).expect("clear note");
+        let cleared = service.store.get_block(&gate_id).unwrap().unwrap();
+        assert!(cleared.content_json.get("studentNote").is_none() && cleared.content_json.get("studentState").is_some());
+        service.save_block_annotation(&doc_id, &gate_id, None, Some(&serde_json::Value::Null)).expect("clear state");
+        assert!(service.store.get_block(&gate_id).unwrap().unwrap().content_json.get("studentState").is_none());
+    }
+
+    #[tokio::test]
+    async fn annotations_are_bounded_and_scoped_to_their_notebook() {
+        let runner = Arc::new(ScriptedNotebookRunner { blocks: Mutex::new(vec![Some(prediction_gate("B"))].into()), ..Default::default() });
+        let service = service_with(runner);
+        let class_id = first_class_id(&service);
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start");
+        let gate_id = payload.blocks[0].id.clone();
+
+        let too_long = "x".repeat(4_001);
+        assert!(matches!(service.save_block_annotation(&payload.document.id, &gate_id, Some(&too_long), None), Err(AppError::InvalidInput(_))));
+        let wrong_notebook = service.save_block_annotation("otro-cuaderno", &gate_id, Some("hola"), None);
+        assert!(matches!(wrong_notebook, Err(AppError::InvalidInput(_))), "a block can't be annotated through another notebook's id");
+    }

@@ -472,6 +472,11 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
   }),
   z.object({
     blockType: z.literal("branching_scenario_challenge"),
+    // The learner's own annotations on this question (see `save_block_annotation`):
+    // a free-text note and the selection state to restore on reload. Nullish —
+    // absent on every block saved before they existed.
+    studentNote: z.string().nullish(),
+    studentState: z.record(z.string(), z.unknown()).nullish(),
     scenario: z.string(),
     decisionPoint: z.string(),
     branches: z.array(ScenarioBranchSchema),
@@ -482,6 +487,11 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
   }),
   z.object({
     blockType: z.literal("heuristic_error_audit"),
+    // The learner's own annotations on this question (see `save_block_annotation`):
+    // a free-text note and the selection state to restore on reload. Nullish —
+    // absent on every block saved before they existed.
+    studentNote: z.string().nullish(),
+    studentState: z.record(z.string(), z.unknown()).nullish(),
     instruction: z.string(),
     flawedRepresentation: FlawedRepresentationSchema,
     guidingQuestions: z.array(z.string()),
@@ -499,6 +509,11 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
   }),
   z.object({
     blockType: z.literal("interactive_prediction_gate"),
+    // The learner's own annotations on this question (see `save_block_annotation`):
+    // a free-text note and the selection state to restore on reload. Nullish —
+    // absent on every block saved before they existed.
+    studentNote: z.string().nullish(),
+    studentState: z.record(z.string(), z.unknown()).nullish(),
     question: z.string(),
     // `options`/`conceptualFeedbackMap` are only filled in `multiple_choice`
     // (Rust: `#[serde(default)]`), so the other modes legitimately omit them.
@@ -521,6 +536,11 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
   }),
   z.object({
     blockType: z.literal("hands_on_mission"),
+    // The learner's own annotations on this question (see `save_block_annotation`):
+    // a free-text note and the selection state to restore on reload. Nullish —
+    // absent on every block saved before they existed.
+    studentNote: z.string().nullish(),
+    studentState: z.record(z.string(), z.unknown()).nullish(),
     challengeStatement: z.string(),
     expectedMilestoneArtifact: z.string(),
     constraints: z.array(z.string()),
