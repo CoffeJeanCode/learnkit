@@ -1276,17 +1276,53 @@ pre.output, .quickrun pre {
   .brand, .badge, .msg, .msg.user, .msg.assistant, .phase-step, .side-note { transform: none; }
 }
 
-/* Capability map (`CapabilityMapView`) — reuses .card/.badge; only the
-   map-specific pieces live here. */
-.cap-week { margin-top: 18px; }
-.cap-skill { margin-bottom: 14px; }
-.cap-week-title { font-family: var(--font-hand); font-size: 25px; font-weight: 600; margin: 0 0 8px; }
-.cap-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0; }
-.cap-chip-off { opacity: 0.55; }
-.cap-celebration { margin: 6px 0; color: var(--green-chalk); font-size: 15px; }
-.cap-evidence, .cap-rubric { list-style: none; margin: 8px 0 0; padding-left: 0; }
-.cap-evidence > li { padding: 6px 0; border-top: 1px dashed var(--chalk-soft); }
-.cap-evidence-key > strong { color: var(--green-chalk); }
-.cap-rubric { padding-left: 14px; font-size: 14px; }
-.cap-rubric .met { color: var(--green-chalk); }
-.cap-skill summary { cursor: pointer; color: var(--chalk-soft); font-size: 14px; margin-top: 6px; }
+
+/* Developer mode: docked generation inspector + per-block JSON. */
+.dev-panel {
+  position: fixed; left: 0; right: 0; bottom: 0; height: 42vh; z-index: 40;
+  display: flex; flex-direction: column; gap: 6px; padding: 10px 14px;
+  background: var(--paper-deep); border-top: 2px dashed var(--gold-chalk);
+}
+.dev-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.dev-note { margin: 0; }
+.dev-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.dev-row, .dev-block, .dev-section { border: 1px dashed var(--chalk-faint); border-radius: 8px; padding: 6px 10px; background: var(--card); }
+.dev-row.bad, .dev-block.bad { border-color: var(--red-chalk); }
+.dev-row > summary, .dev-block > summary, .dev-section > summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dev-body { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.dev-tool { border-left: 3px solid var(--blue-chalk); padding-left: 8px; }
+.dev-notes { margin: 4px 0; padding-left: 18px; color: var(--gold-chalk); }
+.dev-pre {
+  margin: 6px 0 0; max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 12px; background: var(--input); padding: 8px; border-radius: 6px; color: var(--chalk-soft);
+}
+body:has(.dev-panel) .workspace { padding-bottom: 44vh; }
+
+/* Knowledge graph — the student's own map of ideas */
+.graph-view { display: flex; flex-direction: column; gap: 12px; }
+.graph-scroll { overflow: auto; border: 2px solid var(--chalk-faint); border-radius: 10px; background: var(--paper-deep); max-height: 70vh; }
+.graph-svg { display: block; font-family: var(--font-read); font-size: 14px; }
+.graph-column-label { fill: var(--chalk-soft); font-family: var(--font-hand); font-size: 20px; }
+.graph-node { cursor: pointer; outline: none; }
+.graph-node rect { fill: var(--card); stroke: var(--chalk-faint); stroke-width: 2; }
+.graph-node-concept rect { fill: var(--gold-wash); stroke: var(--gold-chalk); stroke-dasharray: 5 3; }
+.graph-node text { fill: var(--chalk); pointer-events: none; }
+.graph-node:hover rect, .graph-node:focus-visible rect { stroke: var(--chalk); }
+.graph-node.is-selected rect { stroke: var(--blue-chalk); stroke-width: 3; }
+.graph-edge { cursor: pointer; outline: none; }
+.graph-edge-hit { fill: none; stroke: transparent; stroke-width: 14; }
+.graph-edge-line { fill: none; stroke: var(--chalk-soft); stroke-width: 2; }
+.graph-arrow-head { fill: var(--chalk-soft); }
+.graph-edge-label { fill: var(--chalk); font-size: 13px; paint-order: stroke; stroke: var(--paper-deep); stroke-width: 4px; }
+.graph-edge:hover .graph-edge-line, .graph-edge:focus-visible .graph-edge-line { stroke: var(--chalk); }
+.graph-edge.is-selected .graph-edge-line { stroke: var(--blue-chalk); stroke-width: 3; }
+.graph-form { display: flex; flex-direction: column; gap: 10px; border: 2px dashed var(--chalk-faint); border-radius: 10px; padding: 12px; }
+.graph-form label { display: flex; flex-direction: column; gap: 4px; }
+.graph-inspector { display: flex; flex-direction: column; gap: 10px; }
+.graph-confirm { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.relation-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.relation-list .btn-quiet { text-align: left; width: 100%; }
+.relation-list .btn-quiet.is-selected { border-color: var(--blue-chalk); }
+.connect-step { border: 2px dashed var(--chalk-faint); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.connect-item { display: flex; flex-direction: column; gap: 6px; border-top: 1px dashed var(--chalk-faint); padding-top: 8px; }
+.connect-item:first-of-type { border-top: none; padding-top: 0; }

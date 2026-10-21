@@ -7,6 +7,10 @@ import { HeuristicErrorAuditBlock } from "../src/features/notebook/blocks/Heuris
 import { InteractivePredictionGateBlock } from "../src/features/notebook/blocks/InteractivePredictionGateBlock";
 import { BranchingScenarioChallengeBlock } from "../src/features/notebook/blocks/BranchingScenarioChallengeBlock";
 import { moveItem, splitSnippetLines, tokenMatches } from "../src/features/notebook/blocks/interaction";
+import { readFileSync } from "node:fs";
+import { ConnectStepView } from "../src/features/graph/ConnectStep";
+import { ConceptForm, GraphCanvas, LinkForm, RelationList } from "../src/features/graph/GraphParts";
+import { layoutGraph, nodeOptions } from "../src/features/graph/graph";
 import { InlineText, RichText } from "../src/features/notebook/blocks/RichText";
 
 const question = [
@@ -407,6 +411,58 @@ const noteHtml = renderToStaticMarkup(<BlockNote blockId="b1" saved="Mi apunte" 
 checks["a saved note is shown, its panel open"] = noteHtml.includes("Mi apunte") && noteHtml.includes("<details") && noteHtml.includes(" open");
 checks["an empty note starts collapsed"] = !renderToStaticMarkup(<BlockNote blockId="b1" onAnnotate={noopAnnotate} />).includes(" open");
 checks["no notes UI without a save handler"] = renderToStaticMarkup(<BlockNote blockId="b1" saved="x" />) === "";
+
+
+// 7) The student's knowledge graph + the "connect what you learned" step.
+const gClasses = [
+  { id: "c1", milestone_id: "m1", class_number: 1, title: "Semana 1: Panorama", order_index: 0, hours: 1, objective: null, complete: false },
+  { id: "c2", milestone_id: "m1", class_number: 2, title: "Semana 1: Reacciones", order_index: 1, hours: 1, objective: null, complete: false },
+];
+const gConcepts = [{ id: "k1", courseId: "k", classId: "c1", label: "El ciclo es circular", createdAtMs: 0 }];
+const gLinks = [{ id: "l1", courseId: "k", fromId: "k1", toId: "c2", label: "explica por qué ocurre", createdAtMs: 0 }];
+const gLayout = layoutGraph(gClasses, gConcepts, gLinks);
+const gOptions = nodeOptions(gClasses, gConcepts);
+
+const canvasHtml = renderToStaticMarkup(<GraphCanvas layout={gLayout} selection={null} onSelect={() => {}} />);
+checks["graph draws one focusable node per class and concept"] =
+  (canvasHtml.match(/class="graph-node graph-node-class"/g) ?? []).length === 2 &&
+  (canvasHtml.match(/class="graph-node graph-node-concept"/g) ?? []).length === 1 &&
+  canvasHtml.includes('aria-label="Concepto: El ciclo es circular"') &&
+  (canvasHtml.match(/tabindex="0"/g) ?? []).length === 4;
+checks["graph draws the relation with the student's words"] = canvasHtml.includes("explica por qué ocurre") && canvasHtml.includes('marker-end="url(#graph-arrow)"');
+checks["graph shows the week header"] = canvasHtml.includes(">Semana 1<");
+const selectedHtml = renderToStaticMarkup(<GraphCanvas layout={gLayout} selection={{ kind: "link", id: "l1" }} onSelect={() => {}} />);
+checks["selecting a relation highlights it and both of its ends"] =
+  selectedHtml.includes("graph-edge is-selected") && (selectedHtml.match(/graph-node [^"]*is-selected/g) ?? []).length === 2;
+
+const listHtml = renderToStaticMarkup(<RelationList links={gLinks} options={gOptions} selection={null} onSelect={() => {}} />);
+checks["relations are listed as sentences"] = listHtml.includes("El ciclo es circular —explica por qué ocurre→ Reacciones");
+checks["no relations, no empty list"] = renderToStaticMarkup(<RelationList links={[]} options={gOptions} selection={null} onSelect={() => {}} />) === "";
+
+const linkFormHtml = renderToStaticMarkup(<LinkForm options={gOptions} initialFrom="c1" submitLabel="Crear relación" onSubmit={async () => true} onCancel={() => {}} />);
+checks["the relation form asks for the student's words and only offers shortcuts"] =
+  linkFormHtml.includes("Con tus palabras") && linkFormHtml.includes(">causa<") && /<button[^>]*disabled[^>]*>Crear relación/.test(linkFormHtml);
+const conceptFormHtml = renderToStaticMarkup(<ConceptForm classes={gClasses} defaultClassId="c2" submitLabel="Añadir concepto" onSubmit={async () => true} onCancel={() => {}} />);
+checks["the concept form can't be sent empty"] = /<button[^>]*disabled[^>]*>Añadir concepto/.test(conceptFormHtml) && conceptFormHtml.includes("Reacciones");
+
+const stepProps = { className: "Reacciones", existing: [], targets: gOptions.slice(0, 2), error: null, saved: false, onSave: async () => true, onOpenGraph: () => {} };
+const stepHtml = renderToStaticMarkup(<ConnectStepView {...stepProps} />);
+checks["the extra step is offered, optional and skippable"] =
+  stepHtml.includes("Paso extra (opcional)") && stepHtml.includes("Conectar ideas") && stepHtml.includes("Omitir");
+checks["the extra step only talks about the student's own ideas (no AI suggestions)"] = !/sugerid|sugerenc|IA\b|inteligencia/i.test(stepHtml);
+const savedStepHtml = renderToStaticMarkup(<ConnectStepView {...stepProps} saved />);
+checks["after saving it links to the graph and no longer offers Omitir"] =
+  savedStepHtml.includes("Conexiones guardadas") && savedStepHtml.includes("Ver en el grafo") && !savedStepHtml.includes("Omitir");
+
+// Source-level guards for the cleanup and for "the AI doesn't make relations".
+const headerSrc = readFileSync(new URL("../src/components/Header.tsx", import.meta.url), "utf8");
+const appSrc = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+checks["header: Memoria/Capacidades buttons are gone, Grafo is there"] =
+  !/Memoria|Capacidades|learner-memory|"capabilities"/.test(headerSrc + appSrc) && headerSrc.includes("🕸 Grafo");
+const graphSources = ["../src/features/graph/GraphView.tsx", "../src/features/graph/GraphParts.tsx", "../src/features/graph/ConnectStep.tsx", "../src/stores/graph.ts"]
+  .map((f) => readFileSync(new URL(f, import.meta.url), "utf8"))
+  .join("\n");
+checks["the graph code never calls a model or an agent"] = !/runAgent|run_agent|delegateAgent|generate|openai|anthropic|submitGateResponse/i.test(graphSources.replace(/generated|genera(?:da|do|r)\b/gi, ""));
 
 const failed = Object.entries(checks).filter(([, ok]) => !ok);
 for (const [name, ok] of Object.entries(checks)) console.log(`${ok ? "[ok]" : "[!!]"} ${name}`);

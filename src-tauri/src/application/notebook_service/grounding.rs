@@ -940,4 +940,27 @@ mod tests {
         let single = gate_in_mode(InteractionMode::BoundaryCaseAudit, &[], &[], Some(vec![("c1", true)]));
         assert!(single_block_violations(&[], &single, 1, false, no_mastery(), false, false).iter().any(|s| s.contains("2-3")));
     }
+
+    #[test]
+    fn every_expanded_template_passes_the_structural_review() {
+        use crate::domain::block_templates::{BlockTemplate, BranchSpec, OptionSpec};
+        use crate::domain::notebook::RetrievalPrompt;
+        let opt = |t: &str| OptionSpec { text: t.to_string(), feedback: format!("porque {t}") };
+        let br = |c: &str| BranchSpec { choice: c.to_string(), consequence: format!("{c} lleva a algo") };
+        let templates = vec![
+            BlockTemplate::MultipleChoice { question: "q".into(), correct: opt("A"), distractors: vec![opt("B"), opt("C")] },
+            BlockTemplate::TrueFalse { statement: "s".into(), is_true: true, explanation: "e".into() },
+            BlockTemplate::Ordering { question: "q".into(), steps_in_order: vec!["uno".into(), "dos".into(), "tres".into()] },
+            BlockTemplate::ScenarioChoice { scenario: "s".into(), decision_point: "d".into(), optimal: br("x"), alternatives: vec![br("y")] },
+        ];
+        for t in templates {
+            let block = t.expand();
+            let v = single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &block, 2, false, no_mastery(), false, false);
+            assert!(v.is_empty(), "{:?} -> {v:?}", block.block_type());
+        }
+        let recall = BlockTemplate::QuickRecall { items: vec![RetrievalPrompt { concept_label: "c".into(), prompt: "p".into(), expected_answer: "e".into() }] }.expand();
+        // Retrieval is only legal as the first block, so it is checked as such.
+        let v = single_block_violations(&[], &recall, 1, false, no_mastery(), false, true);
+        assert!(v.is_empty(), "{v:?}");
+    }
 }

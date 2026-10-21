@@ -984,6 +984,40 @@ pub fn class_is_complete(document: &NotebookDocument, blocks: &[NotebookBlock]) 
         .all(|b| matches!(b.status, BlockStatus::Passed | BlockStatus::Escalated))
 }
 
+/// A concept the STUDENT wrote, in their own words, about one class — a node
+/// of their knowledge graph. Never generated: no agent reads or writes these.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Concept {
+    pub id: String,
+    pub course_id: String,
+    pub class_id: String,
+    pub label: String,
+    pub created_at_ms: i64,
+}
+
+/// A relation the student drew between two nodes — each end is a class id or
+/// a [`Concept`] id of the same course. `label` is the relation in the
+/// student's own words (required: having to say WHY two ideas connect is the
+/// metacognitive part).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConceptLink {
+    pub id: String,
+    pub course_id: String,
+    pub from_id: String,
+    pub to_id: String,
+    pub label: String,
+    pub created_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConceptGraph {
+    pub concepts: Vec<Concept>,
+    pub links: Vec<ConceptLink>,
+}
+
 /// One block's edited content, sent back by `save_notebook_state` after the
 /// learner interacts with a block. Only `content_json` is mutable from the
 /// frontend — `block_type`/`order_index` are fixed at generation time.

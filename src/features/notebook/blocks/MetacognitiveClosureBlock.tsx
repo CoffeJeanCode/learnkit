@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
+import { ConnectStep } from "../../graph/ConnectStep";
 import { InlineText, RichText } from "./RichText";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "metacognitive_closure" }>;
@@ -103,6 +104,7 @@ export function MetacognitiveClosureBlock({
         rows={3}
         disabled={approved}
       />
+      {passed && <ConnectStep />}
       <div className="closure-actions">
         {!approved && (
           <button className="btn-primary" onClick={() => void requestFeedback()} disabled={!isActive || busy || !reflection.trim()}>

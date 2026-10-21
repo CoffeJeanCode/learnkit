@@ -3,13 +3,14 @@ import { Header } from "./components/Header";
 import { SessionView } from "./components/SessionView";
 import { UpdateBanner } from "./components/UpdateBanner";
 import { ClassNotebookView } from "./features/notebook/ClassNotebookView";
-import { CapabilityMapView } from "./features/capabilities/CapabilityMapView";
-import { LearnerMemoryView } from "./features/learner-memory/LearnerMemoryView";
+import { GraphView } from "./features/graph/GraphView";
+import { DevPanel } from "./features/dev/DevPanel";
 import { ProvidersView } from "./features/providers/ProvidersView";
 import { RoadmapView } from "./features/roadmap/RoadmapView";
 import { readActiveSessionId, useRoadmap } from "./stores/roadmap";
 import { useUi } from "./stores/ui";
-import { useStudy, usePresentation } from "./stores/study";
+import { useDev } from "./stores/dev";
+import { useStudy } from "./stores/study";
 import { useUpdater } from "./stores/updater";
 import { logStudyEvent } from "./lib/tauri";
 import "./styles.css";
@@ -29,7 +30,8 @@ export default function App() {
   const openSession = useRoadmap((s) => s.openSession);
   const checkOnStartup = useUpdater((s) => s.checkOnStartup);
   const loadStudy = useStudy((s) => s.load);
-  const { showCapabilityMap } = usePresentation();
+  const initDev = useDev((s) => s.init);
+  const devEnabled = useDev((s) => s.enabled);
 
   // Check for a new version once on entry. Silent by design: no release
   // published yet, or starting offline, must not surface anything.
@@ -42,6 +44,11 @@ export default function App() {
     void loadStudy();
     void logStudyEvent("app_opened").catch(() => undefined);
   }, [loadStudy]);
+
+  // Developer mode: restore the switch and subscribe to generation traces.
+  useEffect(() => {
+    void initDev();
+  }, [initDev]);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,10 +73,8 @@ export default function App() {
       <main className="workspace">
         {view === "providers" ? (
           <ProvidersView />
-        ) : view === "learner-memory" ? (
-          <LearnerMemoryView />
-        ) : view === "capabilities" && showCapabilityMap ? (
-          <CapabilityMapView />
+        ) : view === "graph" ? (
+          <GraphView />
         ) : view === "notebook" ? (
           <ClassNotebookView />
         ) : view === "roadmap" || view === "plan" ? (
@@ -78,6 +83,7 @@ export default function App() {
           <RoadmapView />
         )}
       </main>
+      {devEnabled && <DevPanel />}
     </div>
   );
 }

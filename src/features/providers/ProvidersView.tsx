@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useProviders } from "../../stores/providers";
+import { DevModeCard } from "../dev/DevModeCard";
 import { StudySettingsCard } from "../study/StudySettingsCard";
 import type { ModelInfo } from "../../types";
 
@@ -210,6 +211,7 @@ export function ProvidersView() {
         ))}
       </div>
       <StudySettingsCard />
+      <DevModeCard />
     </div>
   );
 }

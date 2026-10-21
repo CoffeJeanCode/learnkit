@@ -9,6 +9,7 @@ import { HeuristicErrorAuditBlock } from "./HeuristicErrorAuditBlock";
 import { InteractivePredictionGateBlock } from "./InteractivePredictionGateBlock";
 import { MetacognitiveClosureBlock } from "./MetacognitiveClosureBlock";
 import { SpacedInterleavedRetrievalBlock } from "./SpacedInterleavedRetrievalBlock";
+import { DevBlockInfo } from "../../dev/DevBlockInfo";
 import { BlockLexicalAssistant, TheorySelectionAssistant } from "../LexicalAssistantPopover";
 import { BlockNote } from "./persist";
 import type { Annotate } from "./persist";
@@ -151,6 +152,7 @@ export function DynamicNotebookBlock({
           </div>
         )}
         {regenerateError && <p className="hint hint-warn">{regenerateError}</p>}
+        <DevBlockInfo block={block} issues={parsed.error.issues.map((i) => `${i.path.join(".") || "(raíz)"}: ${i.message}`)} />
       </section>
     );
   }
@@ -171,6 +173,7 @@ export function DynamicNotebookBlock({
           triggerRef={triggerRef}
         />
       </div>
+      <DevBlockInfo block={block} />
       <TheorySelectionAssistant
         blockRef={blockRef}
         triggerRef={triggerRef}
