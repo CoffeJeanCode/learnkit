@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tauri::State;
 
 use crate::domain::learner_memory::LearnerCognitiveMemory;
-use crate::domain::notebook::{BlockUpdate, ClassRecord, ClosureFeedback, Course, DiagnosticBatteryState, GateResult, GateSubmission, NotebookPayload};
+use crate::domain::notebook::{BlockUpdate, ClassRecord, ClosureFeedback, Concept, ConceptGraph, ConceptLink, Course, DiagnosticBatteryState, GateResult, GateSubmission, NotebookPayload};
 use crate::application::notebook_service::RetrievalAnswerResult;
 use crate::domain::skill_evidence::SkillEvidence;
 use crate::domain::capability_map::CapabilityMap;
@@ -83,6 +83,39 @@ pub fn save_block_annotation(
     selection: Option<serde_json::Value>,
 ) -> AppResult<()> {
     state.notebook_service.save_block_annotation(&notebook_id, &block_id, note.as_deref(), selection.as_ref())
+}
+
+/// The student's own knowledge graph (concepts they wrote + relations they drew).
+#[tauri::command]
+pub fn get_concept_graph(state: State<'_, AppState>, course_id: String) -> AppResult<ConceptGraph> {
+    state.notebook_service.get_concept_graph(&course_id)
+}
+
+#[tauri::command]
+pub fn save_concept(state: State<'_, AppState>, course_id: String, class_id: String, label: String, id: Option<String>) -> AppResult<Concept> {
+    state.notebook_service.save_concept(&course_id, &class_id, &label, id.as_deref())
+}
+
+#[tauri::command]
+pub fn delete_concept(state: State<'_, AppState>, course_id: String, concept_id: String) -> AppResult<()> {
+    state.notebook_service.delete_concept(&course_id, &concept_id)
+}
+
+#[tauri::command]
+pub fn save_concept_link(
+    state: State<'_, AppState>,
+    course_id: String,
+    from_id: String,
+    to_id: String,
+    label: String,
+    id: Option<String>,
+) -> AppResult<ConceptLink> {
+    state.notebook_service.save_concept_link(&course_id, &from_id, &to_id, &label, id.as_deref())
+}
+
+#[tauri::command]
+pub fn delete_concept_link(state: State<'_, AppState>, course_id: String, link_id: String) -> AppResult<()> {
+    state.notebook_service.delete_concept_link(&course_id, &link_id)
 }
 
 /// Voluntary de-escalation: the student asks for an easier, more guided step

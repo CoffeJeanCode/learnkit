@@ -21,7 +21,7 @@ use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, SkillEvidence
 use crate::domain::study::{resolve_variant, StudyEvent, StudyEventKind, StudySettings, StudyVariant, VariantMode};
 use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{
-    BlockStatus, BlockUpdate, ClassRecord, Course, DiagnosticBattery, GateAttempt, DiagnosticBatteryState, DynamicBlockType,
+    BlockStatus, BlockUpdate, ClassRecord, Concept, ConceptGraph, ConceptLink, Course, DiagnosticBattery, GateAttempt, DiagnosticBatteryState, DynamicBlockType,
     NotebookBlock, NotebookDocument, NotebookPayload, NotebookStatus, SyllabusMilestone,
 };
 use crate::error::{AppError, AppResult};
@@ -94,6 +94,30 @@ CREATE TABLE IF NOT EXISTS gate_attempts (
     at_ms INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_gate_attempts_document ON gate_attempts(document_id, id);
+
+-- The student's own knowledge graph: concepts they wrote about a class, and the
+-- relations they drew between classes/concepts. Written ONLY by the student —
+-- nothing generated ever lands here, and no prompt reads it. `concept_links`
+-- ends point at either a `classes.id` or a `concepts.id`, so they carry no FK
+-- (the service validates them); the course FK cleans everything on delete.
+CREATE TABLE IF NOT EXISTS concepts (
+    id TEXT PRIMARY KEY,
+    course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_concepts_course ON concepts(course_id);
+
+CREATE TABLE IF NOT EXISTS concept_links (
+    id TEXT PRIMARY KEY,
+    course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    from_id TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_concept_links_course ON concept_links(course_id);
 
 -- One row per learner (today, always `learner_memory::LOCAL_LEARNER_ID` —
 -- see that module's doc comment) — the WHOLE `LearnerCognitiveMemory`
@@ -1180,6 +1204,178 @@ impl NotebookStore {
         tx.execute("UPDATE notebook_documents SET updated_at_ms = ?1 WHERE id = ?2", params![now_ms(), notebook_id])?;
         tx.commit()?;
         Ok(())
+    }
+
+    // --- The student's knowledge graph (concepts + relations) ---------------
+
+    /// Every concept and relation of one course, oldest first.
+    pub fn list_concept_graph(&self, course_id: &str) -> AppResult<ConceptGraph> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, course_id, class_id, label, created_at_ms FROM concepts WHERE course_id = ?1 ORDER BY created_at_ms ASC, rowid ASC",
+        )?;
+        let concepts = stmt
+            .query_map(params![course_id], |r| {
+                Ok(Concept { id: r.get(0)?, course_id: r.get(1)?, class_id: r.get(2)?, label: r.get(3)?, created_at_ms: r.get(4)? })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, course_id, from_id, to_id, label, created_at_ms FROM concept_links WHERE course_id = ?1 ORDER BY created_at_ms ASC, rowid ASC",
+        )?;
+        let links = stmt
+            .query_map(params![course_id], |r| {
+                Ok(ConceptLink {
+                    id: r.get(0)?,
+                    course_id: r.get(1)?,
+                    from_id: r.get(2)?,
+                    to_id: r.get(3)?,
+                    label: r.get(4)?,
+                    created_at_ms: r.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ConceptGraph { concepts, links })
+    }
+
+    pub fn count_concepts(&self, course_id: &str) -> AppResult<usize> {
+        let n: i64 = self.lock().query_row("SELECT COUNT(*) FROM concepts WHERE course_id = ?1", params![course_id], |r| r.get(0))?;
+        Ok(n as usize)
+    }
+
+    /// `true` when `class_id` is a class of `course_id`.
+    pub fn class_in_course(&self, course_id: &str, class_id: &str) -> AppResult<bool> {
+        let n: i64 = self.lock().query_row(
+            "SELECT COUNT(*) FROM classes c JOIN syllabus_milestones m ON m.id = c.milestone_id WHERE c.id = ?1 AND m.course_id = ?2",
+            params![class_id, course_id],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    /// `true` when `node_id` is a class or a concept of `course_id` — the two
+    /// kinds of node a relation can connect.
+    pub fn node_in_course(&self, course_id: &str, node_id: &str) -> AppResult<bool> {
+        if self.class_in_course(course_id, node_id)? {
+            return Ok(true);
+        }
+        let n: i64 = self.lock().query_row(
+            "SELECT COUNT(*) FROM concepts WHERE id = ?1 AND course_id = ?2",
+            params![node_id, course_id],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Creates a concept (`id` `None`) or renames/moves an existing one of the
+    /// same course. `None` when `id` names no concept of that course.
+    pub fn upsert_concept(&self, course_id: &str, class_id: &str, label: &str, id: Option<&str>) -> AppResult<Option<Concept>> {
+        let conn = self.lock();
+        match id {
+            None => {
+                let concept = Concept {
+                    id: Uuid::new_v4().to_string(),
+                    course_id: course_id.to_string(),
+                    class_id: class_id.to_string(),
+                    label: label.to_string(),
+                    created_at_ms: now_ms(),
+                };
+                conn.execute(
+                    "INSERT INTO concepts (id, course_id, class_id, label, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![concept.id, concept.course_id, concept.class_id, concept.label, concept.created_at_ms],
+                )?;
+                Ok(Some(concept))
+            }
+            Some(id) => {
+                let changed = conn.execute(
+                    "UPDATE concepts SET label = ?1, class_id = ?2 WHERE id = ?3 AND course_id = ?4",
+                    params![label, class_id, id, course_id],
+                )?;
+                if changed == 0 {
+                    return Ok(None);
+                }
+                Ok(conn
+                    .query_row(
+                        "SELECT id, course_id, class_id, label, created_at_ms FROM concepts WHERE id = ?1",
+                        params![id],
+                        |r| Ok(Concept { id: r.get(0)?, course_id: r.get(1)?, class_id: r.get(2)?, label: r.get(3)?, created_at_ms: r.get(4)? }),
+                    )
+                    .optional()?)
+            }
+        }
+    }
+
+    /// Deletes a concept AND every relation touching it, atomically. `false`
+    /// when it didn't exist.
+    pub fn delete_concept(&self, course_id: &str, concept_id: &str) -> AppResult<bool> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM concept_links WHERE course_id = ?1 AND (from_id = ?2 OR to_id = ?2)", params![course_id, concept_id])?;
+        let removed = tx.execute("DELETE FROM concepts WHERE id = ?1 AND course_id = ?2", params![concept_id, course_id])?;
+        tx.commit()?;
+        Ok(removed > 0)
+    }
+
+    /// `true` when the same relation (same ends, same words) already exists.
+    pub fn concept_link_exists(&self, course_id: &str, from_id: &str, to_id: &str, label: &str, except_id: Option<&str>) -> AppResult<bool> {
+        let n: i64 = self.lock().query_row(
+            "SELECT COUNT(*) FROM concept_links WHERE course_id = ?1 AND from_id = ?2 AND to_id = ?3 AND label = ?4 AND id != ?5",
+            params![course_id, from_id, to_id, label, except_id.unwrap_or("")],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Creates a relation (`id` `None`) or rewrites an existing one of the same
+    /// course. `None` when `id` names no relation of that course.
+    pub fn upsert_concept_link(&self, course_id: &str, from_id: &str, to_id: &str, label: &str, id: Option<&str>) -> AppResult<Option<ConceptLink>> {
+        let conn = self.lock();
+        match id {
+            None => {
+                let link = ConceptLink {
+                    id: Uuid::new_v4().to_string(),
+                    course_id: course_id.to_string(),
+                    from_id: from_id.to_string(),
+                    to_id: to_id.to_string(),
+                    label: label.to_string(),
+                    created_at_ms: now_ms(),
+                };
+                conn.execute(
+                    "INSERT INTO concept_links (id, course_id, from_id, to_id, label, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![link.id, link.course_id, link.from_id, link.to_id, link.label, link.created_at_ms],
+                )?;
+                Ok(Some(link))
+            }
+            Some(id) => {
+                let changed = conn.execute(
+                    "UPDATE concept_links SET from_id = ?1, to_id = ?2, label = ?3 WHERE id = ?4 AND course_id = ?5",
+                    params![from_id, to_id, label, id, course_id],
+                )?;
+                if changed == 0 {
+                    return Ok(None);
+                }
+                Ok(conn
+                    .query_row(
+                        "SELECT id, course_id, from_id, to_id, label, created_at_ms FROM concept_links WHERE id = ?1",
+                        params![id],
+                        |r| {
+                            Ok(ConceptLink {
+                                id: r.get(0)?,
+                                course_id: r.get(1)?,
+                                from_id: r.get(2)?,
+                                to_id: r.get(3)?,
+                                label: r.get(4)?,
+                                created_at_ms: r.get(5)?,
+                            })
+                        },
+                    )
+                    .optional()?)
+            }
+        }
+    }
+
+    pub fn delete_concept_link(&self, course_id: &str, link_id: &str) -> AppResult<bool> {
+        let removed = self.lock().execute("DELETE FROM concept_links WHERE id = ?1 AND course_id = ?2", params![link_id, course_id])?;
+        Ok(removed > 0)
     }
 
     /// Merges the learner's own annotations into ONE block's stored content:

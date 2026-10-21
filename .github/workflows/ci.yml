@@ -40,7 +40,7 @@ jobs:
       - name: Script checks
         run: |
           bun scripts/check-version.ts
-          bun scripts/check-capability-map.ts
+          bun scripts/check-concept-graph.ts
           bun scripts/check-mermaid-repair.ts
           bun scripts/check-study-presentation.ts
           bun scripts/check-dev-trace.ts

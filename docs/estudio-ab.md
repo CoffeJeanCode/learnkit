@@ -5,7 +5,6 @@ Solo cambia cómo se presenta el progreso.
 
 | | `gamified` | `plain` |
 |---|---|---|
-| Mapa de capacidades («🗺 Capacidades») | sí | no |
 | Marco «Reto de transferencia» en la misión | sí | no |
 | Misión de transferencia, repaso con respuesta escrita, rúbrica, scaffolding, feedback | sí | **sí** (idénticos) |
 

@@ -575,6 +575,33 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
   }),
 ]);
 
+// --- The student's knowledge graph --------------------------------------------
+// Concepts the student wrote and relations they drew (see `Concept` /
+// `ConceptLink` in Rust). A relation's ends are a class id or a concept id of
+// the same course. Nothing here is generated.
+export const ConceptSchema = z.object({
+  id: z.string(),
+  courseId: z.string(),
+  classId: z.string(),
+  label: z.string(),
+  createdAtMs: z.number(),
+});
+
+export const ConceptLinkSchema = z.object({
+  id: z.string(),
+  courseId: z.string(),
+  fromId: z.string(),
+  toId: z.string(),
+  // The relation in the student's own words (required server-side).
+  label: z.string(),
+  createdAtMs: z.number(),
+});
+
+export const ConceptGraphSchema = z.object({
+  concepts: z.array(ConceptSchema),
+  links: z.array(ConceptLinkSchema),
+});
+
 export const CourseSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -726,6 +753,9 @@ export type RetrievalPrompt = z.infer<typeof RetrievalPromptSchema>;
 export type DynamicSectionBlock = z.infer<typeof DynamicSectionBlockSchema>;
 export type InteractiveStep = z.infer<typeof InteractiveStepSchema>;
 export type Course = z.infer<typeof CourseSchema>;
+export type Concept = z.infer<typeof ConceptSchema>;
+export type ConceptLink = z.infer<typeof ConceptLinkSchema>;
+export type ConceptGraph = z.infer<typeof ConceptGraphSchema>;
 export type SyllabusMilestone = z.infer<typeof SyllabusMilestoneSchema>;
 export type ClassRecord = z.infer<typeof ClassRecordSchema>;
 export type NotebookDocument = z.infer<typeof NotebookDocumentSchema>;

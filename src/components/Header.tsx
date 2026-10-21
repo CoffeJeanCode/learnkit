@@ -2,7 +2,6 @@ import { useState } from "react";
 import { useDev } from "../stores/dev";
 import { useNotebookNav } from "../stores/notebook";
 import { displaySessionTitle, useRoadmap } from "../stores/roadmap";
-import { usePresentation } from "../stores/study";
 import { useUi } from "../stores/ui";
 import { useUpdater } from "../stores/updater";
 import { SessionsDrawer } from "./SessionsDrawer";
@@ -28,16 +27,14 @@ export function Header() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [openingClasses, setOpeningClasses] = useState(false);
 
-  const { showCapabilityMap } = usePresentation();
   const devEnabled = useDev((s) => s.enabled);
   const devOpen = useDev((s) => s.panelOpen);
   const setDevOpen = useDev((s) => s.setPanelOpen);
   const inSettings = view === "providers";
-  const inMemory = view === "learner-memory";
-  const inCapabilities = view === "capabilities";
-  // Both settings and the learner-memory viewer are full-screen overlays
-  // over the active session — neither shows the session chip/tabs.
-  const inOverlay = inSettings || inMemory || inCapabilities;
+  const inGraph = view === "graph";
+  // Settings and the knowledge graph are full-screen overlays over the active
+  // session — neither shows the session chip/tabs.
+  const inOverlay = inSettings || inGraph;
   // One merged tab for both session sections: the Conversación|Plan filter
   // now lives INSIDE `SessionView`, so the header only tracks whether we're
   // in the session view at all.
@@ -150,13 +147,8 @@ export function Header() {
               {devOpen ? "🛠 Ocultar dev" : "🛠 Dev"}
             </button>
           )}
-          {(showCapabilityMap || inCapabilities) && (
-            <button onClick={() => setView(inCapabilities ? lastMainView : "capabilities")}>
-              {inCapabilities ? "← Volver" : "🗺 Capacidades"}
-            </button>
-          )}
-          <button onClick={() => setView(inMemory ? lastMainView : "learner-memory")}>
-            {inMemory ? "← Volver" : "🧠 Memoria"}
+          <button onClick={() => setView(inGraph ? lastMainView : "graph")} title="Tu mapa de ideas: conecta lo que aprendes con tus propias palabras">
+            {inGraph ? "← Volver" : "🕸 Grafo"}
           </button>
           <button onClick={() => setView(inSettings ? lastMainView : "providers")}>
             {inSettings ? "← Volver" : "⚙ Proveedores"}

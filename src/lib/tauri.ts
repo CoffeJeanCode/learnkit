@@ -5,6 +5,9 @@ import {
   ClosureFeedbackSchema,
   CourseSchema,
   DiagnosticBatteryStateSchema,
+  ConceptGraphSchema,
+  ConceptLinkSchema,
+  ConceptSchema,
   GateResultSchema,
   NotebookBlockEventSchema,
   NotebookPayloadSchema,
@@ -200,6 +203,27 @@ export const submitGateResponse = (block_id: string, submission: GateSubmission)
 export const saveBlockAnnotation = (notebook_id: string, block_id: string, patch: { note?: string; selection?: Record<string, unknown> }) =>
   invoke<void>("save_block_annotation", { notebookId: notebook_id, blockId: block_id, note: patch.note, selection: patch.selection });
 
+// --- The student's knowledge graph ------------------------------------------
+// Concepts and relations are written by the student only: no command here asks a
+// model for anything, and the backend never feeds them into a prompt.
+
+export const getConceptGraph = (course_id: string) =>
+  invoke("get_concept_graph", { courseId: course_id }).then((v) => ConceptGraphSchema.parse(v));
+
+export const saveConcept = (course_id: string, class_id: string, label: string, id?: string) =>
+  invoke("save_concept", { courseId: course_id, classId: class_id, label, id: id ?? null }).then((v) => ConceptSchema.parse(v));
+
+export const deleteConcept = (course_id: string, concept_id: string) =>
+  invoke<void>("delete_concept", { courseId: course_id, conceptId: concept_id });
+
+export const saveConceptLink = (course_id: string, from_id: string, to_id: string, label: string, id?: string) =>
+  invoke("save_concept_link", { courseId: course_id, fromId: from_id, toId: to_id, label, id: id ?? null }).then((v) =>
+    ConceptLinkSchema.parse(v),
+  );
+
+export const deleteConceptLink = (course_id: string, link_id: string) =>
+  invoke<void>("delete_concept_link", { courseId: course_id, linkId: link_id });
+
 /**
  * Voluntary de-escalation: leaves the active gate WITHOUT failing it 3 times.
  * The backend locks the gate (`escalated`, answer never revealed) and generates
@@ -273,101 +297,6 @@ export const getCourseDiagnosticBattery = (course_id: string) =>
 export const saveDiagnosticBatteryAnswers = (course_id: string, answers: Record<string, string>) =>
   invoke<void>("save_diagnostic_battery_answers", { courseId: course_id, answers });
 
-// --- Learner cognitive memory ------------------------------------------------
-//
-// Single-learner app: this always describes learner id "local" — see the
-// Rust `domain::learner_memory` module doc for why. Read-only viewer data.
-
-export type CalibratedBaseline = "novice_zero" | "novice_intuitive" | "intermediate" | "advanced";
-export type AbstractionLevel = "visual_analogy" | "causal_mechanics" | "formal_symbolic";
-export type FrictionTolerance = "low_frustration" | "resilient";
-
-export interface CognitiveMetrics {
-  predictionAccuracyRate: number;
-  errorAuditDetectionRate: number;
-  preferredAbstractionLevel: AbstractionLevel;
-  cognitiveFrictionTolerance: FrictionTolerance;
-}
-
-export interface RecurringMisconception {
-  domainConcept: string;
-  identifiedErrorPattern: string;
-  lastEncounteredDate: string;
-  resolved: boolean;
-}
-
-export interface SpacedRetrievalItem {
-  conceptId: string;
-  conceptLabel: string;
-  masteryLevel: number;
-  nextDueAtMs: number;
-}
-
-export interface LearnerCognitiveMemory {
-  learnerId: string;
-  calibratedBaseline: CalibratedBaseline;
-  cognitiveMetrics: CognitiveMetrics;
-  recurringMisconceptions: RecurringMisconception[];
-  retrievalSpacedQueue: SpacedRetrievalItem[];
-}
-
-export const getLearnerMemory = () => invoke<LearnerCognitiveMemory>("get_learner_memory");
-
-// --- Capability map ----------------------------------------------------------
-//
-// Mirrors `domain::capability_map` / `domain::skill_status` /
-// `domain::skill_evidence` in Rust (camelCase fields, snake_case enum values).
-// Everything here is DERIVED from the append-only evidence history.
-
-export interface SkillEvidence {
-  id: string;
-  skillId: string;
-  courseId: string;
-  blockId: string | null;
-  kind: "conceptual_gate" | "practice_gate" | "retrieval" | "closure";
-  outcome: "passed" | "failed" | "escalated" | "self_recalled" | "self_forgot";
-  attemptNumber: number;
-  hintsShown: number;
-  supportLevel: string | null;
-  rubric: { criterion: string; met: boolean; evidence?: string | null }[];
-  isTransfer: boolean;
-  createdAtMs: number;
-}
-
-export interface Achievement {
-  achieved: boolean;
-  achievedAtMs: number | null;
-  evidenceIds: string[];
-}
-
-export interface SkillStatus {
-  skillId: string;
-  solved: Achievement;
-  solvedWithAids: boolean | null;
-  retained: Achievement;
-  retainedAfterDays: number | null;
-  applied: Achievement;
-  attemptsRecorded: number;
-}
-
-export interface CapabilityEntry {
-  skillId: string;
-  title: string;
-  objective: string | null;
-  weekNumber: number;
-  milestoneTitle: string;
-  classComplete: boolean;
-  status: SkillStatus;
-  nextRetrievalAtMs: number | null;
-  evidence: SkillEvidence[];
-}
-
-export interface CapabilityMap {
-  courseId: string;
-  entries: CapabilityEntry[];
-  totals: { skills: number; solved: number; retained: number; applied: number };
-}
-
 // --- Study switch -------------------------------------------------------------
 
 export type StudyVariantMode = "random" | "gamified" | "plain";
@@ -387,7 +316,6 @@ export const logStudyEvent = (kind: "app_opened") => invoke<void>("log_study_eve
 /** Writes the participant's report into the app data folder; resolves to its path. */
 export const exportStudyReport = () => invoke<string>("export_study_report");
 
-export const getCapabilityMap = (course_id: string) => invoke<CapabilityMap>("get_capability_map", { courseId: course_id });
 
 // --- Lexical assistant (popover) --------------------------------------------
 //

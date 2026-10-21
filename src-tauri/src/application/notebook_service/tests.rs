@@ -1274,3 +1274,90 @@
         let wrong_notebook = service.save_block_annotation("otro-cuaderno", &gate_id, Some("hola"), None);
         assert!(matches!(wrong_notebook, Err(AppError::InvalidInput(_))), "a block can't be annotated through another notebook's id");
     }
+
+    // --- The student's knowledge graph ---------------------------------------
+
+    /// (course id, the course's two class ids) from the sealed-roadmap fixture.
+    fn graph_fixture(service: &NotebookService) -> (String, String, String) {
+        let classes = service.import_course_from_roadmap(&sealed_roadmap_session()).expect("import");
+        let course_id = service.store.class_generation_context(&classes[0].id).expect("ctx").expect("present").course.id;
+        (course_id, classes[0].id.clone(), classes[1].id.clone())
+    }
+
+    #[test]
+    fn the_student_builds_a_graph_of_concepts_and_relations_in_their_own_words() {
+        let service = service_with(Arc::new(ScriptedNotebookRunner::default()));
+        let (course, c1, c2) = graph_fixture(&service);
+
+        let concept = service.save_concept(&course, &c2, "  El ciclo   regula su propia velocidad ", None).expect("concept");
+        assert_eq!(concept.label, "El ciclo regula su propia velocidad", "whitespace is normalised");
+        // A relation between a class and a concept, and one between two classes.
+        let l1 = service.save_concept_link(&course, &c1, &concept.id, "es la base de", None).expect("link");
+        service.save_concept_link(&course, &c1, &c2, "viene antes que", None).expect("class-to-class link");
+
+        let graph = service.get_concept_graph(&course).expect("graph");
+        assert_eq!((graph.concepts.len(), graph.links.len()), (1, 2));
+
+        // Editing keeps the id and rewrites the words.
+        let edited = service.save_concept_link(&course, &c1, &concept.id, "explica por qué ocurre", Some(&l1.id)).expect("edit");
+        assert_eq!((edited.id.as_str(), edited.label.as_str()), (l1.id.as_str(), "explica por qué ocurre"));
+        assert_eq!(service.get_concept_graph(&course).unwrap().links.len(), 2);
+    }
+
+    #[test]
+    fn graph_input_is_validated_and_scoped_to_the_course() {
+        let service = service_with(Arc::new(ScriptedNotebookRunner::default()));
+        let (course, c1, c2) = graph_fixture(&service);
+        let invalid = |r: AppResult<_>| matches!(r, Err(AppError::InvalidInput(_)));
+
+        assert!(invalid(service.save_concept(&course, &c1, "   ", None).map(|_| ())), "empty concept");
+        assert!(invalid(service.save_concept(&course, &c1, &"x".repeat(121), None).map(|_| ())), "too long");
+        assert!(invalid(service.save_concept(&course, "no-es-una-clase", "algo", None).map(|_| ())), "class of another course");
+        assert!(invalid(service.save_concept("otro-curso", &c1, "algo", None).map(|_| ())), "course mismatch");
+
+        assert!(invalid(service.save_concept_link(&course, &c1, &c2, "  ", None).map(|_| ())), "a relation needs the student's words");
+        assert!(invalid(service.save_concept_link(&course, &c1, &c1, "se parece a", None).map(|_| ())), "an idea can't relate to itself");
+        assert!(invalid(service.save_concept_link(&course, &c1, "fantasma", "causa", None).map(|_| ())), "unknown end");
+        service.save_concept_link(&course, &c1, &c2, "viene antes que", None).expect("first");
+        assert!(invalid(service.save_concept_link(&course, &c1, &c2, "viene antes que", None).map(|_| ())), "exact duplicate");
+        service.save_concept_link(&course, &c1, &c2, "con otras palabras", None).expect("same ends, other words is fine");
+
+        assert!(invalid(service.delete_concept(&course, "no-existe")), "deleting nothing");
+        assert!(invalid(service.delete_concept_link(&course, "no-existe")));
+        assert!(invalid(service.save_concept_link(&course, &c1, &c2, "x", Some("no-existe")).map(|_| ())), "editing a missing link");
+    }
+
+    #[test]
+    fn deleting_a_concept_removes_the_relations_touching_it_and_the_course_cascade_cleans_the_rest() {
+        let service = service_with(Arc::new(ScriptedNotebookRunner::default()));
+        let (course, c1, c2) = graph_fixture(&service);
+        let a = service.save_concept(&course, &c1, "idea A", None).unwrap();
+        let b = service.save_concept(&course, &c2, "idea B", None).unwrap();
+        service.save_concept_link(&course, &a.id, &b.id, "lleva a", None).unwrap();
+        service.save_concept_link(&course, &b.id, &c1, "retoma", None).unwrap();
+        service.save_concept_link(&course, &c1, &c2, "viene antes que", None).unwrap();
+
+        service.delete_concept(&course, &a.id).expect("delete");
+        let graph = service.get_concept_graph(&course).unwrap();
+        assert_eq!(graph.concepts.len(), 1);
+        assert_eq!(graph.links.iter().map(|l| l.label.as_str()).collect::<Vec<_>>(), vec!["retoma", "viene antes que"], "only A's relation went away");
+
+        service.store.delete_course(&course).expect("delete course");
+        let after = service.get_concept_graph(&course).unwrap();
+        assert!(after.concepts.is_empty() && after.links.is_empty(), "everything hangs off the course");
+    }
+
+    #[test]
+    fn the_graph_is_never_part_of_what_the_generator_or_the_grader_reads() {
+        // Structural guard for "the AI doesn't make (or see) the relations":
+        // none of the model-input builders may mention the graph tables/types.
+        for (name, source) in [
+            ("render.rs", include_str!("render.rs")),
+            ("generation.rs", include_str!("generation.rs")),
+            ("grading.rs", include_str!("grading.rs")),
+        ] {
+            for forbidden in ["concept_links", "ConceptLink", "ConceptGraph", "list_concept_graph"] {
+                assert!(!source.contains(forbidden), "{name} must not read the student's knowledge graph ({forbidden})");
+            }
+        }
+    }
