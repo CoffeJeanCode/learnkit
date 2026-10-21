@@ -719,6 +719,17 @@ impl NotebookStore {
         Ok(())
     }
 
+    /// Developer-mode switch (`dev.enabled`), off unless explicitly set.
+    pub fn dev_mode(&self) -> AppResult<bool> {
+        let conn = self.lock();
+        Ok(Self::setting_get(&conn, "dev.enabled")?.as_deref() == Some("1"))
+    }
+
+    pub fn set_dev_mode(&self, on: bool) -> AppResult<()> {
+        let conn = self.lock();
+        Self::setting_set(&conn, "dev.enabled", if on { "1" } else { "0" })
+    }
+
     /// The study settings in force, creating on first use: a pseudonymous
     /// participant id and — when the mode is `random` — ONE random assignment
     /// that is then kept forever (see `domain::study::resolve_variant`).

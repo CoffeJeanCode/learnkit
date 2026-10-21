@@ -1290,3 +1290,24 @@ pre.output, .quickrun pre {
 .cap-rubric { padding-left: 14px; font-size: 14px; }
 .cap-rubric .met { color: var(--green-chalk); }
 .cap-skill summary { cursor: pointer; color: var(--chalk-soft); font-size: 14px; margin-top: 6px; }
+
+/* Developer mode: docked generation inspector + per-block JSON. */
+.dev-panel {
+  position: fixed; left: 0; right: 0; bottom: 0; height: 42vh; z-index: 40;
+  display: flex; flex-direction: column; gap: 6px; padding: 10px 14px;
+  background: var(--paper-deep); border-top: 2px dashed var(--gold-chalk);
+}
+.dev-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.dev-note { margin: 0; }
+.dev-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.dev-row, .dev-block, .dev-section { border: 1px dashed var(--chalk-faint); border-radius: 8px; padding: 6px 10px; background: var(--card); }
+.dev-row.bad, .dev-block.bad { border-color: var(--red-chalk); }
+.dev-row > summary, .dev-block > summary, .dev-section > summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.dev-body { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.dev-tool { border-left: 3px solid var(--blue-chalk); padding-left: 8px; }
+.dev-notes { margin: 4px 0; padding-left: 18px; color: var(--gold-chalk); }
+.dev-pre {
+  margin: 6px 0 0; max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font-size: 12px; background: var(--input); padding: 8px; border-radius: 6px; color: var(--chalk-soft);
+}
+body:has(.dev-panel) .workspace { padding-bottom: 44vh; }

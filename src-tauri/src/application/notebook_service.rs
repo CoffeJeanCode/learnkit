@@ -219,6 +219,16 @@ impl NotebookService {
         self.store.study_settings()
     }
 
+    /// Developer-mode switch (persisted). Defaults to off; a read failure also
+    /// reads as off so a broken settings table can never turn tracing on.
+    pub fn dev_mode_enabled(&self) -> bool {
+        self.store.dev_mode().unwrap_or(false)
+    }
+
+    pub fn set_dev_mode_enabled(&self, on: bool) -> AppResult<()> {
+        self.store.set_dev_mode(on)
+    }
+
     /// Who decides the version: `random` (default, assigned once) or a manual
     /// override by whoever runs the study.
     pub fn set_study_variant_mode(&self, mode: VariantMode) -> AppResult<StudySettings> {

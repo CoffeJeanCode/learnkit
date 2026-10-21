@@ -60,6 +60,7 @@ test: typecheck ## tsc --noEmit + UI render checks + cargo test
 	bun run scripts/check-mermaid-repair.ts
 	bun run scripts/check-capability-map.ts
 	bun run scripts/check-study-presentation.ts
+	bun run scripts/check-dev-trace.ts
 	bun run scripts/check-release.ts
 	bun run scripts/check-version.ts
 	cargo test --manifest-path $(MANIFEST)

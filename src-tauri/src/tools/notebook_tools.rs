@@ -42,6 +42,7 @@ impl Tool for PublishNotebookBlockTool {
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
         let args = repair_double_escaped(args);
+        crate::dev_trace::trace_tool(Self::NAME, &args);
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args);
         Ok(PublishedAck { saved: true })
     }
@@ -155,6 +156,7 @@ impl Tool for GradeGateSubmissionTool {
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
         let args = repair_double_escaped(args);
+        crate::dev_trace::trace_tool(Self::NAME, &args);
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args);
         Ok(GradedAck { saved: true })
     }
@@ -197,6 +199,7 @@ impl Tool for GradeClosureSubmissionTool {
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
         let args = repair_double_escaped(args);
+        crate::dev_trace::trace_tool(Self::NAME, &args);
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args);
         Ok(GradedAck { saved: true })
     }
@@ -255,6 +258,7 @@ impl Tool for SubmitBlockAuditTool {
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
         let args = repair_double_escaped(args);
+        crate::dev_trace::trace_tool(Self::NAME, &args);
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args);
         Ok(AuditedAck { saved: true })
     }

@@ -14,6 +14,7 @@ import {
 } from "./schemas";
 import type { GateSubmission, NotebookBlockEvent } from "./schemas";
 import type { BlockUpdate } from "../types";
+import type { DevTraceEntry } from "./devTrace";
 import type {
   AgentDefinition,
   AgentEventPayload,
@@ -438,4 +439,16 @@ export async function onNotebookBlockEvent(
   handler: (e: NotebookBlockEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<unknown>(channel, (evt) => handler(NotebookBlockEventSchema.parse(evt.payload)));
+}
+
+// --- Developer mode ----------------------------------------------------------
+
+export const getDevMode = () => invoke<boolean>("get_dev_mode");
+export const setDevMode = (enabled: boolean) => invoke<boolean>("set_dev_mode", { enabled });
+export const getDevTrace = () => invoke<DevTraceEntry[]>("get_dev_trace");
+export const clearDevTrace = () => invoke<void>("clear_dev_trace");
+
+/** Live generation traces; the backend only emits while dev mode is on. */
+export async function onDevTrace(handler: (e: DevTraceEntry) => void): Promise<UnlistenFn> {
+  return listen<DevTraceEntry>("dev://trace", (evt) => handler(evt.payload));
 }

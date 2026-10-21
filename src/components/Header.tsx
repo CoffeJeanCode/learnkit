@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useDev } from "../stores/dev";
 import { useNotebookNav } from "../stores/notebook";
 import { displaySessionTitle, useRoadmap } from "../stores/roadmap";
 import { usePresentation } from "../stores/study";
@@ -28,6 +29,9 @@ export function Header() {
   const [openingClasses, setOpeningClasses] = useState(false);
 
   const { showCapabilityMap } = usePresentation();
+  const devEnabled = useDev((s) => s.enabled);
+  const devOpen = useDev((s) => s.panelOpen);
+  const setDevOpen = useDev((s) => s.setPanelOpen);
   const inSettings = view === "providers";
   const inMemory = view === "learner-memory";
   const inCapabilities = view === "capabilities";
@@ -141,6 +145,11 @@ export function Header() {
           >
             {updateLabel}
           </button>
+          {devEnabled && (
+            <button onClick={() => setDevOpen(!devOpen)} title="Inspector de generación (modo desarrollador)">
+              {devOpen ? "🛠 Ocultar dev" : "🛠 Dev"}
+            </button>
+          )}
           {(showCapabilityMap || inCapabilities) && (
             <button onClick={() => setView(inCapabilities ? lastMainView : "capabilities")}>
               {inCapabilities ? "← Volver" : "🗺 Capacidades"}

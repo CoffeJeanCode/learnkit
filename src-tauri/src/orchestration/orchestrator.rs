@@ -6,7 +6,8 @@ use tauri::Emitter;
 use uuid::Uuid;
 
 use crate::agents::AgentRegistry;
-use crate::domain::agent::{AgentContext, AgentOutput};
+use crate::dev_trace::{self, TraceEntry};
+use crate::domain::agent::{AgentContext, AgentDefinition, AgentOutput};
 use crate::domain::message::AgentEvent;
 use crate::error::{AppError, AppResult};
 use crate::providers::{ProviderFactory, ProviderRegistry};
@@ -305,6 +306,7 @@ impl Orchestrator {
                     output_len = output.text.len(),
                     "agent run completed"
                 );
+                trace_agent_run("agent", &ctx, &def, input, started, Ok(&output));
                 emit(app, AgentEvent::completed(&ctx.run_id, &ctx.agent_id, &output.text));
                 Ok(output)
             }
@@ -316,6 +318,7 @@ impl Orchestrator {
                     error = %e,
                     "agent run failed"
                 );
+                trace_agent_run("agent", &ctx, &def, input, started, Err(&e));
                 emit(app, AgentEvent::failed(&ctx.run_id, &ctx.agent_id, &e.to_string()));
                 Err(e)
             }
@@ -371,6 +374,7 @@ impl Orchestrator {
                     tool_calls = ?output.tool_calls,
                     "diagnostic agent run completed"
                 );
+                trace_agent_run("roadmap", &ctx, &def, input, started, Ok(&output));
                 emit(app, AgentEvent::completed(&ctx.run_id, &ctx.agent_id, &output.text));
                 Ok(output)
             }
@@ -382,6 +386,7 @@ impl Orchestrator {
                     error = %e,
                     "diagnostic agent run failed"
                 );
+                trace_agent_run("roadmap", &ctx, &def, input, started, Err(&e));
                 emit(app, AgentEvent::failed(&ctx.run_id, &ctx.agent_id, &e.to_string()));
                 Err(e)
             }
@@ -436,6 +441,7 @@ impl Orchestrator {
                     duration_ms = output.duration_ms,
                     "notebook block agent run completed"
                 );
+                trace_agent_run("notebook_block", &ctx, &def, input, started, Ok(&output));
                 emit(app, AgentEvent::completed(&ctx.run_id, &ctx.agent_id, &output.text));
                 Ok(output)
             }
@@ -447,6 +453,7 @@ impl Orchestrator {
                     error = %e,
                     "notebook block agent run failed"
                 );
+                trace_agent_run("notebook_block", &ctx, &def, input, started, Err(&e));
                 emit(app, AgentEvent::failed(&ctx.run_id, &ctx.agent_id, &e.to_string()));
                 Err(e)
             }
@@ -501,6 +508,7 @@ impl Orchestrator {
                     duration_ms = output.duration_ms,
                     "gate grading agent run completed"
                 );
+                trace_agent_run("gate_grading", &ctx, &def, input, started, Ok(&output));
                 emit(app, AgentEvent::completed(&ctx.run_id, &ctx.agent_id, &output.text));
                 Ok(output)
             }
@@ -512,6 +520,7 @@ impl Orchestrator {
                     error = %e,
                     "gate grading agent run failed"
                 );
+                trace_agent_run("gate_grading", &ctx, &def, input, started, Err(&e));
                 emit(app, AgentEvent::failed(&ctx.run_id, &ctx.agent_id, &e.to_string()));
                 Err(e)
             }
@@ -567,6 +576,7 @@ impl Orchestrator {
                     duration_ms = output.duration_ms,
                     "closure grading agent run completed"
                 );
+                trace_agent_run("closure_grading", &ctx, &def, input, started, Ok(&output));
                 emit(app, AgentEvent::completed(&ctx.run_id, &ctx.agent_id, &output.text));
                 Ok(output)
             }
@@ -578,6 +588,7 @@ impl Orchestrator {
                     error = %e,
                     "closure grading agent run failed"
                 );
+                trace_agent_run("closure_grading", &ctx, &def, input, started, Err(&e));
                 emit(app, AgentEvent::failed(&ctx.run_id, &ctx.agent_id, &e.to_string()));
                 Err(e)
             }
@@ -631,6 +642,7 @@ impl Orchestrator {
                     duration_ms = output.duration_ms,
                     "pedagogical critic agent run completed"
                 );
+                trace_agent_run("pedagogical_critic", &ctx, &def, input, started, Ok(&output));
                 emit(app, AgentEvent::completed(&ctx.run_id, &ctx.agent_id, &output.text));
                 Ok(output)
             }
@@ -642,6 +654,7 @@ impl Orchestrator {
                     error = %e,
                     "pedagogical critic agent run failed"
                 );
+                trace_agent_run("pedagogical_critic", &ctx, &def, input, started, Err(&e));
                 emit(app, AgentEvent::failed(&ctx.run_id, &ctx.agent_id, &e.to_string()));
                 Err(e)
             }
@@ -668,6 +681,34 @@ impl Orchestrator {
         );
         self.run_agent(app, to_agent_id, task, Some(parent_run_id)).await
     }
+}
+
+/// Dev-mode capture of one agent run: the full system prompt, input, output
+/// and (on failure) the classified error — the data the metadata-only
+/// `tracing` logs deliberately omit. No-op (and no clones) while dev mode is off.
+fn trace_agent_run(flow: &str, ctx: &AgentContext, def: &AgentDefinition, input: &str, started: Instant, outcome: Result<&AgentOutput, &AppError>) {
+    if !dev_trace::is_enabled() {
+        return;
+    }
+    let mut entry = TraceEntry::new("agent_run");
+    entry.flow = Some(flow.to_string());
+    entry.run_id = Some(ctx.run_id.clone());
+    entry.agent_id = Some(ctx.agent_id.clone());
+    entry.provider = Some(def.model.provider_id.clone());
+    entry.model = Some(def.model.model.clone());
+    entry.duration_ms = Some(started.elapsed().as_millis() as u64);
+    entry.system_prompt = Some(def.system_prompt.clone());
+    entry.input = Some(input.to_string());
+    let entry = match outcome {
+        Ok(out) => {
+            entry.ok = Some(true);
+            entry.output = Some(out.text.clone());
+            entry.tool_calls = out.tool_calls.clone();
+            entry
+        }
+        Err(e) => dev_trace::with_error(entry, e),
+    };
+    dev_trace::record(entry);
 }
 
 fn emit(app: Option<&tauri::AppHandle>, event: AgentEvent) {

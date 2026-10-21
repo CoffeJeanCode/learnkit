@@ -43,6 +43,7 @@ jobs:
           bun scripts/check-capability-map.ts
           bun scripts/check-mermaid-repair.ts
           bun scripts/check-study-presentation.ts
+          bun scripts/check-dev-trace.ts
           bun scripts/check-release.ts
 
       # Also what produces `dist/`, which `tauri::generate_context!` needs at

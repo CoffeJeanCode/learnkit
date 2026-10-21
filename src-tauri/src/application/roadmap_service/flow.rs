@@ -124,6 +124,7 @@ impl RoadmapService {
                 }
                 session.last_rejection_reasons.clear();
             } else {
+                crate::dev_trace::trace_note("critique", "roadmap_grounding", &session.session_id, "submit_diagnostic_assessment_rejected", &violations);
                 tracing::warn!(session_id = %session.session_id, ?violations, "submit_diagnostic_assessment failed grounding");
                 session.last_rejection_reasons = violations;
                 had_violation = true;
@@ -175,7 +176,8 @@ impl RoadmapService {
                         session.pending_diagnostic_battery = Some(DiagnosticBatteryState { battery, answers: Default::default() });
                         session.last_rejection_reasons.clear();
                     } else {
-                        tracing::warn!(session_id = %session.session_id, ?violations, "present_diagnostic_battery failed grounding");
+                        crate::dev_trace::trace_note("critique", "roadmap_grounding", &session.session_id, "present_diagnostic_battery_rejected", &violations);
+                tracing::warn!(session_id = %session.session_id, ?violations, "present_diagnostic_battery failed grounding");
                         session.last_rejection_reasons = violations;
                         had_violation = true;
                     }
@@ -236,7 +238,8 @@ impl RoadmapService {
                                 });
                                 session.last_rejection_reasons.clear();
                             } else {
-                                tracing::warn!(session_id = %session.session_id, ?violations, "propose_syllabus_plan failed grounding");
+                                crate::dev_trace::trace_note("critique", "roadmap_grounding", &session.session_id, "propose_syllabus_plan_rejected", &violations);
+                tracing::warn!(session_id = %session.session_id, ?violations, "propose_syllabus_plan failed grounding");
                                 session.last_rejection_reasons = violations;
                                 had_violation = true;
                             }
@@ -492,6 +495,7 @@ impl RoadmapService {
     /// and seals anyway, so the conversation can never stall past its cap.
     /// No model call is spent on this turn.
     pub(super) fn force_close_session(&self, session: &mut RoadmapSession) -> AppResult<String> {
+        crate::dev_trace::trace_note("critique", "roadmap_backstop", &session.session_id, "force_close_session", &["se selló la sesión con valores sintéticos, sin llamada al modelo".to_string()]);
         if session.learner_profile_card.is_none() {
             session.learner_profile_card = Some(synth_profile_card(&session.draft));
             session.diagnostic_summary_card = Some(synth_diagnostic_card());
@@ -522,6 +526,7 @@ impl RoadmapService {
     /// scratch, since discarding a genuinely valid proposal just because a
     /// LATER turn failed would be wasteful.
     pub(super) fn force_progress_from_gate3(&self, session: &mut RoadmapSession) -> AppResult<String> {
+        crate::dev_trace::trace_note("critique", "roadmap_backstop", &session.session_id, "force_progress_from_gate3", &["se avanzó desde el Gate 3 sin llamada al modelo".to_string()]);
         let Some(profile) = session.learner_profile_card.clone() else {
             // Defensive: should be unreachable (ceiling #1 in `advance`
             // always fires first while there's no profile yet), but never

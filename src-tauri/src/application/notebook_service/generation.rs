@@ -24,6 +24,7 @@ use crate::domain::scaffolding;
 use crate::domain::study::StudyEventKind;
 use crate::domain::skill_status::MIN_RETENTION_INTERVAL_MS;
 use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, RubricCriterion, SkillEvidence};
+use crate::dev_trace::{self, TraceEntry};
 use crate::error::{AppError, AppResult};
 use crate::notebook_store::{ClassGenerationContext, NotebookStore};
 use crate::orchestration::Orchestrator;
@@ -1008,11 +1009,13 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
         ));
         violations.extend(block_guardrail_violations(candidate));
         if !violations.is_empty() {
+            self.trace_critique(candidate, "deterministic_rejected", violations.clone());
             tracing::warn!(class_id = %self.class_id, ?violations, "generated block failed deterministic review");
             return CriticVerdict::Reject { feedback: violations };
         }
         *self.last_grounded.lock().unwrap_or_else(|e| e.into_inner()) = Some(candidate.clone());
         if !needs_llm_critic(candidate.block_type()) {
+            self.trace_critique(candidate, "accepted_deterministic_only", Vec::new());
             return CriticVerdict::Accept;
         }
         let input = render::render_block_audit_input(&self.ctx, &self.existing_blocks, candidate);
@@ -1021,15 +1024,23 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
             Ok(_) => {
                 let audit = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
                 match audit {
-                    Some(audit) if audit.accepted => CriticVerdict::Accept,
-                    Some(audit) => CriticVerdict::Reject { feedback: audit.feedback },
+                    Some(audit) if audit.accepted => {
+                        self.trace_critique(candidate, "llm_accepted", Vec::new());
+                        CriticVerdict::Accept
+                    }
+                    Some(audit) => {
+                        self.trace_critique(candidate, "llm_rejected", audit.feedback.clone());
+                        CriticVerdict::Reject { feedback: audit.feedback }
+                    }
                     None => {
+                        self.trace_critique(candidate, "llm_no_verdict_fail_open", vec!["el crítico no devolvió veredicto; se aceptó el bloque".to_string()]);
                         tracing::warn!(class_id = %self.class_id, "pedagogical critic returned no verdict, failing open");
                         CriticVerdict::Accept
                     }
                 }
             }
             Err(e) => {
+                self.trace_critique(candidate, "llm_unavailable_fail_open", vec![format!("crítico no disponible ({}); se aceptó el bloque", e.code())]);
                 tracing::warn!(class_id = %self.class_id, error = %e, "pedagogical critic unavailable, failing open");
                 CriticVerdict::Accept
             }
@@ -1061,6 +1072,28 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
 
     fn exhausted_error(&self) -> AppError {
         AppError::AgentExecutionFailed("el generador de notebooks no produjo un bloque válido".to_string())
+    }
+
+    fn trace_scope(&self) -> Option<String> {
+        Some(self.class_id.clone())
+    }
+}
+
+impl BlockGenerationJob<'_> {
+    /// Dev-mode record of a critique outcome: which stage decided and why.
+    /// The candidate JSON is attached so a rejected block can be inspected.
+    fn trace_critique(&self, candidate: &GeneratedSectionBlock, verdict: &str, notes: Vec<String>) {
+        if !dev_trace::is_enabled() {
+            return;
+        }
+        let mut entry = TraceEntry::new("critique");
+        entry.flow = Some("block_critique".to_string());
+        entry.scope = Some(self.class_id.clone());
+        entry.verdict = Some(verdict.to_string());
+        entry.notes = notes;
+        entry.tool = Some(candidate.block_type().as_str().to_string());
+        entry.tool_args = serde_json::to_value(candidate).ok();
+        dev_trace::record(entry);
     }
 }
 
