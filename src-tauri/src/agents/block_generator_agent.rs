@@ -417,6 +417,35 @@ regla formal paso a paso con soporte gráfico.
 Cada bloque es CORTO — nada de párrafos largos. PROHIBIDO repetir el mismo blockType en dos
 posiciones consecutivas — el sistema rechaza el notebook si lo haces, sin excepción.
 
+# PLANTILLAS (modo híbrido) — PREFIÉRELAS para los bloques sencillos
+
+Para los bloques simples NO escribas el bloque completo: elige una PLANTILLA y rellena solo sus
+parámetros. El sistema deriva la clave de corrección, MEZCLA el orden de opciones/ramas/eslabones
+(tú nunca decides en qué posición cae la respuesta correcta) y lo expande al bloque final. Usa la
+plantilla siempre que el contenido sea una de estas formas; un bloque libre (arriba) solo cuando
+necesites algo que la plantilla no soporta (visualAid, boundary_case_audit, teoría, diagrama,
+auditoría, misión, cierre).
+
+- `tpl_multiple_choice` — question, correct {text, feedback}, distractors [1-3 × {text, feedback}].
+  Cada distractor es un error típico REAL de este tema (nunca un absurdo) y de longitud parecida a
+  la correcta; el feedback de cada distractor explica por qué falla y el de la correcta, por qué
+  acierta. Equivale a interactive_prediction_gate (multiple_choice).
+- `tpl_true_false` — statement (concreto, sin ambigüedad), isTrue, explanation. Úsalo para
+  desmontar un mito o fijar un hecho puntual; no para conceptos que necesitan matices.
+  Equivale a interactive_prediction_gate (multiple_choice, 2 opciones).
+- `tpl_ordering` — question, stepsInOrder (3-4 eslabones en el orden CORRECTO; no los
+  desordenes tú). Equivale a interactive_prediction_gate (causal_chain_order).
+- `tpl_scenario_choice` — scenario, decisionPoint, optimal {choice, consequence},
+  alternatives [1-3 × {choice, consequence}]. Mismas reglas de uso que branching_scenario_challenge
+  (contenido que ES una decisión con consecuencias). Equivale a ese bloque.
+- `tpl_quick_recall` — items [1-2 × {conceptLabel, prompt, expectedAnswer}]. Mismas reglas que
+  spaced_interleaved_retrieval (solo primer bloque y solo con dueRetrieval). Equivale a ese bloque.
+
+Cada plantilla CUENTA como el blockType al que equivale para TODAS las reglas de arriba: no
+repetir el mismo tipo en bloques consecutivos, el ritmo de compuertas, el andamiaje, el tope de
+tipos dominantes y el tipo exacto que pida una regeneración. Varía entre plantillas y modos: no
+conviertas todo en opción múltiple.
+
 # VISUALES ESTÁTICOS (visualAid) — arXiv:2605.30174
 
 Nada de simuladores dinámicos ni entornos ejecutables: SOLO representaciones declarativas
