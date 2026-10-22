@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod application;
 pub mod commands;
+pub mod dev_trace;
 pub mod domain;
 pub mod error;
 pub mod notebook_store;
@@ -47,12 +48,17 @@ pub fn run() {
             // `tools::emit_tool_event`) so the UI can animate tool-running
             // turns differently from plain thinking ones.
             tools::set_tool_event_emitter(app.handle().clone());
+            // Developer mode: restore the persisted switch and let traces
+            // reach the UI as `dev://trace`.
+            dev_trace::set_app(app.handle().clone());
+            dev_trace::set_enabled(app.state::<AppState>().notebook_service.dev_mode_enabled());
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::providers::list_providers,
             commands::providers::save_provider,
+            commands::providers::set_active_provider,
             commands::providers::delete_provider,
             commands::providers::save_provider_key,
             commands::providers::provider_has_key,
@@ -85,6 +91,7 @@ pub fn run() {
             commands::notebook::start_class_notebook,
             commands::notebook::get_class_notebook_progress,
             commands::notebook::submit_gate_response,
+            commands::notebook::request_easier_step,
             commands::notebook::submit_retrieval_answer,
             commands::notebook::reveal_retrieval_answer,
             commands::notebook::get_course_skill_status,
@@ -100,10 +107,20 @@ pub fn run() {
             commands::notebook::regenerate_notebook_block,
             commands::notebook::reset_class_notebook,
             commands::notebook::save_notebook_state,
+            commands::notebook::save_block_annotation,
+            commands::notebook::get_concept_graph,
+            commands::notebook::save_concept,
+            commands::notebook::delete_concept,
+            commands::notebook::save_concept_link,
+            commands::notebook::delete_concept_link,
             commands::notebook::get_course_diagnostic_battery,
             commands::notebook::save_diagnostic_battery_answers,
             commands::notebook::get_learner_memory,
             commands::lexical_assistant::ask_lexical_assistant,
+            commands::dev::get_dev_mode,
+            commands::dev::set_dev_mode,
+            commands::dev::get_dev_trace,
+            commands::dev::clear_dev_trace,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

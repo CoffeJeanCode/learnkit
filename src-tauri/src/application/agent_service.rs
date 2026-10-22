@@ -57,7 +57,7 @@ impl AgentService {
 
     /// Persists the registry's current contents. Exposed (not just called
     /// internally by `create`/`delete`) so callers that mutate the registry
-    /// directly — e.g. [`AppState::heal_roadmap_agent_model`](crate::state::AppState::heal_roadmap_agent_model) —
+    /// directly — e.g. [`AppState::apply_active_provider`](crate::state::AppState::apply_active_provider) —
     /// can save the result without duplicating `FileStore` wiring.
     pub fn persist(&self) -> AppResult<()> {
         self.store.save_agents(&self.registry.list())

@@ -277,6 +277,9 @@ sequenceDiagram
 
 ---
 
+### El grafo de ideas del estudiante (fuera del flujo de generación)
+El estudiante puede escribir conceptos y dibujar relaciones entre clases/conceptos (botón «🕸 Grafo» y el paso opcional tras el cierre). Es **solo suyo**: las tablas `concepts` y `concept_links` no se leen en `render.rs`, `generation.rs` ni `grading.rs`, ningún agente las recibe y ningún comando del grafo llama a un modelo. La IA no crea ni sugiere relaciones; si algún día se quisiera usar el grafo como contexto, debería decidirse de forma explícita y con un test que lo refleje (hoy `the_graph_is_never_part_of_what_the_generator_or_the_grader_reads` lo prohíbe).
+
 ## 6. Eventos hacia el frontend
 
 | Canal | Emisor | Cuándo |

@@ -66,7 +66,7 @@ impl ProviderRegistry {
             let id = self.default_id(kind);
             if self.get(&id).is_err() {
                 self.upsert(ProviderConfig {
-                    id: id.clone(),
+                    id,
                     provider: *kind,
                     name: kind.display_name().to_string(),
                     default_model: None,
@@ -129,7 +129,7 @@ mod tests {
     }
 
     #[test]
-    fn defaults_seed_five_providers() {
+    fn defaults_seed_all_providers() {
         let r = ProviderRegistry::with_defaults();
         assert_eq!(r.list().len(), 6);
     }
@@ -151,6 +151,6 @@ mod tests {
         let openai = r.get("openai").expect("openai kept");
         assert_eq!(openai.default_model.as_deref(), Some("gpt-5"));
         assert_eq!(openai.base_url.as_deref(), Some("https://custom.example.com"));
-        assert_eq!(r.get("xiaomi").expect("xiaomi backfilled").name, "Xiaomi");
+        assert_eq!(r.get("xiaomi").expect("xiaomi backfilled").name, "Xiaomi MiMo");
     }
 }

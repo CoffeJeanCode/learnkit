@@ -5,8 +5,6 @@
 export type StudyVariant = "gamified" | "plain";
 
 export interface Presentation {
-  /** The "Capacidades" screen and its header entry. */
-  showCapabilityMap: boolean;
   /** The "Reto de transferencia" framing on the transfer mission. The
    *  mission itself exists in BOTH versions — it is what is measured. */
   showTransferFraming: boolean;
@@ -16,5 +14,5 @@ export interface Presentation {
  *  the gamified UI can never flash for a participant assigned `plain`. */
 export function presentationFor(variant: StudyVariant | null): Presentation {
   const gamified = variant === "gamified";
-  return { showCapabilityMap: gamified, showTransferFraming: gamified };
+  return { showTransferFraming: gamified };
 }

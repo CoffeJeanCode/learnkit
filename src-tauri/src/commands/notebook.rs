@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tauri::State;
 
 use crate::domain::learner_memory::LearnerCognitiveMemory;
-use crate::domain::notebook::{BlockUpdate, ClassRecord, ClosureFeedback, Course, DiagnosticBatteryState, GateResult, GateSubmission, NotebookPayload};
+use crate::domain::notebook::{BlockUpdate, ClassRecord, ClosureFeedback, Concept, ConceptGraph, ConceptLink, Course, DiagnosticBatteryState, GateResult, GateSubmission, NotebookPayload};
 use crate::application::notebook_service::RetrievalAnswerResult;
 use crate::domain::skill_evidence::SkillEvidence;
 use crate::domain::capability_map::CapabilityMap;
@@ -70,6 +70,66 @@ pub async fn submit_gate_response(
     submission: GateSubmission,
 ) -> AppResult<GateResult> {
     state.notebook_service.submit_gate_response(Some(&app), &block_id, submission).await
+}
+
+/// Saves the student's own note and/or selection state for one block. Merges
+/// only those two keys into the stored content (answer keys stay intact).
+#[tauri::command]
+pub fn save_block_annotation(
+    state: State<'_, AppState>,
+    notebook_id: String,
+    block_id: String,
+    note: Option<String>,
+    selection: Option<serde_json::Value>,
+) -> AppResult<()> {
+    state.notebook_service.save_block_annotation(&notebook_id, &block_id, note.as_deref(), selection.as_ref())
+}
+
+/// The student's own knowledge graph (concepts they wrote + relations they drew).
+#[tauri::command]
+pub fn get_concept_graph(state: State<'_, AppState>, course_id: String) -> AppResult<ConceptGraph> {
+    state.notebook_service.get_concept_graph(&course_id)
+}
+
+#[tauri::command]
+pub fn save_concept(state: State<'_, AppState>, course_id: String, class_id: String, label: String, id: Option<String>) -> AppResult<Concept> {
+    state.notebook_service.save_concept(&course_id, &class_id, &label, id.as_deref())
+}
+
+#[tauri::command]
+pub fn delete_concept(state: State<'_, AppState>, course_id: String, concept_id: String) -> AppResult<()> {
+    state.notebook_service.delete_concept(&course_id, &concept_id)
+}
+
+#[tauri::command]
+pub fn save_concept_link(
+    state: State<'_, AppState>,
+    course_id: String,
+    from_id: String,
+    to_id: String,
+    label: String,
+    id: Option<String>,
+) -> AppResult<ConceptLink> {
+    state.notebook_service.save_concept_link(&course_id, &from_id, &to_id, &label, id.as_deref())
+}
+
+#[tauri::command]
+pub fn delete_concept_link(state: State<'_, AppState>, course_id: String, link_id: String) -> AppResult<()> {
+    state.notebook_service.delete_concept_link(&course_id, &link_id)
+}
+
+/// Voluntary de-escalation: the student asks for an easier, more guided step
+/// instead of failing the active gate 3 times. Returns the same shape as
+/// `submit_gate_response` (the locked gate + the freshly generated block).
+#[tauri::command]
+pub async fn request_easier_step(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    block_id: String,
+    hints_shown: Option<u32>,
+    draft: Option<String>,
+) -> AppResult<GateResult> {
+    state.notebook_service.request_easier_step(Some(&app), &block_id, hints_shown, draft).await
 }
 
 /// Grades the closing block's reflection (`closure_feedback_grader`):

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { GenerationStage } from "../../components/AgentLoader";
 import type { GateResult, GateSubmission, NotebookBlock, NotebookBlockEvent, NotebookDocument } from "../../lib/schemas";
-import { onAgentEvent, onNotebookBlockEvent, regenerateNotebookBlock, retryPendingBlock as retryPendingBlockCommand, startClassNotebook, submitGateResponse, tauriError } from "../../lib/tauri";
+import { onAgentEvent, onNotebookBlockEvent, regenerateNotebookBlock, requestEasierStep as requestEasierStepCommand, retryPendingBlock as retryPendingBlockCommand, saveBlockAnnotation, startClassNotebook, submitGateResponse, tauriError } from "../../lib/tauri";
 
 export type BufferState = "idle" | "generating" | "error";
 
@@ -142,14 +142,50 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [classId, reloadToken]);
 
-  const submitGate = async (blockId: string, submission: GateSubmission): Promise<GateResult> => {
-    const result = await submitGateResponse(blockId, submission);
+  const applyGateResult = (result: GateResult) => {
     setBlocks((prev) => {
       let next = upsertBlock(prev, result.block);
       if (result.escalation_block) next = upsertBlock(next, result.escalation_block);
       if (result.next_block) next = upsertBlock(next, result.next_block);
       return next;
     });
+  };
+
+  const submitGate = async (blockId: string, submission: GateSubmission): Promise<GateResult> => {
+    const result = await submitGateResponse(blockId, submission);
+    applyGateResult(result);
+    return result;
+  };
+
+  /** Persists the student's note / selection for one block and mirrors it into
+   *  local state, so a remount (or a re-render from a gate result) already has
+   *  it. Failures are logged, never thrown: losing an annotation must not
+   *  interrupt the lesson. */
+  const annotateBlock = (blockId: string, patch: { note?: string; selection?: Record<string, unknown> }) => {
+    const documentId = documentIdRef.current;
+    if (!documentId) return;
+    setBlocks((prev) =>
+      prev.map((b) =>
+        b.id === blockId
+          ? {
+              ...b,
+              content_json: {
+                ...b.content_json,
+                ...(patch.note !== undefined ? { studentNote: patch.note } : {}),
+                ...(patch.selection !== undefined ? { studentState: patch.selection } : {}),
+              },
+            }
+          : b,
+      ),
+    );
+    saveBlockAnnotation(documentId, blockId, patch).catch((e) => console.error("save_block_annotation failed", e));
+  };
+
+  /** Voluntary de-escalation: the student asks for a more guided step instead
+   *  of failing the gate 3 times. Returns the locked gate + the new block. */
+  const requestEasierStep = async (blockId: string, hintsShown: number, draft: string): Promise<GateResult> => {
+    const result = await requestEasierStepCommand(blockId, hintsShown, draft);
+    applyGateResult(result);
     return result;
   };
 
@@ -205,6 +241,8 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
     error,
     stage,
     submitGate,
+    requestEasierStep,
+    annotateBlock,
     retryPendingBlock,
     cancelBuffer,
     regenerateBlock,

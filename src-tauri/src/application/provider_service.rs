@@ -34,6 +34,7 @@ impl ProviderService {
                     default_model: c.default_model,
                     base_url: c.base_url,
                     configured,
+                    active: false,
                 }
             })
             .collect();
@@ -55,6 +56,7 @@ impl ProviderService {
             name: config.name,
             default_model: config.default_model,
             base_url: config.base_url,
+            active: false,
         })
     }
 

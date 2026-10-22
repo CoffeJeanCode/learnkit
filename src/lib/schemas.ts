@@ -328,8 +328,8 @@ export const DynamicBlockTypeSchema = z.enum([
 // class's block sequence. Mirrors `domain::lesson_composition::
 // DisciplineProfile` in Rust, which is the actual source of truth (and where
 // each profile's suggested `DynamicBlockType` sequence + unit tests live).
-// Documentation/typing only on this side — nothing currently reads or writes
-// this value at runtime.
+// Documentation/typing only on this side: the backend infers the profile from
+// the class text and injects it into the generator's input as a hint.
 export const DisciplineProfileSchema = z.enum([
   "spatial_biological",
   "quantitative_math",
@@ -439,6 +439,12 @@ export const PredictionComparisonSchema = z.object({
   contrastNarrative: z.string(),
 });
 
+export const InteractiveStepSchema = z.object({
+  prompt: z.string(),
+  expectedToken: z.string(),
+  options: z.array(z.string()).nullish(),
+});
+
 export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
   z.object({
     blockType: z.literal("spaced_interleaved_retrieval"),
@@ -466,6 +472,11 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
   }),
   z.object({
     blockType: z.literal("branching_scenario_challenge"),
+    // The learner's own annotations on this question (see `save_block_annotation`):
+    // a free-text note and the selection state to restore on reload. Nullish —
+    // absent on every block saved before they existed.
+    studentNote: z.string().nullish(),
+    studentState: z.record(z.string(), z.unknown()).nullish(),
     scenario: z.string(),
     decisionPoint: z.string(),
     branches: z.array(ScenarioBranchSchema),
@@ -476,21 +487,46 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
   }),
   z.object({
     blockType: z.literal("heuristic_error_audit"),
+    // The learner's own annotations on this question (see `save_block_annotation`):
+    // a free-text note and the selection state to restore on reload. Nullish —
+    // absent on every block saved before they existed.
+    studentNote: z.string().nullish(),
+    studentState: z.record(z.string(), z.unknown()).nullish(),
     instruction: z.string(),
     flawedRepresentation: FlawedRepresentationSchema,
     guidingQuestions: z.array(z.string()),
     // Redacted (absent) until the gate is actually passed — see
     // `redact_block` — so this can't be required.
     modelSolution: z.string().optional(),
+    // 1-based line of `buggySnippetOrDiagram` holding the root cause ("cacería
+    // de bugs"). Nullish — Rust's `Option<u32>` — and, like `modelSolution`,
+    // redacted until the gate is passed, so it is absent for most renders and
+    // for every block persisted before the field existed.
+    faultyLineNumber: z.number().int().nullish(),
     // Optional — for a flaw that's spatial/visual rather than purely textual.
     // Nullish — Rust's `Option<StaticVisualSpec>` takes an explicit null.
     visualAid: StaticVisualSpecSchema.nullish(),
   }),
   z.object({
     blockType: z.literal("interactive_prediction_gate"),
+    // The learner's own annotations on this question (see `save_block_annotation`):
+    // a free-text note and the selection state to restore on reload. Nullish —
+    // absent on every block saved before they existed.
+    studentNote: z.string().nullish(),
+    studentState: z.record(z.string(), z.unknown()).nullish(),
     question: z.string(),
-    options: z.array(z.string()),
-    conceptualFeedbackMap: z.record(z.string(), z.string()),
+    // `options`/`conceptualFeedbackMap` are only filled in `multiple_choice`
+    // (Rust: `#[serde(default)]`), so the other modes legitimately omit them.
+    options: z.array(z.string()).default([]),
+    conceptualFeedbackMap: z.record(z.string(), z.string()).default({}),
+    // Absent = `multiple_choice` (every block persisted before this existed).
+    interactionMode: z.enum(["multiple_choice", "causal_chain_order", "boundary_case_audit"]).nullish(),
+    // `causal_chain_order`: the links in the order shown. The right order
+    // (`correctOrder`) is an answer key and never reaches the client.
+    shuffledSteps: z.array(z.string()).nullish(),
+    // `boundary_case_audit`: micro-cases to classify. `followsRule` is the
+    // answer key — stripped server-side, so it is only ever absent here.
+    boundaryCases: z.array(z.object({ statement: z.string(), followsRule: z.boolean().nullish() })).nullish(),
     // Deliberately NO `correctOption` field — the answer key never reaches
     // the client at all (see `redact_block`), enforced here at the type
     // level too.
@@ -500,6 +536,11 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
   }),
   z.object({
     blockType: z.literal("hands_on_mission"),
+    // The learner's own annotations on this question (see `save_block_annotation`):
+    // a free-text note and the selection state to restore on reload. Nullish —
+    // absent on every block saved before they existed.
+    studentNote: z.string().nullish(),
+    studentState: z.record(z.string(), z.unknown()).nullish(),
     challengeStatement: z.string(),
     expectedMilestoneArtifact: z.string(),
     constraints: z.array(z.string()),
@@ -507,6 +548,14 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
     evaluationRubricSummary: z.array(z.string()),
     // true only for the transfer challenge (new case, no hints); omitted otherwise.
     isTransfer: z.boolean().nullish(),
+    // How much help the mission gives. Nullish: missions persisted before the
+    // scaffolding redesign carry none of these three fields.
+    supportLevel: z.enum(["full", "guided", "faded", "independent"]).nullish(),
+    // Solution ~70% worked out with `___` / TODO holes; pre-fills the editor.
+    workedTemplate: z.string().nullish(),
+    // Cloze micro-steps done before the full challenge. Formative only, so the
+    // expected token travels to the client and is checked there.
+    interactiveSteps: z.array(InteractiveStepSchema).nullish(),
     // Optional — a reference diagram of the target artifact, when it helps.
     // Nullish — Rust's `Option<StaticVisualSpec>` takes an explicit null.
     visualAid: StaticVisualSpecSchema.nullish(),
@@ -525,6 +574,33 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
     studentReflection: z.string().optional(),
   }),
 ]);
+
+// --- The student's knowledge graph --------------------------------------------
+// Concepts the student wrote and relations they drew (see `Concept` /
+// `ConceptLink` in Rust). A relation's ends are a class id or a concept id of
+// the same course. Nothing here is generated.
+export const ConceptSchema = z.object({
+  id: z.string(),
+  courseId: z.string(),
+  classId: z.string(),
+  label: z.string(),
+  createdAtMs: z.number(),
+});
+
+export const ConceptLinkSchema = z.object({
+  id: z.string(),
+  courseId: z.string(),
+  fromId: z.string(),
+  toId: z.string(),
+  // The relation in the student's own words (required server-side).
+  label: z.string(),
+  createdAtMs: z.number(),
+});
+
+export const ConceptGraphSchema = z.object({
+  concepts: z.array(ConceptSchema),
+  links: z.array(ConceptLinkSchema),
+});
 
 export const CourseSchema = z.object({
   id: z.string(),
@@ -612,10 +688,20 @@ export const NotebookPayloadSchema = z.object({
 // match `DynamicBlockTypeSchema`.
 
 export const GateSubmissionSchema = z.discriminatedUnion("blockType", [
-  z.object({ blockType: z.literal("interactive_prediction_gate"), selectedOption: z.string() }),
+  // Which answer field is set depends on the block's `interactionMode`:
+  // `selectedOption` (multiple choice), `orderedSteps` (causal chain) or
+  // `caseVerdicts` (boundary cases, `true` = "cumple la regla").
+  z.object({
+    blockType: z.literal("interactive_prediction_gate"),
+    selectedOption: z.string().nullish(),
+    orderedSteps: z.array(z.string()).nullish(),
+    caseVerdicts: z.array(z.boolean()).nullish(),
+  }),
   z.object({ blockType: z.literal("branching_scenario_challenge"), selectedChoice: z.string() }),
-  z.object({ blockType: z.literal("heuristic_error_audit"), diagnosisText: z.string() }),
-  z.object({ blockType: z.literal("hands_on_mission"), submissionText: z.string() }),
+  // `selectedLine`: the 1-based line flagged in the "bug bounty" click.
+  z.object({ blockType: z.literal("heuristic_error_audit"), diagnosisText: z.string(), selectedLine: z.number().int().nullish() }),
+  // `hintsShown`: progressive hints opened before submitting (feeds SkillEvidence).
+  z.object({ blockType: z.literal("hands_on_mission"), submissionText: z.string(), hintsShown: z.number().int().nullish() }),
 ]);
 
 export const GateResultSchema = z.object({
@@ -665,7 +751,11 @@ export type DiagnosticBatteryState = z.infer<typeof DiagnosticBatteryStateSchema
 export type ScenarioBranch = z.infer<typeof ScenarioBranchSchema>;
 export type RetrievalPrompt = z.infer<typeof RetrievalPromptSchema>;
 export type DynamicSectionBlock = z.infer<typeof DynamicSectionBlockSchema>;
+export type InteractiveStep = z.infer<typeof InteractiveStepSchema>;
 export type Course = z.infer<typeof CourseSchema>;
+export type Concept = z.infer<typeof ConceptSchema>;
+export type ConceptLink = z.infer<typeof ConceptLinkSchema>;
+export type ConceptGraph = z.infer<typeof ConceptGraphSchema>;
 export type SyllabusMilestone = z.infer<typeof SyllabusMilestoneSchema>;
 export type ClassRecord = z.infer<typeof ClassRecordSchema>;
 export type NotebookDocument = z.infer<typeof NotebookDocumentSchema>;

@@ -21,7 +21,7 @@ use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, SkillEvidence
 use crate::domain::study::{resolve_variant, StudyEvent, StudyEventKind, StudySettings, StudyVariant, VariantMode};
 use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{
-    BlockStatus, BlockUpdate, ClassRecord, Course, DiagnosticBattery, DiagnosticBatteryState, DynamicBlockType,
+    BlockStatus, BlockUpdate, ClassRecord, Concept, ConceptGraph, ConceptLink, Course, DiagnosticBattery, GateAttempt, DiagnosticBatteryState, DynamicBlockType,
     NotebookBlock, NotebookDocument, NotebookPayload, NotebookStatus, SyllabusMilestone,
 };
 use crate::error::{AppError, AppResult};
@@ -78,6 +78,46 @@ CREATE TABLE IF NOT EXISTS notebook_blocks (
     last_feedback TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_blocks_document ON notebook_blocks(document_id);
+
+-- What the student actually answered on each gate attempt, pass or fail —
+-- the traceability source for the closing block's prediction-vs-result
+-- contrast (the block row only keeps `attempt_count`). Additive table, so
+-- databases created before it just gain it on next open.
+CREATE TABLE IF NOT EXISTS gate_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id TEXT NOT NULL REFERENCES notebook_documents(id) ON DELETE CASCADE,
+    block_id TEXT NOT NULL,
+    block_type TEXT NOT NULL,
+    attempt_number INTEGER NOT NULL,
+    answer_text TEXT NOT NULL,
+    passed INTEGER NOT NULL,
+    at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_gate_attempts_document ON gate_attempts(document_id, id);
+
+-- The student's own knowledge graph: concepts they wrote about a class, and the
+-- relations they drew between classes/concepts. Written ONLY by the student —
+-- nothing generated ever lands here, and no prompt reads it. `concept_links`
+-- ends point at either a `classes.id` or a `concepts.id`, so they carry no FK
+-- (the service validates them); the course FK cleans everything on delete.
+CREATE TABLE IF NOT EXISTS concepts (
+    id TEXT PRIMARY KEY,
+    course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    class_id TEXT NOT NULL REFERENCES classes(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_concepts_course ON concepts(course_id);
+
+CREATE TABLE IF NOT EXISTS concept_links (
+    id TEXT PRIMARY KEY,
+    course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
+    from_id TEXT NOT NULL,
+    to_id TEXT NOT NULL,
+    label TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_concept_links_course ON concept_links(course_id);
 
 -- One row per learner (today, always `learner_memory::LOCAL_LEARNER_ID` —
 -- see that module's doc comment) — the WHOLE `LearnerCognitiveMemory`
@@ -703,6 +743,17 @@ impl NotebookStore {
         Ok(())
     }
 
+    /// Developer-mode switch (`dev.enabled`), off unless explicitly set.
+    pub fn dev_mode(&self) -> AppResult<bool> {
+        let conn = self.lock();
+        Ok(Self::setting_get(&conn, "dev.enabled")?.as_deref() == Some("1"))
+    }
+
+    pub fn set_dev_mode(&self, on: bool) -> AppResult<()> {
+        let conn = self.lock();
+        Self::setting_set(&conn, "dev.enabled", if on { "1" } else { "0" })
+    }
+
     /// The study settings in force, creating on first use: a pseudonymous
     /// participant id and — when the mode is `random` — ONE random assignment
     /// that is then kept forever (see `domain::study::resolve_variant`).
@@ -1028,6 +1079,57 @@ impl NotebookStore {
     /// verbatim. A no-op if one is already recorded — this field is written
     /// exactly once per notebook, by design (see
     /// `NotebookDocument::initial_prediction`).
+    /// Appends one gate attempt to the document's answer history.
+    pub fn append_gate_attempt(&self, attempt: &GateAttempt) -> AppResult<()> {
+        self.lock().execute(
+            "INSERT INTO gate_attempts (document_id, block_id, block_type, attempt_number, answer_text, passed, at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                attempt.document_id,
+                attempt.block_id,
+                attempt.block_type.as_str(),
+                attempt.attempt_number,
+                attempt.answer_text,
+                attempt.passed,
+                attempt.at_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Every recorded gate attempt of one document, oldest first.
+    pub fn list_gate_attempts(&self, document_id: &str) -> AppResult<Vec<GateAttempt>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT document_id, block_id, block_type, attempt_number, answer_text, passed, at_ms
+             FROM gate_attempts WHERE document_id = ?1 ORDER BY id ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![document_id], |row| {
+                let block_type: String = row.get(2)?;
+                Ok((
+                    GateAttempt {
+                        document_id: row.get(0)?,
+                        block_id: row.get(1)?,
+                        block_type: DynamicBlockType::InteractivePredictionGate,
+                        attempt_number: row.get(3)?,
+                        answer_text: row.get(4)?,
+                        passed: row.get(5)?,
+                        at_ms: row.get(6)?,
+                    },
+                    block_type,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(mut a, bt)| {
+                a.block_type = DynamicBlockType::parse(&bt)?;
+                Some(a)
+            })
+            .collect())
+    }
+
     pub fn set_document_initial_prediction(&self, document_id: &str, value: &str) -> AppResult<()> {
         self.lock().execute(
             "UPDATE notebook_documents SET initial_prediction = ?1 WHERE id = ?2 AND initial_prediction IS NULL",
@@ -1102,6 +1204,226 @@ impl NotebookStore {
         tx.execute("UPDATE notebook_documents SET updated_at_ms = ?1 WHERE id = ?2", params![now_ms(), notebook_id])?;
         tx.commit()?;
         Ok(())
+    }
+
+    // --- The student's knowledge graph (concepts + relations) ---------------
+
+    /// Every concept and relation of one course, oldest first.
+    pub fn list_concept_graph(&self, course_id: &str) -> AppResult<ConceptGraph> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, course_id, class_id, label, created_at_ms FROM concepts WHERE course_id = ?1 ORDER BY created_at_ms ASC, rowid ASC",
+        )?;
+        let concepts = stmt
+            .query_map(params![course_id], |r| {
+                Ok(Concept { id: r.get(0)?, course_id: r.get(1)?, class_id: r.get(2)?, label: r.get(3)?, created_at_ms: r.get(4)? })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, course_id, from_id, to_id, label, created_at_ms FROM concept_links WHERE course_id = ?1 ORDER BY created_at_ms ASC, rowid ASC",
+        )?;
+        let links = stmt
+            .query_map(params![course_id], |r| {
+                Ok(ConceptLink {
+                    id: r.get(0)?,
+                    course_id: r.get(1)?,
+                    from_id: r.get(2)?,
+                    to_id: r.get(3)?,
+                    label: r.get(4)?,
+                    created_at_ms: r.get(5)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ConceptGraph { concepts, links })
+    }
+
+    pub fn count_concepts(&self, course_id: &str) -> AppResult<usize> {
+        let n: i64 = self.lock().query_row("SELECT COUNT(*) FROM concepts WHERE course_id = ?1", params![course_id], |r| r.get(0))?;
+        Ok(n as usize)
+    }
+
+    /// `true` when `class_id` is a class of `course_id`.
+    pub fn class_in_course(&self, course_id: &str, class_id: &str) -> AppResult<bool> {
+        let n: i64 = self.lock().query_row(
+            "SELECT COUNT(*) FROM classes c JOIN syllabus_milestones m ON m.id = c.milestone_id WHERE c.id = ?1 AND m.course_id = ?2",
+            params![class_id, course_id],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    /// `true` when `node_id` is a class or a concept of `course_id` — the two
+    /// kinds of node a relation can connect.
+    pub fn node_in_course(&self, course_id: &str, node_id: &str) -> AppResult<bool> {
+        if self.class_in_course(course_id, node_id)? {
+            return Ok(true);
+        }
+        let n: i64 = self.lock().query_row(
+            "SELECT COUNT(*) FROM concepts WHERE id = ?1 AND course_id = ?2",
+            params![node_id, course_id],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Creates a concept (`id` `None`) or renames/moves an existing one of the
+    /// same course. `None` when `id` names no concept of that course.
+    pub fn upsert_concept(&self, course_id: &str, class_id: &str, label: &str, id: Option<&str>) -> AppResult<Option<Concept>> {
+        let conn = self.lock();
+        match id {
+            None => {
+                let concept = Concept {
+                    id: Uuid::new_v4().to_string(),
+                    course_id: course_id.to_string(),
+                    class_id: class_id.to_string(),
+                    label: label.to_string(),
+                    created_at_ms: now_ms(),
+                };
+                conn.execute(
+                    "INSERT INTO concepts (id, course_id, class_id, label, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![concept.id, concept.course_id, concept.class_id, concept.label, concept.created_at_ms],
+                )?;
+                Ok(Some(concept))
+            }
+            Some(id) => {
+                let changed = conn.execute(
+                    "UPDATE concepts SET label = ?1, class_id = ?2 WHERE id = ?3 AND course_id = ?4",
+                    params![label, class_id, id, course_id],
+                )?;
+                if changed == 0 {
+                    return Ok(None);
+                }
+                Ok(conn
+                    .query_row(
+                        "SELECT id, course_id, class_id, label, created_at_ms FROM concepts WHERE id = ?1",
+                        params![id],
+                        |r| Ok(Concept { id: r.get(0)?, course_id: r.get(1)?, class_id: r.get(2)?, label: r.get(3)?, created_at_ms: r.get(4)? }),
+                    )
+                    .optional()?)
+            }
+        }
+    }
+
+    /// Deletes a concept AND every relation touching it, atomically. `false`
+    /// when it didn't exist.
+    pub fn delete_concept(&self, course_id: &str, concept_id: &str) -> AppResult<bool> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM concept_links WHERE course_id = ?1 AND (from_id = ?2 OR to_id = ?2)", params![course_id, concept_id])?;
+        let removed = tx.execute("DELETE FROM concepts WHERE id = ?1 AND course_id = ?2", params![concept_id, course_id])?;
+        tx.commit()?;
+        Ok(removed > 0)
+    }
+
+    /// `true` when the same relation (same ends, same words) already exists.
+    pub fn concept_link_exists(&self, course_id: &str, from_id: &str, to_id: &str, label: &str, except_id: Option<&str>) -> AppResult<bool> {
+        let n: i64 = self.lock().query_row(
+            "SELECT COUNT(*) FROM concept_links WHERE course_id = ?1 AND from_id = ?2 AND to_id = ?3 AND label = ?4 AND id != ?5",
+            params![course_id, from_id, to_id, label, except_id.unwrap_or("")],
+            |r| r.get(0),
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Creates a relation (`id` `None`) or rewrites an existing one of the same
+    /// course. `None` when `id` names no relation of that course.
+    pub fn upsert_concept_link(&self, course_id: &str, from_id: &str, to_id: &str, label: &str, id: Option<&str>) -> AppResult<Option<ConceptLink>> {
+        let conn = self.lock();
+        match id {
+            None => {
+                let link = ConceptLink {
+                    id: Uuid::new_v4().to_string(),
+                    course_id: course_id.to_string(),
+                    from_id: from_id.to_string(),
+                    to_id: to_id.to_string(),
+                    label: label.to_string(),
+                    created_at_ms: now_ms(),
+                };
+                conn.execute(
+                    "INSERT INTO concept_links (id, course_id, from_id, to_id, label, created_at_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![link.id, link.course_id, link.from_id, link.to_id, link.label, link.created_at_ms],
+                )?;
+                Ok(Some(link))
+            }
+            Some(id) => {
+                let changed = conn.execute(
+                    "UPDATE concept_links SET from_id = ?1, to_id = ?2, label = ?3 WHERE id = ?4 AND course_id = ?5",
+                    params![from_id, to_id, label, id, course_id],
+                )?;
+                if changed == 0 {
+                    return Ok(None);
+                }
+                Ok(conn
+                    .query_row(
+                        "SELECT id, course_id, from_id, to_id, label, created_at_ms FROM concept_links WHERE id = ?1",
+                        params![id],
+                        |r| {
+                            Ok(ConceptLink {
+                                id: r.get(0)?,
+                                course_id: r.get(1)?,
+                                from_id: r.get(2)?,
+                                to_id: r.get(3)?,
+                                label: r.get(4)?,
+                                created_at_ms: r.get(5)?,
+                            })
+                        },
+                    )
+                    .optional()?)
+            }
+        }
+    }
+
+    pub fn delete_concept_link(&self, course_id: &str, link_id: &str) -> AppResult<bool> {
+        let removed = self.lock().execute("DELETE FROM concept_links WHERE id = ?1 AND course_id = ?2", params![link_id, course_id])?;
+        Ok(removed > 0)
+    }
+
+    /// Merges the learner's own annotations into ONE block's stored content:
+    /// `studentNote` (free text) and `studentState` (the UI selection to
+    /// restore — chosen/discarded options, ordering, drafts). Only these two
+    /// keys are ever touched, so the answer keys the redacted client copy
+    /// lacks (`correctOption`, ...) survive — unlike `update_block_contents`,
+    /// which overwrites the whole payload. `None` leaves a key as it was; an
+    /// empty note or a `null` state removes it. Returns `false` when the block
+    /// doesn't belong to `notebook_id`.
+    pub fn merge_block_annotation(
+        &self,
+        notebook_id: &str,
+        block_id: &str,
+        note: Option<&str>,
+        state: Option<&serde_json::Value>,
+    ) -> AppResult<bool> {
+        let conn = self.lock();
+        let stored: Option<String> = conn
+            .query_row(
+                "SELECT content_json FROM notebook_blocks WHERE id = ?1 AND document_id = ?2",
+                params![block_id, notebook_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(stored) = stored else { return Ok(false) };
+        let mut content: serde_json::Value = serde_json::from_str(&stored).map_err(|e| AppError::Persistence(e.to_string()))?;
+        let Some(obj) = content.as_object_mut() else {
+            return Err(AppError::Persistence("block content is not an object".to_string()));
+        };
+        if let Some(note) = note {
+            if note.trim().is_empty() {
+                obj.remove("studentNote");
+            } else {
+                obj.insert("studentNote".to_string(), serde_json::Value::String(note.to_string()));
+            }
+        }
+        if let Some(state) = state {
+            if state.is_null() {
+                obj.remove("studentState");
+            } else {
+                obj.insert("studentState".to_string(), state.clone());
+            }
+        }
+        let text = serde_json::to_string(&content).map_err(|e| AppError::Persistence(e.to_string()))?;
+        conn.execute("UPDATE notebook_blocks SET content_json = ?1 WHERE id = ?2", params![text, block_id])?;
+        conn.execute("UPDATE notebook_documents SET updated_at_ms = ?1 WHERE id = ?2", params![now_ms(), notebook_id])?;
+        Ok(true)
     }
 
     /// Replaces ONE block's payload in place — the "regenerate this broken

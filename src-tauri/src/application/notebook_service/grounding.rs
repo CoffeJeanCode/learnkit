@@ -9,7 +9,8 @@
 use std::collections::HashMap;
 
 use crate::domain::notebook::{
-    BlockStatus, DynamicBlockType, GeneratedSectionBlock, MermaidChartType, NotebookBlock, StaticVisualSpec,
+    BlockStatus, DynamicBlockType, GeneratedSectionBlock, InteractionMode, MermaidChartType, MissionSupportLevel, NotebookBlock,
+    StaticVisualSpec,
 };
 
 /// The interchangeable "practice/activity" family — these three all serve
@@ -126,15 +127,25 @@ pub(super) fn single_block_violations(
     }
     let is_transfer = matches!(block, GeneratedSectionBlock::HandsOnMission { is_transfer: true, .. });
     if let Some(last) = prior_types.last() {
-        // A transfer mission may directly follow the practice mission that
-        // completed mastery: it is a different case, not a repeat.
-        if *last == block.block_type() && !is_transfer {
+        // A transfer mission may directly follow the mission that completed
+        // mastery, and an escalation may answer a mission with a MORE
+        // scaffolded mission (the student asked for an easier step).
+        let eased_mission = is_escalation
+            && matches!(
+                block,
+                GeneratedSectionBlock::HandsOnMission {
+                    support_level: Some(MissionSupportLevel::Full | MissionSupportLevel::Guided | MissionSupportLevel::Faded),
+                    ..
+                }
+            );
+        if *last == block.block_type() && !is_transfer && !eased_mission {
             v.push(format!(
                 "blockType {} se repite consecutivamente respecto al bloque anterior — la secuencia debe variar",
                 block.block_type().as_str()
             ));
         }
     }
+    v.extend(mission_support_violations(prior_types, block));
     let is_first_block = prior_types.is_empty();
     if is_first_block && has_due_retrieval && !is_escalation && block.block_type() != DynamicBlockType::SpacedInterleavedRetrieval {
         v.push(
@@ -169,6 +180,58 @@ pub(super) fn single_block_violations(
         ));
     }
     v.extend(block_field_violations(total_so_far.saturating_sub(1), block));
+    v
+}
+
+/// Scaffolding monotonicity for `hands_on_mission`: theory must never jump
+/// straight to an independent challenge. Judged from the prior block TYPES:
+/// - a mission must declare its `supportLevel`;
+/// - `independent` is reserved for the transfer mission (it needs both gates
+///   passed, so it is never the first thing after teaching);
+/// - the first practice after a teaching block (no gate in between) has to be
+///   `guided`/`faded` — the bridge between "I read it" and "I do it alone";
+/// - `guided`/`faded` missions must hand the student something to start from
+///   (`workedTemplate` or `interactiveSteps`), never a blank page.
+fn mission_support_violations(prior_types: &[DynamicBlockType], block: &GeneratedSectionBlock) -> Vec<String> {
+    let GeneratedSectionBlock::HandsOnMission { support_level, is_transfer, worked_template, interactive_steps, .. } = block else {
+        return Vec::new();
+    };
+    let mut v = Vec::new();
+    let Some(level) = support_level else {
+        v.push("hands_on_mission: declara supportLevel (full | guided | faded | independent) según scaffolding.supportLevel".to_string());
+        return v;
+    };
+    if *is_transfer {
+        if *level != MissionSupportLevel::Independent {
+            v.push("hands_on_mission de transferencia (isTransfer): supportLevel debe ser \"independent\"".to_string());
+        }
+        return v;
+    }
+    if *level == MissionSupportLevel::Independent {
+        v.push(
+            "hands_on_mission con supportLevel \"independent\" solo es válido como reto de transferencia (isTransfer=true, tras \
+             superar ambas compuertas) — antes usa \"guided\" o \"faded\""
+                .to_string(),
+        );
+    }
+    let first_practice_after_teaching = prior_types
+        .iter()
+        .rposition(|t| matches!(t, DynamicBlockType::AnchoredMicroTheory | DynamicBlockType::DeclarativeVisualDiagram))
+        .is_some_and(|idx| !prior_types[idx + 1..].iter().any(|t| t.is_gate()));
+    if first_practice_after_teaching && !matches!(level, MissionSupportLevel::Guided | MissionSupportLevel::Faded) {
+        v.push(
+            "el primer bloque práctico tras la teoría/diagrama no puede ser una hands_on_mission sin andamiaje: debe ser \
+             supportLevel \"guided\" o \"faded\" (o un bloque intermedio de chequeo antes)"
+                .to_string(),
+        );
+    }
+    if matches!(level, MissionSupportLevel::Guided | MissionSupportLevel::Faded) {
+        let has_template = worked_template.as_deref().is_some_and(|t| !t.trim().is_empty());
+        let has_steps = interactive_steps.as_ref().is_some_and(|s| !s.is_empty());
+        if !has_template && !has_steps {
+            v.push("hands_on_mission guided/faded: incluye workedTemplate (solución resuelta al ~70% con huecos ___ o TODO) y/o interactiveSteps — el estudiante no debe empezar frente a una hoja en blanco".to_string());
+        }
+    }
     v
 }
 
@@ -258,7 +321,14 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
                 v.extend(visual_violations(i, visual));
             }
         }
-        GeneratedSectionBlock::HeuristicErrorAudit { instruction, flawed_representation, guiding_questions, model_solution, visual_aid } => {
+        GeneratedSectionBlock::HeuristicErrorAudit {
+            instruction,
+            flawed_representation,
+            guiding_questions,
+            model_solution,
+            faulty_line_number,
+            visual_aid,
+        } => {
             if instruction.trim().is_empty() {
                 v.push(empty("instruction"));
             }
@@ -271,24 +341,78 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
             if model_solution.trim().is_empty() {
                 v.push(empty("modelSolution"));
             }
+            if let Some(line) = faulty_line_number {
+                let lines = flawed_representation.buggy_snippet_or_diagram.lines().count() as u32;
+                if *line == 0 || *line > lines {
+                    v.push(format!(
+                        "bloque {i} (heuristic_error_audit): faultyLineNumber {line} fuera de rango — buggySnippetOrDiagram tiene {lines} líneas (se cuenta desde 1)"
+                    ));
+                }
+            }
             if let Some(visual) = visual_aid {
                 v.extend(visual_violations(i, visual));
             }
         }
-        GeneratedSectionBlock::InteractivePredictionGate { question, options, conceptual_feedback_map, correct_option, visual_aid } => {
+        GeneratedSectionBlock::InteractivePredictionGate {
+            question,
+            options,
+            conceptual_feedback_map,
+            correct_option,
+            interaction_mode,
+            shuffled_steps,
+            correct_order,
+            boundary_cases,
+            visual_aid,
+        } => {
             if question.trim().is_empty() {
                 v.push(empty("question"));
             }
-            if !(2..=4).contains(&options.len()) {
-                v.push(format!("bloque {i} (interactive_prediction_gate): options tiene {} elementos, debe tener 2-4", options.len()));
-            }
-            for opt in options {
-                if !conceptual_feedback_map.contains_key(opt) {
-                    v.push(format!("bloque {i} (interactive_prediction_gate): falta conceptualFeedbackMap para la opción \"{opt}\""));
+            match interaction_mode.unwrap_or(InteractionMode::MultipleChoice) {
+                InteractionMode::MultipleChoice => {
+                    if !(2..=4).contains(&options.len()) {
+                        v.push(format!("bloque {i} (interactive_prediction_gate): options tiene {} elementos, debe tener 2-4", options.len()));
+                    }
+                    for opt in options {
+                        if !conceptual_feedback_map.contains_key(opt) {
+                            v.push(format!("bloque {i} (interactive_prediction_gate): falta conceptualFeedbackMap para la opción \"{opt}\""));
+                        }
+                    }
+                    if !options.contains(correct_option) {
+                        v.push(format!("bloque {i} (interactive_prediction_gate): correctOption \"{correct_option}\" no está en options"));
+                    }
                 }
-            }
-            if !options.contains(correct_option) {
-                v.push(format!("bloque {i} (interactive_prediction_gate): correctOption \"{correct_option}\" no está en options"));
+                InteractionMode::CausalChainOrder => {
+                    let shuffled = shuffled_steps.as_deref().unwrap_or(&[]);
+                    let key = correct_order.as_deref().unwrap_or(&[]);
+                    if !(3..=4).contains(&shuffled.len()) {
+                        v.push(format!("bloque {i} (interactive_prediction_gate/causal_chain_order): shuffledSteps tiene {} eslabones, debe tener 3-4", shuffled.len()));
+                    }
+                    let mut a: Vec<&String> = shuffled.iter().collect();
+                    let mut b: Vec<&String> = key.iter().collect();
+                    a.sort();
+                    b.sort();
+                    if a != b {
+                        v.push(format!("bloque {i} (interactive_prediction_gate/causal_chain_order): correctOrder debe contener EXACTAMENTE los mismos eslabones que shuffledSteps, en orden causal"));
+                    } else if shuffled == key {
+                        v.push(format!("bloque {i} (interactive_prediction_gate/causal_chain_order): shuffledSteps ya viene en el orden correcto — desordénalo"));
+                    }
+                    let mut seen = std::collections::HashSet::new();
+                    if shuffled.iter().any(|s| s.trim().is_empty() || !seen.insert(s.trim().to_lowercase())) {
+                        v.push(format!("bloque {i} (interactive_prediction_gate/causal_chain_order): shuffledSteps tiene eslabones vacíos o repetidos"));
+                    }
+                }
+                InteractionMode::BoundaryCaseAudit => {
+                    let cases = boundary_cases.as_deref().unwrap_or(&[]);
+                    if !(2..=3).contains(&cases.len()) {
+                        v.push(format!("bloque {i} (interactive_prediction_gate/boundary_case_audit): boundaryCases tiene {} casos, debe tener 2-3", cases.len()));
+                    }
+                    if cases.iter().any(|c| c.statement.trim().is_empty()) {
+                        v.push(format!("bloque {i} (interactive_prediction_gate/boundary_case_audit): un caso tiene statement vacío"));
+                    }
+                    if !cases.iter().any(|c| c.follows_rule) || !cases.iter().any(|c| !c.follows_rule) {
+                        v.push(format!("bloque {i} (interactive_prediction_gate/boundary_case_audit): debe haber al menos un caso que cumple la regla y uno que la rompe (contraste real)"));
+                    }
+                }
             }
             if let Some(visual) = visual_aid {
                 v.extend(visual_violations(i, visual));
@@ -301,10 +425,31 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
             scaffolding_hints,
             evaluation_rubric_summary,
             is_transfer,
+            worked_template,
+            interactive_steps,
             visual_aid,
+            ..
         } => {
             if challenge_statement.trim().is_empty() {
                 v.push(empty("challengeStatement"));
+            }
+            if let Some(template) = worked_template.as_deref().filter(|t| !t.trim().is_empty()) {
+                if !template.contains("___") && !template.to_uppercase().contains("TODO") {
+                    v.push(format!("bloque {i} (hands_on_mission): workedTemplate no tiene huecos — márcalos con ___ o TODO para que el estudiante complete"));
+                }
+            }
+            for (idx, step) in interactive_steps.iter().flatten().enumerate() {
+                if step.prompt.trim().is_empty() || step.expected_token.trim().is_empty() {
+                    v.push(format!("bloque {i} (hands_on_mission): interactiveSteps[{idx}] tiene prompt o expectedToken vacío"));
+                }
+                if let Some(options) = &step.options {
+                    if !(2..=4).contains(&options.len()) || !options.contains(&step.expected_token) {
+                        v.push(format!("bloque {i} (hands_on_mission): interactiveSteps[{idx}].options debe tener 2-4 elementos e incluir expectedToken"));
+                    }
+                }
+            }
+            if *is_transfer && (worked_template.is_some() || interactive_steps.as_ref().is_some_and(|s| !s.is_empty())) {
+                v.push(format!("bloque {i} (hands_on_mission): una misión de transferencia no lleva workedTemplate ni interactiveSteps — se evalúa sin apoyo"));
             }
             if expected_milestone_artifact.trim().is_empty() {
                 v.push(empty("expectedMilestoneArtifact"));
@@ -393,6 +538,10 @@ mod tests {
             options: vec!["A".to_string(), "B".to_string()],
             conceptual_feedback_map: [("A".to_string(), "a".to_string()), ("B".to_string(), "b".to_string())].into_iter().collect(),
             correct_option: "B".to_string(),
+            interaction_mode: None,
+            shuffled_steps: None,
+            correct_order: None,
+            boundary_cases: None,
             visual_aid: None,
         }
     }
@@ -572,6 +721,7 @@ mod tests {
             },
             guiding_questions: vec!["q".to_string()],
             model_solution: "sol".to_string(),
+            faulty_line_number: None,
             visual_aid: None,
         };
         let usage: HashMap<String, i64> = [("heuristic_error_audit".to_string(), 2i64)].into_iter().collect();
@@ -589,6 +739,10 @@ mod tests {
                     .into_iter()
                     .collect(),
                 correct_option: "B".to_string(),
+                interaction_mode: None,
+                shuffled_steps: None,
+                correct_order: None,
+                boundary_cases: None,
                 visual_aid: Some(StaticVisualSpec::Mermaid {
                     chart_type,
                     code: code.to_string(),
@@ -622,6 +776,9 @@ mod tests {
             scaffolding_hints: if transfer { vec![] } else { vec!["h".to_string()] },
             evaluation_rubric_summary: vec!["r".to_string()],
             is_transfer: transfer,
+            support_level: Some(if transfer { MissionSupportLevel::Independent } else { MissionSupportLevel::Faded }),
+            worked_template: if transfer { None } else { Some("Completa: ___".to_string()) },
+            interactive_steps: None,
             visual_aid: None,
         };
         let prior = [DynamicBlockType::HandsOnMission];
@@ -633,5 +790,177 @@ mod tests {
         let usage: HashMap<String, i64> = [("hands_on_mission".to_string(), 3i64)].into_iter().collect();
         assert!(dominance_violation(&mission(true), &(usage.clone(), 3)).is_none(), "transfer is exempt from the variety rule");
         assert!(dominance_violation(&mission(false), &(usage, 3)).is_some());
+    }
+
+    fn mission_with(level: Option<MissionSupportLevel>, transfer: bool, template: Option<&str>) -> GeneratedSectionBlock {
+        GeneratedSectionBlock::HandsOnMission {
+            challenge_statement: "c".to_string(),
+            expected_milestone_artifact: "a".to_string(),
+            constraints: vec!["k".to_string()],
+            scaffolding_hints: if transfer { vec![] } else { vec!["h".to_string()] },
+            evaluation_rubric_summary: vec!["r".to_string()],
+            is_transfer: transfer,
+            support_level: level,
+            worked_template: template.map(str::to_string),
+            interactive_steps: None,
+            visual_aid: None,
+        }
+    }
+
+    const THEORY: DynamicBlockType = DynamicBlockType::AnchoredMicroTheory;
+
+    #[test]
+    fn theory_never_jumps_straight_to_an_independent_mission() {
+        let independent = mission_with(Some(MissionSupportLevel::Independent), false, None);
+        let v = single_block_violations(&[THEORY], &independent, 2, false, no_mastery(), false, false);
+        assert!(v.iter().any(|s| s.contains("independent")), "{v:?}");
+        assert!(v.iter().any(|s| s.contains("primer bloque práctico")), "{v:?}");
+    }
+
+    #[test]
+    fn the_first_practice_after_a_diagram_must_be_guided_or_faded_with_something_to_start_from() {
+        let diagram = DynamicBlockType::DeclarativeVisualDiagram;
+        let full = mission_with(Some(MissionSupportLevel::Full), false, Some("___"));
+        assert!(single_block_violations(&[THEORY, diagram], &full, 3, false, no_mastery(), false, false).iter().any(|s| s.contains("primer bloque práctico")));
+
+        let blank_page = mission_with(Some(MissionSupportLevel::Guided), false, None);
+        let v = single_block_violations(&[THEORY], &blank_page, 2, false, no_mastery(), false, false);
+        assert!(v.iter().any(|s| s.contains("workedTemplate")), "{v:?}");
+
+        let ok = mission_with(Some(MissionSupportLevel::Faded), false, Some("let x = ___;"));
+        assert!(single_block_violations(&[THEORY], &ok, 2, false, no_mastery(), false, false).is_empty());
+    }
+
+    #[test]
+    fn a_checking_gate_between_theory_and_mission_lifts_the_first_practice_rule() {
+        // theory -> gate (any outcome) -> mission: the bridge exists, so `full` is not flagged as a jump.
+        let gate = DynamicBlockType::InteractivePredictionGate;
+        let full = mission_with(Some(MissionSupportLevel::Full), false, Some("___"));
+        let v = single_block_violations(&[THEORY, gate], &full, 3, false, no_mastery(), false, false);
+        assert!(!v.iter().any(|s| s.contains("primer bloque práctico")), "{v:?}");
+    }
+
+    #[test]
+    fn a_mission_must_declare_its_level_and_independent_is_reserved_for_transfer() {
+        let undeclared = mission_with(None, false, None);
+        assert!(single_block_violations(&[], &undeclared, 1, false, no_mastery(), false, false).iter().any(|s| s.contains("declara supportLevel")));
+
+        let transfer = mission_with(Some(MissionSupportLevel::Independent), true, None);
+        assert!(single_block_violations(&[THEORY, DynamicBlockType::InteractivePredictionGate], &transfer, 3, false, full_mastery(), false, false).is_empty());
+
+        let guided_transfer = mission_with(Some(MissionSupportLevel::Guided), true, None);
+        assert!(single_block_violations(&[], &guided_transfer, 1, false, full_mastery(), false, false).iter().any(|s| s.contains("independent")));
+    }
+
+    #[test]
+    fn an_escalation_may_answer_a_mission_with_a_more_scaffolded_mission_but_nothing_else_repeats() {
+        let easier = mission_with(Some(MissionSupportLevel::Faded), false, Some("___"));
+        let prior = [DynamicBlockType::HandsOnMission];
+        assert!(single_block_violations(&prior, &easier, 2, true, no_mastery(), false, false).is_empty());
+        // Same block outside an escalation is still a consecutive repeat.
+        assert!(single_block_violations(&prior, &easier, 2, false, no_mastery(), false, false).iter().any(|s| s.contains("se repite consecutivamente")));
+    }
+
+    #[test]
+    fn mission_interactive_steps_and_templates_are_validated() {
+        let mut block = mission_with(Some(MissionSupportLevel::Faded), false, Some("sin huecos"));
+        if let GeneratedSectionBlock::HandsOnMission { interactive_steps, .. } = &mut block {
+            *interactive_steps = Some(vec![
+                crate::domain::notebook::InteractiveStep { prompt: "p".into(), expected_token: "x".into(), options: Some(vec!["a".into(), "b".into()]) },
+                crate::domain::notebook::InteractiveStep { prompt: "".into(), expected_token: "y".into(), options: None },
+            ]);
+        }
+        let v = single_block_violations(&[THEORY], &block, 2, false, no_mastery(), false, false);
+        assert!(v.iter().any(|s| s.contains("workedTemplate no tiene huecos")), "{v:?}");
+        assert!(v.iter().any(|s| s.contains("interactiveSteps[0].options")), "{v:?}");
+        assert!(v.iter().any(|s| s.contains("interactiveSteps[1]")), "{v:?}");
+    }
+
+    #[test]
+    fn faulty_line_number_must_point_inside_the_snippet() {
+        let audit = |line: Option<u32>| GeneratedSectionBlock::HeuristicErrorAudit {
+            instruction: "i".to_string(),
+            flawed_representation: crate::domain::notebook::FlawedRepresentation {
+                context: "c".to_string(),
+                buggy_snippet_or_diagram: "a = 1\nb = a +\nc = b".to_string(),
+                error_type: crate::domain::notebook::FlawErrorType::Syntax,
+            },
+            guiding_questions: vec!["q".to_string()],
+            model_solution: "m".to_string(),
+            faulty_line_number: line,
+            visual_aid: None,
+        };
+        assert!(single_block_violations(&[], &audit(Some(2)), 1, false, no_mastery(), false, false).is_empty());
+        assert!(single_block_violations(&[], &audit(None), 1, false, no_mastery(), false, false).is_empty());
+        for bad in [0, 4] {
+            let v = single_block_violations(&[], &audit(Some(bad)), 1, false, no_mastery(), false, false);
+            assert!(v.iter().any(|s| s.contains("faultyLineNumber")), "{bad}: {v:?}");
+        }
+    }
+
+    fn gate_in_mode(mode: InteractionMode, shuffled: &[&str], order: &[&str], cases: Option<Vec<(&str, bool)>>) -> GeneratedSectionBlock {
+        GeneratedSectionBlock::InteractivePredictionGate {
+            question: "q".to_string(),
+            options: vec![],
+            conceptual_feedback_map: Default::default(),
+            correct_option: String::new(),
+            interaction_mode: Some(mode),
+            shuffled_steps: Some(shuffled.iter().map(|s| s.to_string()).collect()),
+            correct_order: Some(order.iter().map(|s| s.to_string()).collect()),
+            boundary_cases: cases.map(|c| {
+                c.into_iter().map(|(statement, follows_rule)| crate::domain::notebook::BoundaryCase { statement: statement.to_string(), follows_rule }).collect()
+            }),
+            visual_aid: None,
+        }
+    }
+
+    #[test]
+    fn causal_chain_gates_need_the_same_links_in_a_different_order() {
+        let ok = gate_in_mode(InteractionMode::CausalChainOrder, &["B", "A", "C"], &["A", "B", "C"], None);
+        assert!(single_block_violations(&[], &ok, 1, false, no_mastery(), false, false).is_empty());
+
+        let already_ordered = gate_in_mode(InteractionMode::CausalChainOrder, &["A", "B", "C"], &["A", "B", "C"], None);
+        assert!(single_block_violations(&[], &already_ordered, 1, false, no_mastery(), false, false).iter().any(|s| s.contains("ya viene en el orden correcto")));
+
+        let mismatched = gate_in_mode(InteractionMode::CausalChainOrder, &["B", "A", "C"], &["A", "B", "Z"], None);
+        assert!(single_block_violations(&[], &mismatched, 1, false, no_mastery(), false, false).iter().any(|s| s.contains("EXACTAMENTE los mismos eslabones")));
+
+        let too_short = gate_in_mode(InteractionMode::CausalChainOrder, &["B", "A"], &["A", "B"], None);
+        assert!(single_block_violations(&[], &too_short, 1, false, no_mastery(), false, false).iter().any(|s| s.contains("3-4")));
+    }
+
+    #[test]
+    fn boundary_case_gates_need_a_real_contrast() {
+        let ok = gate_in_mode(InteractionMode::BoundaryCaseAudit, &[], &[], Some(vec![("c1", true), ("c2", false)]));
+        assert!(single_block_violations(&[], &ok, 1, false, no_mastery(), false, false).is_empty());
+
+        let one_sided = gate_in_mode(InteractionMode::BoundaryCaseAudit, &[], &[], Some(vec![("c1", true), ("c2", true)]));
+        assert!(single_block_violations(&[], &one_sided, 1, false, no_mastery(), false, false).iter().any(|s| s.contains("contraste real")));
+
+        let single = gate_in_mode(InteractionMode::BoundaryCaseAudit, &[], &[], Some(vec![("c1", true)]));
+        assert!(single_block_violations(&[], &single, 1, false, no_mastery(), false, false).iter().any(|s| s.contains("2-3")));
+    }
+
+    #[test]
+    fn every_expanded_template_passes_the_structural_review() {
+        use crate::domain::block_templates::{BlockTemplate, BranchSpec, OptionSpec};
+        use crate::domain::notebook::RetrievalPrompt;
+        let opt = |t: &str| OptionSpec { text: t.to_string(), feedback: format!("porque {t}") };
+        let br = |c: &str| BranchSpec { choice: c.to_string(), consequence: format!("{c} lleva a algo") };
+        let templates = vec![
+            BlockTemplate::MultipleChoice { question: "q".into(), correct: opt("A"), distractors: vec![opt("B"), opt("C")] },
+            BlockTemplate::TrueFalse { statement: "s".into(), is_true: true, explanation: "e".into() },
+            BlockTemplate::Ordering { question: "q".into(), steps_in_order: vec!["uno".into(), "dos".into(), "tres".into()] },
+            BlockTemplate::ScenarioChoice { scenario: "s".into(), decision_point: "d".into(), optimal: br("x"), alternatives: vec![br("y")] },
+        ];
+        for t in templates {
+            let block = t.expand();
+            let v = single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &block, 2, false, no_mastery(), false, false);
+            assert!(v.is_empty(), "{:?} -> {v:?}", block.block_type());
+        }
+        let recall = BlockTemplate::QuickRecall { items: vec![RetrievalPrompt { concept_label: "c".into(), prompt: "p".into(), expected_answer: "e".into() }] }.expand();
+        // Retrieval is only legal as the first block, so it is checked as such.
+        let v = single_block_violations(&[], &recall, 1, false, no_mastery(), false, true);
+        assert!(v.is_empty(), "{v:?}");
     }
 }

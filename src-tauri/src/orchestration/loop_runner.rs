@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
+use crate::dev_trace::{self, TraceEntry};
 use crate::error::{AppError, AppResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +44,29 @@ pub trait GeneratorCriticLoop: Send + Sync {
     fn backstop(&self, rejections: &[Cause]) -> Option<Self::Candidate>;
 
     fn exhausted_error(&self) -> AppError;
+
+    /// Dev-mode label (e.g. the class id) stamped on this loop's trace entries.
+    fn trace_scope(&self) -> Option<String> {
+        None
+    }
+}
+
+/// One loop event for the developer trace. No-op while dev mode is off.
+fn trace_loop<L: GeneratorCriticLoop>(job: &L, kind: &str, attempt: u8, verdict: &str, notes: Vec<String>, err: Option<&AppError>) {
+    if !dev_trace::is_enabled() {
+        return;
+    }
+    let mut entry = TraceEntry::new(kind);
+    entry.flow = Some("generator_critic_loop".to_string());
+    entry.scope = job.trace_scope();
+    entry.attempt = Some(attempt);
+    entry.verdict = Some(verdict.to_string());
+    entry.notes = notes;
+    let entry = match err {
+        Some(e) => dev_trace::with_error(entry, e),
+        None => entry,
+    };
+    dev_trace::record(entry);
 }
 
 pub async fn run_generator_critic_loop<L>(job: &L, max_attempts: u8, backoff: Duration) -> AppResult<LoopReport<L::Candidate>>
@@ -59,9 +83,11 @@ where
         match job.generate(&note).await {
             Ok(Some(candidate)) => match job.critique(&candidate).await {
                 CriticVerdict::Accept => {
+                    trace_loop(job, "loop_result", attempt + 1, "model", Vec::new(), None);
                     return Ok(LoopReport { value: candidate, source: LoopSource::Model, attempts: attempt + 1 });
                 }
                 CriticVerdict::Reject { feedback } => {
+                    trace_loop(job, "retry", attempt + 1, "critic_rejected", feedback.clone(), None);
                     content_rejected = true;
                     let cause = Cause::Rejected { feedback };
                     note = job.corrective_note(&cause);
@@ -69,22 +95,26 @@ where
                 }
             },
             Ok(None) => {
+                trace_loop(job, "retry", attempt + 1, "empty_attempt", vec!["el modelo no llamó a la tool de publicación".to_string()], None);
                 let cause = Cause::EmptyAttempt;
                 note = job.corrective_note(&cause);
                 rejections.push(cause);
             }
             Err(e) if e.is_output_budget_exhausted() && attempt + 1 < budget => {
                 tracing::warn!(error = %e, attempt = attempt + 1, "generator ran out of output budget, retrying more concisely");
+                trace_loop(job, "retry", attempt + 1, "output_budget_exhausted", Vec::new(), Some(&e));
                 let cause = Cause::OutputBudgetExhausted;
                 note = job.corrective_note(&cause);
                 rejections.push(cause);
             }
             Err(e) if e.is_transient() && attempt + 1 < budget => {
+                trace_loop(job, "retry", attempt + 1, "transient_error", vec![format!("backoff {}ms", (backoff * (attempt as u32 + 1)).as_millis())], Some(&e));
                 let delay = backoff * (attempt as u32 + 1);
                 tracing::warn!(error = %e, attempt = attempt + 1, backoff_ms = delay.as_millis(), "generator failed, retrying after backoff");
                 tokio::time::sleep(delay).await;
             }
             Err(e) => {
+                trace_loop(job, "loop_result", attempt + 1, "failed_permanently", Vec::new(), Some(&e));
                 tracing::warn!(error = %e, attempt = attempt + 1, "generator failed permanently");
                 last_err = Some(e);
                 break;
@@ -98,10 +128,13 @@ where
     if content_rejected {
         if let Some(value) = job.backstop(&rejections) {
             tracing::warn!(attempts = budget, "generator budget exhausted after content rejections, falling back to deterministic backstop");
+            trace_loop(job, "loop_result", budget, "backstop", vec!["se publicó el último candidato que pasó los chequeos deterministas".to_string()], None);
             return Ok(LoopReport { value, source: LoopSource::Backstop, attempts: budget });
         }
     }
-    Err(job.exhausted_error())
+    let err = job.exhausted_error();
+    trace_loop(job, "loop_result", budget, "exhausted", Vec::new(), Some(&err));
+    Err(err)
 }
 
 #[cfg(test)]

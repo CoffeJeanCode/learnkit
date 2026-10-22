@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useProviders } from "../../stores/providers";
+import { DevModeCard } from "../dev/DevModeCard";
 import { StudySettingsCard } from "../study/StudySettingsCard";
 import type { ModelInfo } from "../../types";
 
@@ -20,7 +21,7 @@ function ProviderCard({ id }: { id: string }) {
   const suggestions = useProviders((s) =>
     p ? (s.suggestionsCache[p.provider] ?? EMPTY_SUGGESTIONS) : EMPTY_SUGGESTIONS,
   );
-  const { saveConfig, saveKey, removeKey, test, loadModels, loadSuggestions } = useProviders.getState();
+  const { saveConfig, activate, saveKey, removeKey, test, loadModels, loadSuggestions } = useProviders.getState();
 
   const [apiKey, setApiKey] = useState("");
   const [defaultModel, setDefaultModel] = useState<string | null>(null);
@@ -50,6 +51,7 @@ function ProviderCard({ id }: { id: string }) {
       >
         <span className="provider-name">{p.name}</span>
         <span className="provider-head-right">
+          {p.active && <span className="badge ok">En uso ★</span>}
           <span className={p.configured ? "badge ok" : "badge"}>
             {p.configured ? "Lista ✓" : "Sin llave"}
           </span>
@@ -62,13 +64,25 @@ function ProviderCard({ id }: { id: string }) {
       {!open && (
         <p className="hint provider-sub">
           {p.configured
-            ? `Modelo: ${p.default_model ?? "por defecto del proveedor"}`
+            ? `Modelo: ${p.default_model ?? "sugerido por defecto"}`
             : "Falta la llave — expándelo para conectarlo"}
         </p>
       )}
 
       {open && (
         <>
+          <div className="section-label">0 · Uso</div>
+          {p.active ? (
+            <p className="hint">Este es el proveedor en uso: los agentes corren con {p.default_model ?? "su modelo sugerido"}.</p>
+          ) : (
+            <div className="row">
+              <button className="btn-primary" disabled={busy || !p.configured} onClick={() => activate(id)}>
+                Usar este proveedor
+              </button>
+              {!p.configured && <span className="hint">Guarda primero la llave.</span>}
+            </div>
+          )}
+
           <div className="section-label">1 · Llave de API</div>
           <label>
             Tu llave se guarda cifrada en este equipo y nunca se vuelve a mostrar.
@@ -127,6 +141,11 @@ function ProviderCard({ id }: { id: string }) {
               ))}
             </div>
           )}
+          <div className="row">
+            <button disabled={busy} onClick={() => saveConfig(id, { default_model: defaultModel, base_url: baseUrl })}>
+              Guardar modelo
+            </button>
+          </div>
           <details className="advanced">
             <summary>Opciones avanzadas</summary>
             <label>
@@ -165,6 +184,7 @@ export function ProvidersView() {
   }, []);
 
   const configured = providers.filter((p) => p.configured).length;
+  const active = providers.find((p) => p.active);
 
   return (
     <div className="view providers">
@@ -177,6 +197,11 @@ export function ProvidersView() {
           </>
         )}
       </p>
+      {active && (
+        <p className="muted">
+          En uso: <strong>{active.name}</strong> · {active.default_model ?? "modelo sugerido"}
+        </p>
+      )}
       {error && <div className="alert error" onClick={clearNotice}>{error}</div>}
       {notice && <div className="alert ok" onClick={clearNotice}>{notice}</div>}
       {loading && <p className="muted">Cargando…</p>}
@@ -186,6 +211,7 @@ export function ProvidersView() {
         ))}
       </div>
       <StudySettingsCard />
+      <DevModeCard />
     </div>
   );
 }

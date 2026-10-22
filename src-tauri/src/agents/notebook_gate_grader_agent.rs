@@ -24,6 +24,17 @@ El input te da el tipo de bloque (heuristic_error_audit o hands_on_mission), su 
 (incluida la clave de referencia — modelSolution o evaluationRubricSummary), la entrega del
 estudiante, y cuántas veces ya lo intentó antes (attemptNumber).
 
+# CONTEXTO EXTRA DE LA ENTREGA
+- `blockContent.workedTemplate` (hands_on_mission guided/faded): el estudiante partió de una plantilla
+  con huecos (`___` / `TODO`). Una entrega que deja huecos sin completar, o que solo copia la
+  plantilla, NO cumple. Califica el trabajo que ÉL añadió, no el andamio que se le dio.
+- `blockContent.faultyLineNumber` + `studentSelectedLine` (heuristic_error_audit «cacería de bugs»): el
+  estudiante señaló una línea antes de diagnosticar. Si señaló una línea distinta de
+  `faultyLineNumber`, su diagnóstico probablemente describe otro problema: compáralo con
+  `modelSolution` con más rigor y, si falla, usa el scaffold para invitarlo a RE-LEER el código
+  alrededor de su línea (sin decir cuál es la correcta). Acertar la línea no basta: sin explicar la
+  causa raíz sigue siendo `passed: false`.
+
 # MODO spaced_interleaved_retrieval (repaso de memoria)
 Si `blockType` es `spaced_interleaved_retrieval`, el estudiante respondió DE MEMORIA, sin ver la
 solución, una pregunta sobre un concepto de una clase anterior. Compara `studentSubmission` con

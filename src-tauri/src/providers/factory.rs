@@ -145,9 +145,7 @@ impl ProviderFactory {
                 Self::prompt_with(model, system_prompt, input, tools).await
             }
             ProviderKind::Xiaomi => {
-                // MiMo exposes an OpenAI-compatible API: reuse the OpenAI
-                // client with Xiaomi's base URL (Bearer auth, /v1/models).
-                let client = rig_core::providers::openai::Client::builder()
+                let client = rig_core::providers::xiaomimimo::Client::builder()
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
@@ -245,9 +243,7 @@ impl ProviderFactory {
                 Self::prompt_with_diagnostic_tools(model, system_prompt, input, capture, Self::output_budget(&config.provider), scope).await
             }
             ProviderKind::Xiaomi => {
-                // MiMo exposes an OpenAI-compatible API: reuse the OpenAI
-                // client with Xiaomi's base URL (Bearer auth, /v1/models).
-                let client = rig_core::providers::openai::Client::builder()
+                let client = rig_core::providers::xiaomimimo::Client::builder()
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
@@ -382,9 +378,7 @@ impl ProviderFactory {
                 Self::prompt_with_notebook_block_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider)).await
             }
             ProviderKind::Xiaomi => {
-                // MiMo exposes an OpenAI-compatible API: reuse the OpenAI
-                // client with Xiaomi's base URL (Bearer auth, /v1/models).
-                let client = rig_core::providers::openai::Client::builder()
+                let client = rig_core::providers::xiaomimimo::Client::builder()
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
@@ -485,9 +479,7 @@ impl ProviderFactory {
                 Self::prompt_with_gate_grading_tool(model, system_prompt, input, capture).await
             }
             ProviderKind::Xiaomi => {
-                // MiMo exposes an OpenAI-compatible API: reuse the OpenAI
-                // client with Xiaomi's base URL (Bearer auth, /v1/models).
-                let client = rig_core::providers::openai::Client::builder()
+                let client = rig_core::providers::xiaomimimo::Client::builder()
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
@@ -585,9 +577,7 @@ impl ProviderFactory {
                 Self::prompt_with_closure_grading_tool(model, system_prompt, input, capture).await
             }
             ProviderKind::Xiaomi => {
-                // MiMo exposes an OpenAI-compatible API: reuse the OpenAI
-                // client with Xiaomi's base URL (Bearer auth, /v1/models).
-                let client = rig_core::providers::openai::Client::builder()
+                let client = rig_core::providers::xiaomimimo::Client::builder()
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()
@@ -683,9 +673,7 @@ impl ProviderFactory {
                 Self::prompt_with_block_audit_tool(model, system_prompt, input, capture).await
             }
             ProviderKind::Xiaomi => {
-                // MiMo exposes an OpenAI-compatible API: reuse the OpenAI
-                // client with Xiaomi's base URL (Bearer auth, /v1/models).
-                let client = rig_core::providers::openai::Client::builder()
+                let client = rig_core::providers::xiaomimimo::Client::builder()
                     .api_key(api_key.to_string())
                     .base_url(base_url)
                     .build()

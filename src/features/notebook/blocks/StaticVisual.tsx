@@ -112,20 +112,31 @@ function DeclarativeSvgVisual({
   groups,
   pedagogicalFocus,
   caption,
+  highlightGroupId,
 }: {
   viewBox: string;
   elements: SvgElement[];
   groups: SvgGroup[];
   pedagogicalFocus?: string;
   caption: string;
+  /** Group to spotlight while a walkthrough step is active; every other group
+   *  is dimmed. Ignored when no group has that id, so a step that names a
+   *  label rather than a group never blanks the figure. */
+  highlightGroupId?: string;
 }) {
+  const spotlight = highlightGroupId && groups.some((g) => g.groupId === highlightGroupId) ? highlightGroupId : null;
   return (
     <figure className="static-visual">
       <svg viewBox={viewBox} className="declarative-svg-visual">
         <ArrowMarkerDefs />
         {elements.map((el, i) => renderSvgElement(el, i))}
         {groups.map((g) => (
-          <g key={g.groupId} data-group-id={g.groupId} data-pedagogical-role={g.pedagogicalRole}>
+          <g
+            key={g.groupId}
+            data-group-id={g.groupId}
+            data-pedagogical-role={g.pedagogicalRole}
+            className={spotlight ? (g.groupId === spotlight ? "svg-group is-active" : "svg-group is-dim") : "svg-group"}
+          >
             {g.elements.map((el, i) => renderSvgElement(el, i))}
           </g>
         ))}
@@ -162,7 +173,7 @@ function ConceptualMatrixVisual({ headers, rows, contrastFocus }: { headers: str
   );
 }
 
-export function StaticVisual({ visual }: { visual: StaticVisualSpec }) {
+export function StaticVisual({ visual, highlightGroupId }: { visual: StaticVisualSpec; highlightGroupId?: string }) {
   switch (visual.renderEngine) {
     case "mermaid":
       return <MermaidVisual code={visual.code} caption={visual.caption} />;
@@ -174,6 +185,7 @@ export function StaticVisual({ visual }: { visual: StaticVisualSpec }) {
           groups={visual.groups}
           pedagogicalFocus={visual.pedagogicalFocus ?? undefined}
           caption={visual.caption}
+          highlightGroupId={highlightGroupId}
         />
       );
     case "conceptual_matrix":

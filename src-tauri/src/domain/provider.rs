@@ -32,7 +32,7 @@ impl ProviderKind {
             ProviderKind::Gemini => "Gemini",
             ProviderKind::OpenRouter => "OpenRouter",
             ProviderKind::DeepSeek => "DeepSeek",
-            ProviderKind::Xiaomi => "Xiaomi",
+            ProviderKind::Xiaomi => "Xiaomi MiMo",
         }
     }
 
@@ -45,7 +45,6 @@ impl ProviderKind {
             // No /v1 suffix: rig-core's DeepSeek client builds request paths
             // (e.g. `/chat/completions`) directly off this base.
             ProviderKind::DeepSeek => "https://api.deepseek.com",
-            // MiMo exposes an OpenAI-compatible API under `/v1`.
             ProviderKind::Xiaomi => "https://api.xiaomimimo.com/v1",
         }
     }
@@ -96,6 +95,8 @@ pub struct ProviderWithStatus {
     pub default_model: Option<String>,
     pub base_url: Option<String>,
     pub configured: bool,
+    /// The provider the built-in agents are currently pinned to.
+    pub active: bool,
 }
 
 #[cfg(test)]

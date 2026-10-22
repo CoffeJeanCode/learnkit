@@ -1,4 +1,16 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { DynamicSectionBlockSchema, GateSubmissionSchema } from "../src/lib/schemas";
+import type { GateResult, NotebookBlock } from "../src/lib/schemas";
+import { DeclarativeVisualDiagramBlock } from "../src/features/notebook/blocks/DeclarativeVisualDiagramBlock";
+import { HandsOnMissionBlock } from "../src/features/notebook/blocks/HandsOnMissionBlock";
+import { HeuristicErrorAuditBlock } from "../src/features/notebook/blocks/HeuristicErrorAuditBlock";
+import { InteractivePredictionGateBlock } from "../src/features/notebook/blocks/InteractivePredictionGateBlock";
+import { BranchingScenarioChallengeBlock } from "../src/features/notebook/blocks/BranchingScenarioChallengeBlock";
+import { moveItem, splitSnippetLines, tokenMatches } from "../src/features/notebook/blocks/interaction";
+import { readFileSync } from "node:fs";
+import { ConnectStepView } from "../src/features/graph/ConnectStep";
+import { ConceptForm, GraphCanvas, LinkForm, RelationList } from "../src/features/graph/GraphParts";
+import { layoutGraph, nodeOptions } from "../src/features/graph/graph";
 import { InlineText, RichText } from "../src/features/notebook/blocks/RichText";
 
 const question = [
@@ -119,6 +131,338 @@ checks["fence still renders <pre><code>"] = fencedAfter.includes(
 );
 checks["fence content stays literal"] = fencedAfter.includes("const a = **x**;") && !fencedAfter.includes("<strong>");
 checks["fence prose stays a paragraph"] = fencedAfter.includes('<span class="inline-text">intro</span>');
+
+
+// --- Notebook interaction mechanics -----------------------------------------
+// Static markup shows each component's FIRST paint (initial state), which is
+// where the scaffolding promises live: a pre-filled editor instead of a blank
+// one, hints hidden until asked for, numbered lines to click, a one-step-at-
+// a-time walkthrough, and one control per interaction mode.
+
+const noopSubmit = async (): Promise<GateResult> => {
+  throw new Error("not used in static rendering");
+};
+
+function fakeBlock(block_type: NotebookBlock["block_type"], content: unknown, status: NotebookBlock["status"] = "ready"): NotebookBlock {
+  return {
+    id: "b1",
+    document_id: "d1",
+    block_type,
+    content_json: content as Record<string, unknown>,
+    order_index: 0,
+    status,
+    attempt_count: 0,
+    last_feedback: null,
+  } as NotebookBlock;
+}
+
+function parseBlock<T extends string>(content: Record<string, unknown>, type: T) {
+  const parsed = DynamicSectionBlockSchema.parse(content);
+  if (parsed.blockType !== type) throw new Error(`expected ${type}`);
+  return parsed as Extract<typeof parsed, { blockType: T }>;
+}
+
+// 1) hands_on_mission: backward compatibility, then the scaffolded variants.
+const oldMission = {
+  blockType: "hands_on_mission",
+  challengeStatement: "Resuelve el caso",
+  expectedMilestoneArtifact: "Una función",
+  constraints: ["Sin librerías"],
+  scaffoldingHints: ["Pista general", "Pista concreta", "Casi la respuesta"],
+  evaluationRubricSummary: ["Cubre el caso base"],
+};
+const legacy = parseBlock(oldMission, "hands_on_mission");
+checks["old mission (no scaffolding fields) still parses"] = !legacy.supportLevel && !legacy.workedTemplate && !legacy.interactiveSteps;
+
+const legacyHtml = renderToStaticMarkup(
+  <HandsOnMissionBlock block={fakeBlock("hands_on_mission", oldMission)} content={legacy} isActive onSubmitGate={noopSubmit} />,
+);
+checks["hints start hidden behind a counter button"] = legacyHtml.includes("Pedir pista") && legacyHtml.includes("(0/3)");
+checks["no hint text is shown up front"] = !legacyHtml.includes("Pista general") && !legacyHtml.includes("Casi la respuesta");
+checks["no de-escalation button without a handler"] = !legacyHtml.includes("paso previo más guiado");
+checks["old mission opens on an empty editor"] = /<textarea[^>]*><\/textarea>/.test(legacyHtml);
+
+const scaffolded = parseBlock(
+  {
+    ...oldMission,
+    supportLevel: "faded",
+    workedTemplate: "function suma(a, b) {\n  return ___;\n}",
+    interactiveSteps: [
+      { prompt: "¿Qué operador suma?", expectedToken: "+", options: ["+", "-"] },
+      { prompt: "Nombre del parámetro", expectedToken: "a" },
+    ],
+  },
+  "hands_on_mission",
+);
+const noSteps = { ...scaffolded, interactiveSteps: null };
+const templateHtml = renderToStaticMarkup(
+  <HandsOnMissionBlock
+    block={fakeBlock("hands_on_mission", scaffolded)}
+    content={noSteps}
+    isActive
+    onSubmitGate={noopSubmit}
+    onRequestEasierStep={noopSubmit}
+  />,
+);
+checks["worked template pre-fills the editor"] = templateHtml.includes("return ___;");
+checks["template editor is the monospace one"] = templateHtml.includes("mission-editor-code");
+checks["restore-template button is offered"] = templateHtml.includes("Restaurar plantilla");
+checks["de-escalation button next to submit"] = templateHtml.includes("Necesito un paso previo más guiado") && templateHtml.includes("Enviar mi solución");
+checks["unchanged template can't be sent"] = /<button[^>]*disabled[^>]*>Enviar mi solución/.test(templateHtml);
+checks["support level is labelled"] = templateHtml.includes("Con menos apoyo");
+
+const stepsHtml = renderToStaticMarkup(
+  <HandsOnMissionBlock block={fakeBlock("hands_on_mission", scaffolded)} content={scaffolded} isActive onSubmitGate={noopSubmit} />,
+);
+checks["cloze micro-steps render before the editor"] = stepsHtml.includes("¿Qué operador suma?") && stepsHtml.includes("cloze-chips");
+checks["editor stays closed until the steps are solved"] = !stepsHtml.includes("<textarea") && stepsHtml.includes("Resuelve los micro-pasos");
+checks["later steps are locked"] = (stepsHtml.match(/is-locked/g) ?? []).length === 1;
+
+checks["cloze token matching ignores case and spacing"] = tokenMatches("  Return   X ", "return x") && !tokenMatches("a", "b");
+
+// 2) heuristic_error_audit: bug bounty.
+const audit = parseBlock(
+  {
+    blockType: "heuristic_error_audit",
+    instruction: "Audita este código",
+    flawedRepresentation: { context: "Suma", buggySnippetOrDiagram: "let a = 1;\nlet b = a +;\nreturn b;", errorType: "syntax" },
+    guidingQuestions: ["¿Qué falta?"],
+  },
+  "heuristic_error_audit",
+);
+const auditHtml = renderToStaticMarkup(
+  <HeuristicErrorAuditBlock block={fakeBlock("heuristic_error_audit", audit)} content={audit} isActive onSubmitGate={noopSubmit} />,
+);
+checks["audit renders one clickable row per line"] = (auditHtml.match(/class="bug-line"/g) ?? []).length === 3;
+checks["audit rows are numbered"] = auditHtml.includes('bug-line-no">2<');
+checks["audit asks to point at a line first"] = auditHtml.includes("Señala la línea");
+checks["audit blocks sending until a line is picked"] = /<button[^>]*disabled[^>]*>Enviar diagnóstico/.test(auditHtml);
+
+const oneLiner = { ...audit, flawedRepresentation: { ...audit.flawedRepresentation, buggySnippetOrDiagram: "x = x + 1" } };
+const oneLinerHtml = renderToStaticMarkup(
+  <HeuristicErrorAuditBlock block={fakeBlock("heuristic_error_audit", oneLiner)} content={oneLiner} isActive onSubmitGate={noopSubmit} />,
+);
+checks["a one-line snippet keeps the plain flow"] = oneLinerHtml.includes("flawed-snippet") && !oneLinerHtml.includes("bug-line");
+checks["snippet lines ignore a trailing newline"] = splitSnippetLines("a\nb\n").length === 2 && splitSnippetLines("solo").length === 1;
+
+const faultyKey = DynamicSectionBlockSchema.safeParse({ ...audit, faultyLineNumber: 2 });
+checks["faultyLineNumber is accepted (and optional)"] = faultyKey.success && DynamicSectionBlockSchema.safeParse(audit).success;
+const passedAuditHtml = renderToStaticMarkup(
+  <HeuristicErrorAuditBlock
+    block={fakeBlock("heuristic_error_audit", audit, "passed")}
+    content={{ ...audit, faultyLineNumber: 2, modelSolution: "Falta el operando" }}
+    isActive
+    onSubmitGate={noopSubmit}
+  />,
+);
+checks["the real faulty line is highlighted once passed"] = /bug-line is-faulty"[^>]*aria-label="Línea 2"/.test(passedAuditHtml);
+
+// 3) declarative_visual_diagram: stepper + spotlight.
+const diagram = parseBlock(
+  {
+    blockType: "declarative_visual_diagram",
+    title: "La célula",
+    visualAid: {
+      renderEngine: "declarative_svg",
+      viewBox: "0 0 100 50",
+      groups: [
+        { groupId: "membrana", pedagogicalRole: "barrera", elements: [{ tag: "rect", props: { x: 0, y: 0, width: 10, height: 10 } }] },
+        { groupId: "nucleo", pedagogicalRole: "control", elements: [{ tag: "circle", props: { cx: 5, cy: 5, r: 3 } }] },
+      ],
+      caption: "Una célula",
+    },
+    guidedWalkthrough: [
+      { stepNumber: 2, targetVisualElement: "nucleo", pedagogicalInsight: "El núcleo guarda el ADN" },
+      { stepNumber: 1, targetVisualElement: "membrana", pedagogicalInsight: "La membrana filtra" },
+    ],
+  },
+  "declarative_visual_diagram",
+);
+const diagramHtml = renderToStaticMarkup(<DeclarativeVisualDiagramBlock content={diagram} />);
+checks["walkthrough starts on step 1 of N, sorted by stepNumber"] = diagramHtml.includes("Paso 1 de 2") && diagramHtml.indexOf("La membrana filtra") < diagramHtml.indexOf("El núcleo guarda");
+checks["the active step's group is spotlighted, the rest dimmed"] =
+  /data-group-id="membrana"[^>]*class="svg-group is-active"/.test(diagramHtml) && /data-group-id="nucleo"[^>]*class="svg-group is-dim"/.test(diagramHtml);
+checks["stepper offers next, and previous is disabled on step 1"] = diagramHtml.includes("Siguiente paso") && /<button[^>]*disabled[^>]*>Paso anterior/.test(diagramHtml);
+checks["the full list stays reachable"] = diagramHtml.includes("Ver todos los pasos");
+
+const ghostStep = { ...diagram, guidedWalkthrough: [{ stepNumber: 1, targetVisualElement: "no-existe", pedagogicalInsight: "x" }] };
+const ghostHtml = renderToStaticMarkup(<DeclarativeVisualDiagramBlock content={ghostStep} />);
+checks["a step naming no group never dims the figure"] = !ghostHtml.includes("is-dim");
+
+// 4) interactive_prediction_gate: one control set per mode, old blocks intact.
+const oldGate = parseBlock(
+  {
+    blockType: "interactive_prediction_gate",
+    question: "¿Qué pasa?",
+    options: ["A", "B"],
+    conceptualFeedbackMap: { A: "porque a", B: "porque b" },
+  },
+  "interactive_prediction_gate",
+);
+const oldGateHtml = renderToStaticMarkup(
+  <InteractivePredictionGateBlock block={fakeBlock("interactive_prediction_gate", oldGate)} content={oldGate} isActive onSubmitGate={noopSubmit} />,
+);
+checks["multiple choice is still the default"] = !oldGate.interactionMode && oldGateHtml.includes("prediction-options") && !oldGateHtml.includes("option-discarded");
+
+const chain = parseBlock(
+  { blockType: "interactive_prediction_gate", question: "Ordena", interactionMode: "causal_chain_order", shuffledSteps: ["Paso B", "Paso A", "Paso C"] },
+  "interactive_prediction_gate",
+);
+checks["a chain gate parses without options or answer key"] = chain.options.length === 0 && Object.keys(chain.conceptualFeedbackMap).length === 0;
+const chainHtml = renderToStaticMarkup(
+  <InteractivePredictionGateBlock block={fakeBlock("interactive_prediction_gate", chain)} content={chain} isActive onSubmitGate={noopSubmit} />,
+);
+checks["chain gate lists the shuffled links with up/down controls"] =
+  (chainHtml.match(/chain-item/g) ?? []).length === 3 && chainHtml.includes("↑") && chainHtml.includes("↓") && chainHtml.includes("Comprobar secuencia");
+checks["chain gate keeps the shuffled order on first paint"] = chainHtml.indexOf("Paso B") < chainHtml.indexOf("Paso A");
+checks["moveItem swaps neighbours and clamps at the edges"] =
+  moveItem(["a", "b", "c"], 1, -1).join("") === "bac" && moveItem(["a", "b", "c"], 0, -1).join("") === "abc" && moveItem(["a", "b", "c"], 2, 1).join("") === "abc";
+
+const boundary = parseBlock(
+  {
+    blockType: "interactive_prediction_gate",
+    question: "¿Cumple la regla?",
+    interactionMode: "boundary_case_audit",
+    boundaryCases: [{ statement: "Caso uno" }, { statement: "Caso dos" }],
+  },
+  "interactive_prediction_gate",
+);
+const boundaryHtml = renderToStaticMarkup(
+  <InteractivePredictionGateBlock block={fakeBlock("interactive_prediction_gate", boundary)} content={boundary} isActive onSubmitGate={noopSubmit} />,
+);
+checks["boundary gate shows both verdict buttons per case"] =
+  (boundaryHtml.match(/>Cumple la regla<\/button>/g) ?? []).length === 2 && (boundaryHtml.match(/>Rompe la regla<\/button>/g) ?? []).length === 2;
+checks["boundary gate can't be checked before every case is classified"] = /<button[^>]*disabled[^>]*>Comprobar casos/.test(boundaryHtml);
+
+const branching = parseBlock(
+  {
+    blockType: "branching_scenario_challenge",
+    scenario: "Tu equipo se retrasa",
+    decisionPoint: "¿Qué haces?",
+    branches: [
+      { choice: "Hablar", consequence: "Se aclara" },
+      { choice: "Ignorar", consequence: "Empeora" },
+    ],
+  },
+  "branching_scenario_challenge",
+);
+const branchingHtml = renderToStaticMarkup(
+  <BranchingScenarioChallengeBlock block={fakeBlock("branching_scenario_challenge", branching)} content={branching} isActive onSubmitGate={noopSubmit} />,
+);
+checks["branching gate starts with every branch available"] = !branchingHtml.includes("option-discarded") && (branchingHtml.match(/<button/g) ?? []).length === 2;
+
+// 5) Submission contracts (wire shape used by the Tauri commands).
+checks["prediction submissions: choice, order or verdicts"] =
+  GateSubmissionSchema.safeParse({ blockType: "interactive_prediction_gate", selectedOption: "A" }).success &&
+  GateSubmissionSchema.safeParse({ blockType: "interactive_prediction_gate", orderedSteps: ["a", "b"] }).success &&
+  GateSubmissionSchema.safeParse({ blockType: "interactive_prediction_gate", caseVerdicts: [true, false] }).success;
+checks["mission submission carries hintsShown, audit carries selectedLine"] =
+  GateSubmissionSchema.safeParse({ blockType: "hands_on_mission", submissionText: "x", hintsShown: 2 }).success &&
+  GateSubmissionSchema.safeParse({ blockType: "heuristic_error_audit", diagnosisText: "x", selectedLine: 3 }).success;
+checks["Option<T> fields accept an explicit null (Rust sends null)"] =
+  DynamicSectionBlockSchema.safeParse({ ...oldMission, supportLevel: null, workedTemplate: null, interactiveSteps: null }).success &&
+  DynamicSectionBlockSchema.safeParse({ ...audit, faultyLineNumber: null }).success;
+
+
+// 6) Persistence + private notes on questions.
+import { BlockNote } from "../src/features/notebook/blocks/persist";
+const noopAnnotate = () => {};
+
+const savedGate = parseBlock(
+  { ...oldGate, blockType: "interactive_prediction_gate", studentNote: "Ojo con B", studentState: { failedOptions: ["A"], lastOption: "A" } },
+  "interactive_prediction_gate",
+);
+checks["notes and selection state parse on a question"] = savedGate.studentNote === "Ojo con B" && !!savedGate.studentState;
+checks["old blocks without notes still parse"] = DynamicSectionBlockSchema.safeParse(oldMission).success && !oldGate.studentNote;
+const restoredGate = renderToStaticMarkup(
+  <InteractivePredictionGateBlock block={fakeBlock("interactive_prediction_gate", savedGate)} content={savedGate} isActive onSubmitGate={noopSubmit} onAnnotate={noopAnnotate} />,
+);
+checks["a saved wrong pick comes back discarded, with its reason"] =
+  restoredGate.includes("option-discarded") && restoredGate.includes("discarded-list") && restoredGate.includes("porque a");
+
+const restoredChain = parseBlock({ ...chain, studentState: { order: ["Paso C", "Paso B", "Paso A"], failedKeys: [] } }, "interactive_prediction_gate");
+const restoredChainHtml = renderToStaticMarkup(
+  <InteractivePredictionGateBlock block={fakeBlock("interactive_prediction_gate", restoredChain)} content={restoredChain} isActive onSubmitGate={noopSubmit} onAnnotate={noopAnnotate} />,
+);
+checks["a saved order is restored"] = restoredChainHtml.indexOf("Paso C") < restoredChainHtml.indexOf("Paso B") && restoredChainHtml.indexOf("Paso B") < restoredChainHtml.indexOf("Paso A");
+const corruptChain = parseBlock({ ...chain, studentState: { order: ["otro", "paso"] } }, "interactive_prediction_gate");
+const corruptHtml = renderToStaticMarkup(
+  <InteractivePredictionGateBlock block={fakeBlock("interactive_prediction_gate", corruptChain)} content={corruptChain} isActive onSubmitGate={noopSubmit} onAnnotate={noopAnnotate} />,
+);
+checks["a stale/corrupt saved order falls back to the shuffled one"] = corruptHtml.indexOf("Paso B") < corruptHtml.indexOf("Paso A");
+
+const restoredAudit = parseBlock({ ...audit, studentState: { selectedLine: 2, diagnosis: "borrador" } }, "heuristic_error_audit");
+const restoredAuditHtml = renderToStaticMarkup(
+  <HeuristicErrorAuditBlock block={fakeBlock("heuristic_error_audit", restoredAudit)} content={restoredAudit} isActive onSubmitGate={noopSubmit} onAnnotate={noopAnnotate} />,
+);
+checks["the flagged line and the draft diagnosis are restored"] = /bug-line is-selected"[^>]*aria-label="Línea 2"/.test(restoredAuditHtml) && restoredAuditHtml.includes(">borrador</textarea>");
+const outOfRange = parseBlock({ ...audit, studentState: { selectedLine: 99 } }, "heuristic_error_audit");
+checks["an out-of-range saved line is ignored"] = !renderToStaticMarkup(
+  <HeuristicErrorAuditBlock block={fakeBlock("heuristic_error_audit", outOfRange)} content={outOfRange} isActive onSubmitGate={noopSubmit} onAnnotate={noopAnnotate} />,
+).includes("is-selected");
+
+const restoredMission = parseBlock({ ...scaffolded, interactiveSteps: null, studentState: { submission: "mi avance", hintsShown: 2 } }, "hands_on_mission");
+const restoredMissionHtml = renderToStaticMarkup(
+  <HandsOnMissionBlock block={fakeBlock("hands_on_mission", restoredMission)} content={restoredMission} isActive onSubmitGate={noopSubmit} onAnnotate={noopAnnotate} />,
+);
+checks["mission draft and opened hints are restored"] = restoredMissionHtml.includes(">mi avance</textarea>") && restoredMissionHtml.includes("(2/3)") && (restoredMissionHtml.match(/hint-revealed"/g) ?? []).length === 2;
+
+const noteHtml = renderToStaticMarkup(<BlockNote blockId="b1" saved="Mi apunte" onAnnotate={noopAnnotate} />);
+checks["a saved note is shown, its panel open"] = noteHtml.includes("Mi apunte") && noteHtml.includes("<details") && noteHtml.includes(" open");
+checks["an empty note starts collapsed"] = !renderToStaticMarkup(<BlockNote blockId="b1" onAnnotate={noopAnnotate} />).includes(" open");
+checks["no notes UI without a save handler"] = renderToStaticMarkup(<BlockNote blockId="b1" saved="x" />) === "";
+
+
+// 7) The student's knowledge graph + the "connect what you learned" step.
+const gClasses = [
+  { id: "c1", milestone_id: "m1", class_number: 1, title: "Semana 1: Panorama", order_index: 0, hours: 1, objective: null, complete: false },
+  { id: "c2", milestone_id: "m1", class_number: 2, title: "Semana 1: Reacciones", order_index: 1, hours: 1, objective: null, complete: false },
+];
+const gConcepts = [{ id: "k1", courseId: "k", classId: "c1", label: "El ciclo es circular", createdAtMs: 0 }];
+const gLinks = [{ id: "l1", courseId: "k", fromId: "k1", toId: "c2", label: "explica por qué ocurre", createdAtMs: 0 }];
+const gLayout = layoutGraph(gClasses, gConcepts, gLinks);
+const gOptions = nodeOptions(gClasses, gConcepts);
+
+const canvasHtml = renderToStaticMarkup(<GraphCanvas layout={gLayout} selection={null} onSelect={() => {}} />);
+checks["graph draws one focusable node per class and concept"] =
+  (canvasHtml.match(/class="graph-node graph-node-class"/g) ?? []).length === 2 &&
+  (canvasHtml.match(/class="graph-node graph-node-concept"/g) ?? []).length === 1 &&
+  canvasHtml.includes('aria-label="Concepto: El ciclo es circular"') &&
+  (canvasHtml.match(/tabindex="0"/g) ?? []).length === 4;
+checks["graph draws the relation with the student's words"] = canvasHtml.includes("explica por qué ocurre") && canvasHtml.includes('marker-end="url(#graph-arrow)"');
+checks["graph shows the week header"] = canvasHtml.includes(">Semana 1<");
+const selectedHtml = renderToStaticMarkup(<GraphCanvas layout={gLayout} selection={{ kind: "link", id: "l1" }} onSelect={() => {}} />);
+checks["selecting a relation highlights it and both of its ends"] =
+  selectedHtml.includes("graph-edge is-selected") && (selectedHtml.match(/graph-node [^"]*is-selected/g) ?? []).length === 2;
+
+const listHtml = renderToStaticMarkup(<RelationList links={gLinks} options={gOptions} selection={null} onSelect={() => {}} />);
+checks["relations are listed as sentences"] = listHtml.includes("El ciclo es circular —explica por qué ocurre→ Reacciones");
+checks["no relations, no empty list"] = renderToStaticMarkup(<RelationList links={[]} options={gOptions} selection={null} onSelect={() => {}} />) === "";
+
+const linkFormHtml = renderToStaticMarkup(<LinkForm options={gOptions} initialFrom="c1" submitLabel="Crear relación" onSubmit={async () => true} onCancel={() => {}} />);
+checks["the relation form asks for the student's words and only offers shortcuts"] =
+  linkFormHtml.includes("Con tus palabras") && linkFormHtml.includes(">causa<") && /<button[^>]*disabled[^>]*>Crear relación/.test(linkFormHtml);
+const conceptFormHtml = renderToStaticMarkup(<ConceptForm classes={gClasses} defaultClassId="c2" submitLabel="Añadir concepto" onSubmit={async () => true} onCancel={() => {}} />);
+checks["the concept form can't be sent empty"] = /<button[^>]*disabled[^>]*>Añadir concepto/.test(conceptFormHtml) && conceptFormHtml.includes("Reacciones");
+
+const stepProps = { className: "Reacciones", existing: [], targets: gOptions.slice(0, 2), error: null, saved: false, onSave: async () => true, onOpenGraph: () => {} };
+const stepHtml = renderToStaticMarkup(<ConnectStepView {...stepProps} />);
+checks["the extra step is offered, optional and skippable"] =
+  stepHtml.includes("Paso extra (opcional)") && stepHtml.includes("Conectar ideas") && stepHtml.includes("Omitir");
+checks["the extra step only talks about the student's own ideas (no AI suggestions)"] = !/sugerid|sugerenc|IA\b|inteligencia/i.test(stepHtml);
+const savedStepHtml = renderToStaticMarkup(<ConnectStepView {...stepProps} saved />);
+checks["after saving it links to the graph and no longer offers Omitir"] =
+  savedStepHtml.includes("Conexiones guardadas") && savedStepHtml.includes("Ver en el grafo") && !savedStepHtml.includes("Omitir");
+
+// Source-level guards for the cleanup and for "the AI doesn't make relations".
+const headerSrc = readFileSync(new URL("../src/components/Header.tsx", import.meta.url), "utf8");
+const appSrc = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+checks["header: Memoria/Capacidades buttons are gone, Grafo is there"] =
+  !/Memoria|Capacidades|learner-memory|"capabilities"/.test(headerSrc + appSrc) && headerSrc.includes("🕸 Grafo");
+const graphSources = ["../src/features/graph/GraphView.tsx", "../src/features/graph/GraphParts.tsx", "../src/features/graph/ConnectStep.tsx", "../src/stores/graph.ts"]
+  .map((f) => readFileSync(new URL(f, import.meta.url), "utf8"))
+  .join("\n");
+checks["the graph code never calls a model or an agent"] = !/runAgent|run_agent|delegateAgent|generate|openai|anthropic|submitGateResponse/i.test(graphSources.replace(/generated|genera(?:da|do|r)\b/gi, ""));
 
 const failed = Object.entries(checks).filter(([, ok]) => !ok);
 for (const [name, ok] of Object.entries(checks)) console.log(`${ok ? "[ok]" : "[!!]"} ${name}`);

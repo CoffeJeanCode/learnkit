@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::domain::learner_memory::{LearnerCognitiveMemory, RetrievalOutcome, LOCAL_LEARNER_ID};
-use crate::domain::notebook::{BlockUpdate, ClassRecord, Course, DiagnosticBatteryState, DynamicBlockType, NotebookBlock};
+use crate::domain::notebook::{BlockUpdate, ClassRecord, Concept, ConceptGraph, ConceptLink, Course, DiagnosticBatteryState, DynamicBlockType, NotebookBlock};
 use crate::domain::capability_map::{self, CapabilityMap};
 use crate::domain::study::{self, StudyEventKind, StudyReport, StudySettings, VariantMode};
 use crate::domain::skill_status::{self, SkillStatus};
@@ -80,6 +80,108 @@ impl NotebookService {
     /// `status`/`attempt_count`.
     pub fn save_notebook_state(&self, notebook_id: &str, blocks: &[BlockUpdate]) -> AppResult<()> {
         self.store.update_block_contents(notebook_id, blocks)
+    }
+
+    // --- The student's knowledge graph --------------------------------------
+    // Written only by the student; deliberately NOT wired into `render.rs` or
+    // any agent input, so the model can neither create nor be steered by it.
+
+    const MAX_GRAPH_LABEL_CHARS: usize = 120;
+    const MAX_CONCEPTS_PER_COURSE: usize = 300;
+
+    /// Trims and collapses whitespace; rejects empty or over-long text.
+    fn graph_label(raw: &str, what: &str) -> AppResult<String> {
+        let label = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+        if label.is_empty() {
+            return Err(AppError::InvalidInput(format!("escribe {what} con tus propias palabras")));
+        }
+        if label.chars().count() > Self::MAX_GRAPH_LABEL_CHARS {
+            return Err(AppError::InvalidInput(format!("{what} no puede superar los {} caracteres", Self::MAX_GRAPH_LABEL_CHARS)));
+        }
+        Ok(label)
+    }
+
+    pub fn get_concept_graph(&self, course_id: &str) -> AppResult<ConceptGraph> {
+        self.store.list_concept_graph(course_id)
+    }
+
+    /// Creates (`id` `None`) or edits a concept the student wrote about a class.
+    pub fn save_concept(&self, course_id: &str, class_id: &str, label: &str, id: Option<&str>) -> AppResult<Concept> {
+        let label = Self::graph_label(label, "el concepto")?;
+        if !self.store.class_in_course(course_id, class_id)? {
+            return Err(AppError::InvalidInput("la clase no pertenece a este curso".to_string()));
+        }
+        if id.is_none() && self.store.count_concepts(course_id)? >= Self::MAX_CONCEPTS_PER_COURSE {
+            return Err(AppError::InvalidInput(format!("este curso ya tiene {} conceptos: borra alguno antes de añadir otro", Self::MAX_CONCEPTS_PER_COURSE)));
+        }
+        self.store
+            .upsert_concept(course_id, class_id, &label, id)?
+            .ok_or_else(|| AppError::InvalidInput("ese concepto no existe en este curso".to_string()))
+    }
+
+    /// Deletes a concept and the relations that touch it.
+    pub fn delete_concept(&self, course_id: &str, concept_id: &str) -> AppResult<()> {
+        if self.store.delete_concept(course_id, concept_id)? {
+            Ok(())
+        } else {
+            Err(AppError::InvalidInput("ese concepto no existe en este curso".to_string()))
+        }
+    }
+
+    /// Creates (`id` `None`) or rewrites a relation. Both ends must be a class
+    /// or a concept of THIS course, and the relation needs the student's words.
+    pub fn save_concept_link(&self, course_id: &str, from_id: &str, to_id: &str, label: &str, id: Option<&str>) -> AppResult<ConceptLink> {
+        let label = Self::graph_label(label, "la relación")?;
+        if from_id == to_id {
+            return Err(AppError::InvalidInput("una idea no puede relacionarse consigo misma: elige dos distintas".to_string()));
+        }
+        for end in [from_id, to_id] {
+            if !self.store.node_in_course(course_id, end)? {
+                return Err(AppError::InvalidInput("uno de los extremos no pertenece a este curso".to_string()));
+            }
+        }
+        if self.store.concept_link_exists(course_id, from_id, to_id, &label, id)? {
+            return Err(AppError::InvalidInput("ya existe esa misma relación".to_string()));
+        }
+        self.store
+            .upsert_concept_link(course_id, from_id, to_id, &label, id)?
+            .ok_or_else(|| AppError::InvalidInput("esa relación no existe en este curso".to_string()))
+    }
+
+    pub fn delete_concept_link(&self, course_id: &str, link_id: &str) -> AppResult<()> {
+        if self.store.delete_concept_link(course_id, link_id)? {
+            Ok(())
+        } else {
+            Err(AppError::InvalidInput("esa relación no existe en este curso".to_string()))
+        }
+    }
+
+    /// Longest note / serialized selection state accepted per block — these
+    /// are small UI payloads, never a place to park documents.
+    const MAX_NOTE_CHARS: usize = 4_000;
+    const MAX_STATE_BYTES: usize = 20_000;
+
+    /// Persists what the student did with a question that is NOT a graded
+    /// answer: their free-text note and the selection state to restore on
+    /// reload. Never touches gating state or the answer keys (see
+    /// `NotebookStore::merge_block_annotation`).
+    pub fn save_block_annotation(
+        &self,
+        notebook_id: &str,
+        block_id: &str,
+        note: Option<&str>,
+        state: Option<&serde_json::Value>,
+    ) -> AppResult<()> {
+        if note.is_some_and(|n| n.chars().count() > Self::MAX_NOTE_CHARS) {
+            return Err(AppError::InvalidInput(format!("la nota supera los {} caracteres", Self::MAX_NOTE_CHARS)));
+        }
+        if state.is_some_and(|s| s.to_string().len() > Self::MAX_STATE_BYTES) {
+            return Err(AppError::InvalidInput("el estado de la selección es demasiado grande".to_string()));
+        }
+        if !self.store.merge_block_annotation(notebook_id, block_id, note, state)? {
+            return Err(AppError::InvalidInput(format!("block not found in notebook: {block_id}")));
+        }
+        Ok(())
     }
 
     /// The course's diagnostic battery (goalAlignment + questions) plus
@@ -189,6 +291,16 @@ impl NotebookService {
     /// it must never reach generation or grading (see `domain::study`).
     pub fn get_study_settings(&self) -> AppResult<StudySettings> {
         self.store.study_settings()
+    }
+
+    /// Developer-mode switch (persisted). Defaults to off; a read failure also
+    /// reads as off so a broken settings table can never turn tracing on.
+    pub fn dev_mode_enabled(&self) -> bool {
+        self.store.dev_mode().unwrap_or(false)
+    }
+
+    pub fn set_dev_mode_enabled(&self, on: bool) -> AppResult<()> {
+        self.store.set_dev_mode(on)
     }
 
     /// Who decides the version: `random` (default, assigned once) or a manual

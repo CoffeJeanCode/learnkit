@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 use rig_agent::tool::{Tool, ToolContext};
 use serde::{Deserialize, Serialize};
 
+use crate::domain::block_templates::BlockTemplate;
 use crate::domain::notebook::GeneratedSectionBlock;
 
 /// What `PublishNotebookBlockTool` writes to — read back by
@@ -20,11 +21,55 @@ pub struct PublishedAck {
     pub saved: bool,
 }
 
+/// What the model sends to `publish_notebook_block`: either a TEMPLATE for a
+/// simple block (it picks one and fills only its parameters — see
+/// `domain::block_templates`) or a free-form block, exactly as before. Which
+/// one is decided by the `blockType` tag (`tpl_*` = template). Dispatching by
+/// hand (instead of an untagged enum) keeps serde's real error message, so a
+/// malformed call names the field that is wrong rather than "no variant matched".
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum PublishBlockArgs {
+    Template(BlockTemplate),
+    Block(GeneratedSectionBlock),
+}
+
+impl PublishBlockArgs {
+    /// The full block the rest of the pipeline works with.
+    pub fn into_block(self) -> GeneratedSectionBlock {
+        match self {
+            Self::Template(t) => t.expand(),
+            Self::Block(b) => b,
+        }
+    }
+}
+
+impl From<GeneratedSectionBlock> for PublishBlockArgs {
+    fn from(block: GeneratedSectionBlock) -> Self {
+        Self::Block(block)
+    }
+}
+
+impl<'de> Deserialize<'de> for PublishBlockArgs {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::Error;
+        let value = serde_json::Value::deserialize(deserializer)?;
+        let is_template = value.get("blockType").and_then(|t| t.as_str()).is_some_and(BlockTemplate::is_template_tag);
+        if is_template {
+            let template: BlockTemplate = serde_json::from_value(value).map_err(D::Error::custom)?;
+            template.validate().map_err(D::Error::custom)?;
+            Ok(Self::Template(template))
+        } else {
+            serde_json::from_value(value).map(Self::Block).map_err(D::Error::custom)
+        }
+    }
+}
+
 pub struct PublishNotebookBlockTool(pub NotebookBlockCapture);
 
 impl Tool for PublishNotebookBlockTool {
     const NAME: &'static str = "publish_notebook_block";
-    type Args = GeneratedSectionBlock;
+    type Args = PublishBlockArgs;
     type Output = PublishedAck;
     type Error = Infallible;
 
@@ -42,7 +87,8 @@ impl Tool for PublishNotebookBlockTool {
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
         let args = repair_double_escaped(args);
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args);
+        crate::dev_trace::trace_tool(Self::NAME, &args);
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args.into_block());
         Ok(PublishedAck { saved: true })
     }
 }
@@ -155,6 +201,7 @@ impl Tool for GradeGateSubmissionTool {
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
         let args = repair_double_escaped(args);
+        crate::dev_trace::trace_tool(Self::NAME, &args);
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args);
         Ok(GradedAck { saved: true })
     }
@@ -197,6 +244,7 @@ impl Tool for GradeClosureSubmissionTool {
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
         let args = repair_double_escaped(args);
+        crate::dev_trace::trace_tool(Self::NAME, &args);
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args);
         Ok(GradedAck { saved: true })
     }
@@ -255,6 +303,7 @@ impl Tool for SubmitBlockAuditTool {
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
         let args = repair_double_escaped(args);
+        crate::dev_trace::trace_tool(Self::NAME, &args);
         *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args);
         Ok(AuditedAck { saved: true })
     }
@@ -390,7 +439,7 @@ fn visual_aid_json_schema() -> serde_json::Value {
 /// own top-level function since it's now a schema in its own right, not a
 /// nested one.
 pub(crate) fn single_block_json_schema() -> serde_json::Value {
-    serde_json::json!({
+    let mut schema = serde_json::json!({
         "type": "object",
         "oneOf": [
             {
@@ -489,6 +538,11 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                         "type": "string",
                         "description": "Clave de calificación — nunca se envía al estudiante hasta que apruebe el diagnóstico que escriba"
                     },
+                    "faultyLineNumber": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Línea (desde 1) de buggySnippetOrDiagram donde está la causa raíz. Inclúyelo SIEMPRE que el snippet sea de varias líneas: el estudiante primero hace clic en la línea defectuosa y luego escribe su diagnóstico. Clave de calificación, no se envía al estudiante hasta que apruebe."
+                    },
                     "visualAid": visual_aid_json_schema()
                 },
                 "required": ["blockType", "instruction", "flawedRepresentation", "guidingQuestions", "modelSolution"],
@@ -498,16 +552,37 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                 "properties": {
                     "blockType": {"const": "interactive_prediction_gate"},
                     "question": {"type": "string"},
-                    "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4},
-                    "conceptualFeedbackMap": {"type": "object", "description": "Una entrada por cada opción de options"},
+                    "interactionMode": {
+                        "type": "string",
+                        "enum": ["multiple_choice", "causal_chain_order", "boundary_case_audit"],
+                        "description": "Cómo responde el estudiante. Omitir = multiple_choice. causal_chain_order: ordena 3-4 eslabones de un mecanismo (usa shuffledSteps + correctOrder, SIN options). boundary_case_audit: clasifica 2-3 micro-casos al borde de la regla como «cumple»/«rompe» (usa boundaryCases, SIN options). Varía el modo entre compuertas: no uses multiple_choice por defecto."
+                    },
+                    "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4, "description": "SOLO multiple_choice"},
+                    "conceptualFeedbackMap": {"type": "object", "description": "SOLO multiple_choice: una entrada por cada opción de options"},
                     "correctOption": {
                         "type": "string",
-                        "description": "Debe ser EXACTAMENTE uno de los valores de options — clave de calificación, nunca se envía al estudiante"
+                        "description": "SOLO multiple_choice. Debe ser EXACTAMENTE uno de los valores de options — clave de calificación, nunca se envía al estudiante"
+                    },
+                    "shuffledSteps": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 4, "description": "SOLO causal_chain_order: los eslabones del mecanismo en un orden DISTINTO al causal"},
+                    "correctOrder": {"type": "array", "items": {"type": "string"}, "minItems": 3, "maxItems": 4, "description": "SOLO causal_chain_order: los MISMOS eslabones, textualmente idénticos, en orden causal — clave de calificación, nunca se envía al estudiante"},
+                    "boundaryCases": {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 3,
+                        "description": "SOLO boundary_case_audit: al menos un caso que cumple la regla y uno que la rompe, ambos aparentemente parecidos",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "statement": {"type": "string", "description": "El micro-caso concreto, autocontenido"},
+                                "followsRule": {"type": "boolean", "description": "true si cumple la regla — clave de calificación, nunca se envía al estudiante"}
+                            },
+                            "required": ["statement", "followsRule"]
+                        }
                     },
                     "visualAid": visual_aid_json_schema()
                 },
-                "required": ["blockType", "question", "options", "conceptualFeedbackMap", "correctOption"],
-                "description": "La respuesta se registra ANTES de revelar conceptualFeedbackMap — bloquea el avance hasta que el estudiante elija correctOption. visualAid es opcional — solo si la predicción realmente depende de leer un diagrama primero."
+                "required": ["blockType", "question"],
+                "description": "La respuesta se registra ANTES de revelar nada — bloquea el avance hasta acertar. En multiple_choice (por defecto) exige options + conceptualFeedbackMap + correctOption; en causal_chain_order exige shuffledSteps + correctOrder; en boundary_case_audit exige boundaryCases. visualAid es opcional — solo si la predicción realmente depende de leer un diagrama primero."
             },
             {
                 "properties": {
@@ -518,9 +593,31 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "scaffoldingHints": {"type": "array", "items": {"type": "string"}},
                     "evaluationRubricSummary": {"type": "array", "items": {"type": "string"}},
                     "isTransfer": {"type": "boolean", "description": "true SOLO para el reto de transferencia: el mismo skill en un caso NUEVO, con restricciones distintas a las de misiones anteriores y scaffoldingHints VACÍO. Omitir (false) en una misión normal."},
+                    "supportLevel": {
+                        "type": "string",
+                        "enum": ["full", "guided", "faded", "independent"],
+                        "description": "OBLIGATORIO: cuánto apoyo da esta misión (sigue scaffolding.supportLevel). La primera misión tras una teoría/diagrama es SIEMPRE guided o faded, nunca independent. independent solo en la misión de transferencia (isTransfer=true)."
+                    },
+                    "workedTemplate": {
+                        "type": "string",
+                        "description": "guided/faded: plantilla o solución resuelta al ~70% con huecos marcados con ___ (o /* TODO */) — se precarga en el editor del estudiante para que no empiece en blanco. Omitir en independent/transferencia."
+                    },
+                    "interactiveSteps": {
+                        "type": "array",
+                        "description": "guided/faded (recomendado): 2-4 micro-pasos de completar un hueco ANTES del reto completo, ordenados de lo más modelado a lo menos. Solo pueden exigir lo ya enseñado en contentSoFar (un paso nuevo a la vez).",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "prompt": {"type": "string", "description": "El hueco a completar, con contexto mínimo"},
+                                "expectedToken": {"type": "string", "description": "La respuesta corta esperada (una palabra, símbolo o expresión breve)"},
+                                "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4, "description": "Opcional: fichas para elegir; si las pones deben incluir expectedToken"}
+                            },
+                            "required": ["prompt", "expectedToken"]
+                        }
+                    },
                     "visualAid": visual_aid_json_schema()
                 },
-                "required": ["blockType", "challengeStatement", "expectedMilestoneArtifact", "constraints", "scaffoldingHints", "evaluationRubricSummary"],
+                "required": ["blockType", "challengeStatement", "expectedMilestoneArtifact", "constraints", "scaffoldingHints", "evaluationRubricSummary", "supportLevel"],
                 "description": "El estudiante entrega su solución en texto libre para desbloquear el siguiente bloque — lo califica notebook_gate_grader contra evaluationRubricSummary. visualAid es opcional — un diagrama de referencia del objetivo, solo si ayuda."
             },
             {
@@ -543,7 +640,99 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                 "description": "SIEMPRE el último bloque del notebook — nunca es un gate (no bloquea nada), pero es obligatorio entre el bloque 3 y el 5"
             }
         ]
-    })
+    });
+    // Hybrid mode: the simple block kinds are also offered as parameter-only templates.
+    if let Some(one_of) = schema.get_mut("oneOf").and_then(|o| o.as_array_mut()) {
+        one_of.extend(block_template_schemas());
+    }
+    schema
+}
+
+/// Parameter-only schemas for `domain::block_templates::BlockTemplate`. Much
+/// shorter than their free-form counterparts: the model supplies the facts,
+/// Rust derives the answer key and shuffles the options.
+fn block_template_schemas() -> Vec<serde_json::Value> {
+    let option = |what: &str| {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": what},
+                "feedback": {"type": "string", "description": "Retroalimentación conceptual que ve el estudiante al elegir esta opción"}
+            },
+            "required": ["text", "feedback"]
+        })
+    };
+    let branch = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "choice": {"type": "string"},
+            "consequence": {"type": "string", "description": "Consecuencia visible tras elegir esta rama"}
+        },
+        "required": ["choice", "consequence"]
+    });
+    vec![
+        serde_json::json!({
+            "properties": {
+                "blockType": {"const": "tpl_multiple_choice"},
+                "question": {"type": "string"},
+                "correct": option("La opción correcta"),
+                "distractors": {"type": "array", "minItems": 1, "maxItems": 3, "items": option("Un distractor plausible (error típico), de longitud parecida a la correcta")}
+            },
+            "required": ["blockType", "question", "correct", "distractors"],
+            "description": "PLANTILLA de opción múltiple (compuerta conceptual). Solo das la correcta y los distractores: el sistema mezcla el orden y deriva la clave. Equivale a interactive_prediction_gate multiple_choice."
+        }),
+        serde_json::json!({
+            "properties": {
+                "blockType": {"const": "tpl_true_false"},
+                "statement": {"type": "string", "description": "Afirmación concreta que es claramente verdadera o falsa"},
+                "isTrue": {"type": "boolean"},
+                "explanation": {"type": "string", "description": "Por qué es verdadera/falsa (se muestra tras responder)"}
+            },
+            "required": ["blockType", "statement", "isTrue", "explanation"],
+            "description": "PLANTILLA verdadero/falso (compuerta conceptual rápida). Equivale a interactive_prediction_gate multiple_choice con 2 opciones."
+        }),
+        serde_json::json!({
+            "properties": {
+                "blockType": {"const": "tpl_ordering"},
+                "question": {"type": "string"},
+                "stepsInOrder": {"type": "array", "minItems": 3, "maxItems": 4, "items": {"type": "string"}, "description": "Los eslabones en el orden CORRECTO; el sistema los desordena"}
+            },
+            "required": ["blockType", "question", "stepsInOrder"],
+            "description": "PLANTILLA para ordenar un mecanismo o proceso. Equivale a interactive_prediction_gate causal_chain_order."
+        }),
+        serde_json::json!({
+            "properties": {
+                "blockType": {"const": "tpl_scenario_choice"},
+                "scenario": {"type": "string"},
+                "decisionPoint": {"type": "string"},
+                "optimal": branch.clone(),
+                "alternatives": {"type": "array", "minItems": 1, "maxItems": 3, "items": branch}
+            },
+            "required": ["blockType", "scenario", "decisionPoint", "optimal", "alternatives"],
+            "description": "PLANTILLA de decisión situacional (seleccionar caso). Das la rama óptima y las alternativas; el sistema mezcla el orden. Equivale a branching_scenario_challenge."
+        }),
+        serde_json::json!({
+            "properties": {
+                "blockType": {"const": "tpl_quick_recall"},
+                "items": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 2,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "conceptLabel": {"type": "string", "description": "Concepto de una clase ANTERIOR"},
+                            "prompt": {"type": "string"},
+                            "expectedAnswer": {"type": "string"}
+                        },
+                        "required": ["conceptLabel", "prompt", "expectedAnswer"]
+                    }
+                }
+            },
+            "required": ["blockType", "items"],
+            "description": "PLANTILLA de repaso rápido; mismas reglas que spaced_interleaved_retrieval (solo como primer bloque y solo con dueRetrieval)."
+        }),
+    ]
 }
 
 /// JSON schema for a `DiagnosticBattery` — used ONLY by
@@ -601,7 +790,7 @@ mod tests {
             system_rule: "Regla".to_string(),
             frequent_error: "Error común".to_string(),
         };
-        let ack = tool.call(&mut ToolContext::new(), block).await.expect("infallible");
+        let ack = tool.call(&mut ToolContext::new(), block.into()).await.expect("infallible");
         assert!(ack.saved);
         assert!(capture.lock().unwrap().is_some());
     }
@@ -679,9 +868,13 @@ mod tests {
                 .into_iter()
                 .collect(),
             correct_option: "B".to_string(),
+            interaction_mode: None,
+            shuffled_steps: None,
+            correct_order: None,
+            boundary_cases: None,
             visual_aid: None,
         };
-        tool.call(&mut ToolContext::new(), block).await.expect("infallible");
+        tool.call(&mut ToolContext::new(), block.into()).await.expect("infallible");
 
         let stored = capture.lock().unwrap();
         let value = serde_json::to_value(stored.as_ref().unwrap()).expect("serializes");
@@ -689,5 +882,64 @@ mod tests {
         assert!(question.contains('\n'), "escapes became real newlines: {question:?}");
         assert!(!question.contains("\\n"), "no backslash-n left: {question:?}");
         assert!(question.contains("```rust"), "the fence survived: {question:?}");
+    }
+
+    #[test]
+    fn publish_args_dispatch_templates_and_free_blocks_by_block_type() {
+        let tpl: PublishBlockArgs = serde_json::from_value(serde_json::json!({
+            "blockType": "tpl_true_false", "statement": "s", "isTrue": true, "explanation": "e"
+        }))
+        .expect("template parses");
+        assert!(matches!(tpl, PublishBlockArgs::Template(_)));
+        let free: PublishBlockArgs = serde_json::from_value(serde_json::json!({
+            "blockType": "anchored_micro_theory", "title": "t", "intuitiveHook": "h", "systemRule": "r", "frequentError": "f"
+        }))
+        .expect("free block still parses");
+        assert!(matches!(free, PublishBlockArgs::Block(_)));
+    }
+
+    #[test]
+    fn a_malformed_template_fails_with_the_exact_reason() {
+        let dup = serde_json::from_value::<PublishBlockArgs>(serde_json::json!({
+            "blockType": "tpl_multiple_choice", "question": "q",
+            "correct": {"text": "A", "feedback": "f"},
+            "distractors": [{"text": "a", "feedback": "g"}]
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(dup.contains("tpl_multiple_choice") && dup.contains("distintas"), "{dup}");
+        let missing = serde_json::from_value::<PublishBlockArgs>(serde_json::json!({"blockType": "tpl_ordering", "question": "q"})).unwrap_err().to_string();
+        assert!(missing.contains("stepsInOrder"), "{missing}");
+        let unknown = serde_json::from_value::<PublishBlockArgs>(serde_json::json!({"blockType": "tpl_nope"})).unwrap_err().to_string();
+        assert!(unknown.contains("tpl_nope"), "{unknown}");
+    }
+
+    #[tokio::test]
+    async fn publishing_a_template_stores_the_expanded_block() {
+        let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
+        let tool = PublishNotebookBlockTool(capture.clone());
+        let args: PublishBlockArgs = serde_json::from_value(serde_json::json!({
+            "blockType": "tpl_scenario_choice", "scenario": "s", "decisionPoint": "d",
+            "optimal": {"choice": "bien", "consequence": "ok"},
+            "alternatives": [{"choice": "mal", "consequence": "ko"}]
+        }))
+        .unwrap();
+        tool.call(&mut ToolContext::new(), args).await.expect("infallible");
+        let stored = capture.lock().unwrap();
+        assert!(matches!(stored.as_ref().unwrap(), GeneratedSectionBlock::BranchingScenarioChallenge { branches, .. } if branches.len() == 2));
+    }
+
+    #[test]
+    fn the_tool_schema_offers_every_template() {
+        let schema = single_block_json_schema();
+        let tags: Vec<&str> = schema["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|v| v["properties"]["blockType"]["const"].as_str())
+            .collect();
+        for tpl in ["tpl_multiple_choice", "tpl_true_false", "tpl_ordering", "tpl_scenario_choice", "tpl_quick_recall", "interactive_prediction_gate"] {
+            assert!(tags.contains(&tpl), "missing {tpl}");
+        }
     }
 }

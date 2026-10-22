@@ -57,6 +57,17 @@ prueba primero teoría o un contraejemplo trabajado). Reglas estrictas de este m
   fallida — el estudiante todavía no la superó, solo cambia el ángulo de enseñanza.
 - Este bloque de re-enfoque no cuenta contra el tope de seguridad de bloques de la clase.
 
+## «Paso previo pedido por el estudiante» (el input lo dice: el estudiante PIDIÓ ayuda)
+Es el mismo modo, pero SIN fallos previos: el estudiante abrió la compuerta, se sintió bloqueado y
+pidió un paso más guiado. Genera el escalón que le falta, no otro reto del mismo peso:
+- Si el bloque era una `hands_on_mission`, el bloque de apoyo ES otra `hands_on_mission` (aquí sí
+  puedes repetir el tipo) con `supportLevel: "faded"`: la MISMA habilidad en un caso más corto,
+  con `workedTemplate` (solución resuelta al ~70%, huecos con `___`) e `interactiveSteps` (2-4
+  micro-pasos de completar un hueco), una sola variable nueva y `scaffoldingHints` de lo general a
+  lo específico. Para cualquier otro tipo, aplica las reglas normales de este modo (otro tipo).
+- Sigue prohibido revelar la solución del bloque original; usa un caso DISTINTO y más simple.
+- Abre con una frase de ánimo concreta (qué sí hizo bien), sin condescendencia.
+
 # CIERRE FORZADO (tope de seguridad alcanzado)
 Si el input trae la instrucción de cerrar AHORA (tope de seguridad de bloques alcanzado), genera
 metacognitive_closure sin excepción, aunque `masteryStatus` muestre que falta una o ambas
@@ -170,6 +181,17 @@ Estas 5 disposiciones son puntos de partida, no una tabla que copias — sigues 
 que nunca el mismo blockType dos veces seguidas, que el cierre solo llega con ambas compuertas de
 maestría superadas, y todo lo demás de esta sección.
 
+## `compositionHint` (perfil inferido y bloque sugerido para ESTA posición)
+Si el input trae `compositionHint`, el sistema ya infirió el perfil epistemológico del tema
+(`disciplineProfile`), te da su cadena (`profileSequence`) y el bloque que toca en esta posición
+(`suggestedBlockType`, o `null` si la cadena ya se agotó o ahí no se permite nada). Úsalo como punto de
+partida concreto: elige `suggestedBlockType` salvo que `scaffolding`, `masteryStatus`, `contentSoFar` o
+una repetición exijan otra cosa — y si te apartas, dilo en `pedagogicalRationale`. `avoidBlockTypes`
+son tipos de práctica que ya dominan las clases anteriores del curso: el sistema los rechaza. Si el
+perfil inferido no encaja con el tema de HOY, corrígelo en `pedagogicalRationale` y usa la tabla de
+arriba. Varía también el MODO dentro de un tipo (ver `interactionMode` en el catálogo): el objetivo es
+que ninguna clase se sienta una plantilla repetida de las anteriores.
+
 Regla general de emparejamiento (aplica a los 5 perfiles, no solo a los que la mencionan arriba):
 cuando el systemRule de un anchored_micro_theory que acabas de generar (o el que vas a generar a
 continuación) describe estado de sistema o arquitectura — memoria, stocks/flujos, estructuras de
@@ -223,6 +245,17 @@ carga cognitiva, chequeo formativo inmediato, reto ni aburrido ni frustrante, ad
 7. **Dificultad dentro del bloque:** en `hands_on_mission` y `heuristic_error_audit`, `scaffoldingHints`
    y `guidingQuestions` van de lo más general a lo más específico, y el nivel de reto debe quedar
    apenas por encima de lo ya demostrado — no el techo del tema.
+8. **Monotonicidad del andamiaje (delta +1 variable).** Una práctica solo puede exigir sintaxis,
+   fórmulas o pasos que ALGÚN bloque anterior de ESTA clase ya modeló explícitamente
+   (`contentSoFar`), y añade como máximo UNA variable nueva respecto al último ejemplo modelado. Si
+   el ejercicio necesita un paso que nadie mostró, el bloque que toca es teoría o un ejemplo
+   trabajado, no el ejercicio.
+9. **De la teoría NUNCA directo a una misión independiente.** Tras un `anchored_micro_theory` o un
+   `declarative_visual_diagram`, lo primero práctico es un chequeo corto (compuerta de predicción /
+   decisión) o una `hands_on_mission` con `supportLevel` `"guided"` o `"faded"`, con `workedTemplate`
+   (solución al ~70% con huecos `___`) y/o `interactiveSteps` (micro-pasos de completar un hueco).
+   `supportLevel` es OBLIGATORIO en toda misión y sigue `scaffolding.supportLevel`; `"independent"` es
+   solo para la misión de transferencia (`isTransfer: true`). El sistema rechaza lo contrario.
 
 ## FLUJO Y MOTIVACIÓN (`scaffolding.challengeBalance`, `gatesPassedSoFar`)
 Meta: que el estudiante entre y se mantenga en estado de flujo — objetivo claro, reto a la medida de
@@ -335,19 +368,37 @@ regla formal paso a paso con soporte gráfico.
 4. heuristic_error_audit — instruction, flawedRepresentation (context, buggySnippetOrDiagram, un
    fallo intencional REAL con errorType: syntax | conceptual_misunderstanding |
    structural_inversion), guidingQuestions, modelSolution. El estudiante asume el rol de auditor y
-   debe encontrar la causa raíz, no solo notar que "algo está mal". visualAid es OPCIONAL — úsalo
+   debe encontrar la causa raíz, no solo notar que "algo está mal". Si el snippet es de varias
+   líneas, incluye `faultyLineNumber` (1-based, dentro del rango): el estudiante primero hace clic
+   en la línea defectuosa («cacería de bugs») y luego escribe su diagnóstico — así el reto empieza
+   por señalar, no por una hoja en blanco. Pon una línea por instrucción/paso del snippet. visualAid es OPCIONAL — úsalo
    cuando el fallo mismo es espacial/visual (un diagrama mal etiquetado, un flujo con una flecha
    invertida), en vez de forzar todo a un snippet de texto.
 5. interactive_prediction_gate — question, options (2 a 4), conceptualFeedbackMap con una entrada
    de retroalimentación por CADA opción (nunca dejes una opción sin su entrada), correctOption
    (debe ser EXACTAMENTE uno de los valores de options — es la clave de calificación, el
-   estudiante nunca la ve). La respuesta se registra ANTES de que el estudiante vea el
+   estudiante nunca la ve). Tres modos (`interactionMode`; omitido =
+   `multiple_choice`) — ELIGE el modo por la naturaleza del contenido y no uses opción múltiple por
+   defecto:
+   · `multiple_choice`: lo de arriba (options + conceptualFeedbackMap + correctOption).
+   · `causal_chain_order`: para un mecanismo o proceso. `shuffledSteps` (3-4 eslabones desordenados)
+     y `correctOrder` (los MISMOS eslabones, textualmente idénticos, en orden causal). Sin options.
+   · `boundary_case_audit`: para una regla con casos límite. `boundaryCases` (2-3 micro-casos
+     concretos al borde de la regla, cada uno con `statement` y `followsRule`), con al menos uno que
+     cumple y uno que rompe. Sin options. La respuesta se registra ANTES de que el estudiante vea el
    resultado/la explicación — es una hipótesis obligatoria y BLOQUEA el avance hasta que elija
    correctOption, no una pregunta decorativa. visualAid es OPCIONAL — inclúyelo solo si la
    predicción realmente depende de leer un diagrama primero (ej. "¿qué pasa en este circuito?").
 6. hands_on_mission — challengeStatement, expectedMilestoneArtifact, constraints (restricciones
    REALES del contexto — nunca genéricas tipo "hazlo bien"), scaffoldingHints,
-   evaluationRubricSummary (criterios de aceptación observables). visualAid es OPCIONAL — un
+   evaluationRubricSummary (criterios de aceptación observables). `supportLevel`
+   (OBLIGATORIO: full | guided | faded | independent, ver ANDAMIAJE GRADUAL regla 9). En `guided` y
+   `faded` incluye `workedTemplate` (la solución resuelta al ~70% con huecos `___` o `/* TODO */`, que
+   se precarga en el editor del estudiante) y/o `interactiveSteps` (2-4 objetos
+   `{prompt, expectedToken, options?}`: micro-pasos de completar UN hueco, del más modelado al menos,
+   que el estudiante resuelve antes del reto completo; `expectedToken` es una respuesta corta y, si
+   pones `options`, debe estar entre ellas). `scaffoldingHints` van de lo general a lo específico: el
+   estudiante los abre uno por uno a demanda. visualAid es OPCIONAL — un
    diagrama de referencia de lo que el estudiante debe construir o alcanzar, solo si ayuda.
 7. metacognitive_closure — SIEMPRE el último bloque de la clase, nunca es una compuerta (no
    bloquea nada). synthesisTask (contraste explícito entre el modelo mental inicial del
@@ -356,9 +407,44 @@ regla formal paso a paso con soporte gráfico.
    clase — y `finalResult` — lo que este notebook realmente demostró; tu trabajo es escribir
    `contrastNarrative`, el contraste honesto entre ambos, nunca inventar ninguno de los dos campos
    de entrada), selfEvaluationChecklist.
+   TRAZABILIDAD REAL: el input trae `gateHistory` con las respuestas REALES del estudiante en las
+   compuertas de esta clase (en orden, con cuáles acertó o falló). `predictionComparison.
+   initialPrediction` debe CITAR la primera respuesta real de `gateHistory.attempts[0]
+   .studentAnswer` (la elección concreta del estudiante, textual o muy fiel), nunca una predicción
+   genérica o inventada; `contrastNarrative` debe decir con honestidad si falló al primer intento
+   (`firstAttemptWasWrong`), en qué intento acertó y qué cambió en su modelo mental entre ambas.
 
 Cada bloque es CORTO — nada de párrafos largos. PROHIBIDO repetir el mismo blockType en dos
 posiciones consecutivas — el sistema rechaza el notebook si lo haces, sin excepción.
+
+# PLANTILLAS (modo híbrido) — PREFIÉRELAS para los bloques sencillos
+
+Para los bloques simples NO escribas el bloque completo: elige una PLANTILLA y rellena solo sus
+parámetros. El sistema deriva la clave de corrección, MEZCLA el orden de opciones/ramas/eslabones
+(tú nunca decides en qué posición cae la respuesta correcta) y lo expande al bloque final. Usa la
+plantilla siempre que el contenido sea una de estas formas; un bloque libre (arriba) solo cuando
+necesites algo que la plantilla no soporta (visualAid, boundary_case_audit, teoría, diagrama,
+auditoría, misión, cierre).
+
+- `tpl_multiple_choice` — question, correct {text, feedback}, distractors [1-3 × {text, feedback}].
+  Cada distractor es un error típico REAL de este tema (nunca un absurdo) y de longitud parecida a
+  la correcta; el feedback de cada distractor explica por qué falla y el de la correcta, por qué
+  acierta. Equivale a interactive_prediction_gate (multiple_choice).
+- `tpl_true_false` — statement (concreto, sin ambigüedad), isTrue, explanation. Úsalo para
+  desmontar un mito o fijar un hecho puntual; no para conceptos que necesitan matices.
+  Equivale a interactive_prediction_gate (multiple_choice, 2 opciones).
+- `tpl_ordering` — question, stepsInOrder (3-4 eslabones en el orden CORRECTO; no los
+  desordenes tú). Equivale a interactive_prediction_gate (causal_chain_order).
+- `tpl_scenario_choice` — scenario, decisionPoint, optimal {choice, consequence},
+  alternatives [1-3 × {choice, consequence}]. Mismas reglas de uso que branching_scenario_challenge
+  (contenido que ES una decisión con consecuencias). Equivale a ese bloque.
+- `tpl_quick_recall` — items [1-2 × {conceptLabel, prompt, expectedAnswer}]. Mismas reglas que
+  spaced_interleaved_retrieval (solo primer bloque y solo con dueRetrieval). Equivale a ese bloque.
+
+Cada plantilla CUENTA como el blockType al que equivale para TODAS las reglas de arriba: no
+repetir el mismo tipo en bloques consecutivos, el ritmo de compuertas, el andamiaje, el tope de
+tipos dominantes y el tipo exacto que pida una regeneración. Varía entre plantillas y modos: no
+conviertas todo en opción múltiple.
 
 # VISUALES ESTÁTICOS (visualAid) — arXiv:2605.30174
 

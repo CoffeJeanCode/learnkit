@@ -33,6 +33,20 @@ impl FileStore {
         Self::read_json(&self.providers_path())
     }
 
+    fn active_provider_path(&self) -> PathBuf {
+        self.dir.join("active_provider.json")
+    }
+
+    /// Id of the provider the built-in agents are pinned to (`None` = unset).
+    pub fn save_active_provider(&self, id: Option<&str>) -> AppResult<()> {
+        Self::write_json(&self.active_provider_path(), &id)
+    }
+
+    pub fn load_active_provider(&self) -> Option<String> {
+        let raw = std::fs::read_to_string(self.active_provider_path()).ok()?;
+        serde_json::from_str::<Option<String>>(&raw).ok().flatten()
+    }
+
     pub fn save_agents(&self, defs: &[AgentDefinition]) -> AppResult<()> {
         Self::write_json(&self.agents_path(), defs)
     }

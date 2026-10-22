@@ -112,6 +112,7 @@ impl Tool for SubmitDiagnosticAssessmentTool {
 
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
+        crate::dev_trace::trace_tool(Self::NAME, &args);
         self.0.lock().unwrap_or_else(|e| e.into_inner()).assessment = Some(args);
         Ok(SavedAck { saved: true })
     }
@@ -150,6 +151,7 @@ impl Tool for PresentDiagnosticBatteryTool {
 
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
+        crate::dev_trace::trace_tool(Self::NAME, &args);
         self.0.lock().unwrap_or_else(|e| e.into_inner()).diagnostic_battery = Some(args);
         Ok(SavedAck { saved: true })
     }
@@ -311,6 +313,7 @@ impl Tool for ProposeSyllabusPlanTool {
 
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
+        crate::dev_trace::trace_tool(Self::NAME, &args);
         self.0.lock().unwrap_or_else(|e| e.into_inner()).propose_syllabus_plan = Some(args);
         Ok(SavedAck { saved: true })
     }
@@ -351,6 +354,7 @@ impl Tool for ProposeCapstoneProjectTool {
 
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
+        crate::dev_trace::trace_tool(Self::NAME, &args);
         self.0.lock().unwrap_or_else(|e| e.into_inner()).propose_capstone_project = Some(args);
         Ok(SavedAck { saved: true })
     }
@@ -388,6 +392,7 @@ impl Tool for ConfirmSyllabusPlanTool {
 
     async fn call(&self, _context: &mut ToolContext, args: Self::Args) -> Result<Self::Output, Self::Error> {
         crate::tools::emit_tool_event(Self::NAME);
+        crate::dev_trace::trace_tool(Self::NAME, &args);
         self.0.lock().unwrap_or_else(|e| e.into_inner()).confirm_syllabus_plan = Some(args);
         Ok(SavedAck { saved: true })
     }

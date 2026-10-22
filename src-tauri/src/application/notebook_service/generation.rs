@@ -16,7 +16,7 @@ use crate::agents::notebook_agent::NOTEBOOK_AGENT_ID;
 use crate::agents::pedagogical_critic_agent::PEDAGOGICAL_CRITIC_AGENT_ID;
 use crate::domain::learner_memory::{LOCAL_LEARNER_ID, iso_date_from_ms};
 use crate::domain::notebook::{
-    BlockStatus, BlockUpdate, ClassRecord, ClosureFeedback, DynamicBlockType, GateResult, GateSubmission, GeneratedSectionBlock,
+    BlockStatus, BlockUpdate, ClassRecord, ClosureFeedback, DynamicBlockType, GateAttempt, GateResult, GateSubmission, GeneratedSectionBlock,
     NotebookBlock, NotebookPayload,
 };
 use crate::domain::pedagogy_guardrails::{block_guardrail_violations, needs_llm_critic};
@@ -24,6 +24,7 @@ use crate::domain::scaffolding;
 use crate::domain::study::StudyEventKind;
 use crate::domain::skill_status::MIN_RETENTION_INTERVAL_MS;
 use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, RubricCriterion, SkillEvidence};
+use crate::dev_trace::{self, TraceEntry};
 use crate::error::{AppError, AppResult};
 use crate::notebook_store::{ClassGenerationContext, NotebookStore};
 use crate::orchestration::Orchestrator;
@@ -181,23 +182,40 @@ impl NotebookService {
             return Err(AppError::InvalidInput("este bloque ya no es el bloque activo de la clase".to_string()));
         }
 
-        let submission_text = submission_text_of(&submission);
+        let submission_text = submission_text_of(&block, &submission);
+        let mut ui_hints_shown = 0u32;
         let (passed, scaffold_feedback, criteria) = match &submission {
-            GateSubmission::InteractivePredictionGate { selected_option } => {
-                (grading::grade_prediction_gate(&block, selected_option)?, None, Vec::new())
+            GateSubmission::InteractivePredictionGate { selected_option, ordered_steps, case_verdicts } => {
+                let answer = grading::PredictionAnswer {
+                    selected_option: selected_option.as_deref(),
+                    ordered_steps: ordered_steps.as_deref(),
+                    case_verdicts: case_verdicts.as_deref(),
+                };
+                let (passed, hint) = grading::grade_prediction_gate(&block, &answer)?;
+                (passed, hint, Vec::new())
             }
             GateSubmission::BranchingScenarioChallenge { selected_choice } => {
                 (grading::grade_branching_scenario(&block, selected_choice)?, None, Vec::new())
             }
-            GateSubmission::HeuristicErrorAudit { diagnosis_text } => {
-                let g = grading::grade_with_model(&self.orchestrator, app, &block, diagnosis_text, block.attempt_count + 1).await?;
+            GateSubmission::HeuristicErrorAudit { diagnosis_text, selected_line } => {
+                let g = grading::grade_with_model(&self.orchestrator, app, &block, diagnosis_text, block.attempt_count + 1, *selected_line).await?;
                 (g.passed, g.scaffold_feedback, g.criteria)
             }
-            GateSubmission::HandsOnMission { submission_text } => {
-                let g = grading::grade_with_model(&self.orchestrator, app, &block, submission_text, block.attempt_count + 1).await?;
+            GateSubmission::HandsOnMission { submission_text, hints_shown } => {
+                ui_hints_shown = hints_shown.unwrap_or(0);
+                let g = grading::grade_with_model(&self.orchestrator, app, &block, submission_text, block.attempt_count + 1, None).await?;
                 (g.passed, g.scaffold_feedback, g.criteria)
             }
         };
+
+        // Keep what the student actually answered (pass or fail): the closing
+        // block quotes it instead of inventing a "prediction". The very first
+        // gate attempt is also the notebook's `initial_prediction` — the real
+        // first commitment, right or wrong.
+        self.record_gate_attempt(&document.id, &block, &submission_text, passed);
+        if document.initial_prediction.is_none() {
+            self.store.set_document_initial_prediction(&document.id, &submission_text)?;
+        }
 
         // Roll this outcome into the learner's cross-course cognitive memory
         // — see `domain::learner_memory`. Best-effort: a memory read/write
@@ -221,7 +239,7 @@ impl NotebookService {
         } else {
             EvidenceOutcome::Failed
         };
-        self.record_gate_evidence(&document.class_id, &block, outcome, criteria, heavy_scaffolding);
+        self.record_gate_evidence(&document.class_id, &block, outcome, criteria, heavy_scaffolding, ui_hints_shown);
         if let Ok(Some(gen_ctx)) = self.store.class_generation_context(&document.class_id) {
             if passed {
                 memory.resolve_misconceptions_for_block(block_id);
@@ -235,9 +253,6 @@ impl NotebookService {
 
         if passed {
             let updated = self.store.update_block_status(block_id, BlockStatus::Passed, None, true)?;
-            if document.initial_prediction.is_none() {
-                self.store.set_document_initial_prediction(&document.id, &submission_text)?;
-            }
             // Absolute target (gate order + 1), not the stale read's `+1`
             // — grading can be a model call, and nothing may move the
             // cursor backwards while it runs.
@@ -286,7 +301,7 @@ impl NotebookService {
             app,
             &document.class_id,
             &document.id,
-            Some(EscalationInput { failed_block: escalated.clone(), recent_wrong_submission: submission_text }),
+            Some(EscalationInput { failed_block: escalated.clone(), recent_wrong_submission: submission_text, voluntary: false }),
         )
         .await?
         .ok_or_else(|| {
@@ -305,6 +320,101 @@ impl NotebookService {
             escalation_block: Some(grading::redact_block(&escalation_block)),
             next_block: None,
         })
+    }
+
+    /// Voluntary de-escalation ("necesito un paso previo más guiado"): the
+    /// student leaves an unresolved gate WITHOUT having to fail it 3 times.
+    /// The gate is marked `Escalated` (locked, answer never revealed, not
+    /// mastery evidence) and a more scaffolded re-approach block is generated
+    /// right away — the same path as the 3rd-failure escalation, minus the
+    /// failures. `draft` is whatever the student had written so far, used only
+    /// as context for the easier step.
+    pub async fn request_easier_step(
+        &self,
+        app: Option<&AppHandle>,
+        block_id: &str,
+        hints_shown: Option<u32>,
+        draft: Option<String>,
+    ) -> AppResult<GateResult> {
+        let block = self.store.get_block(block_id)?.ok_or_else(|| AppError::InvalidInput(format!("block not found: {block_id}")))?;
+        if !block.block_type.is_gate() {
+            return Err(AppError::InvalidInput(format!("el bloque {block_id} no es una compuerta ({})", block.block_type.as_str())));
+        }
+        if matches!(block.status, BlockStatus::Passed | BlockStatus::Escalated) {
+            return Err(AppError::InvalidInput("esta compuerta ya fue resuelta".to_string()));
+        }
+        let document = self
+            .store
+            .get_document(&block.document_id)?
+            .ok_or_else(|| AppError::InvalidInput("documento no encontrado".to_string()))?;
+        if block.order_index != document.current_block_index {
+            return Err(AppError::InvalidInput("este bloque ya no es el bloque activo de la clase".to_string()));
+        }
+        // Escalation is exempt from the safety ceiling, so without this a
+        // student could keep asking for easier steps forever.
+        let total_blocks = self.store.load_notebook_by_class(&document.class_id)?.map(|p| p.blocks.len()).unwrap_or(0);
+        if total_blocks >= grounding::MAX_TOTAL_BLOCKS {
+            return Err(AppError::InvalidInput("la clase ya tiene demasiados bloques para pedir otro paso previo".to_string()));
+        }
+
+        let escalated = self.store.update_block_status(block_id, BlockStatus::Escalated, None, false)?;
+        let draft = draft.map(|d| d.trim().to_string()).filter(|d| !d.is_empty());
+        let escalation_block = generate_and_persist_block(
+            &self.store,
+            &self.orchestrator,
+            app,
+            &document.class_id,
+            &document.id,
+            Some(EscalationInput {
+                failed_block: escalated.clone(),
+                recent_wrong_submission: draft.unwrap_or_else(|| "(el estudiante pidió ayuda antes de enviar una solución)".to_string()),
+                voluntary: true,
+            }),
+        )
+        .await;
+        let escalation_block = match escalation_block {
+            Ok(Some(b)) => b,
+            Ok(None) => {
+                return Err(AppError::Persistence("otra generación concurrente reemplazó el bloque de re-aproximación".to_string()));
+            }
+            Err(e) => {
+                // The easier step never materialised: put the gate back so the
+                // student isn't stranded on a locked block with nothing after it.
+                let _ = self.store.update_block_status(block_id, block.status, block.last_feedback.as_deref(), false);
+                return Err(e);
+            }
+        };
+        // "Could continue", not "demonstrated" — logged only once the easier
+        // step exists, so a failed generation leaves no evidence behind.
+        self.record_gate_evidence(&document.class_id, &block, EvidenceOutcome::Escalated, Vec::new(), false, hints_shown.unwrap_or(0));
+        self.store
+            .advance_cursor_to_at_least(&document.id, cursor_target_after_insert(escalation_block.order_index, escalation_block.block_type))?;
+        if should_auto_chain(&escalation_block) {
+            self.spawn_background_next_block(app, document.class_id.clone(), document.id.clone());
+        }
+        Ok(GateResult {
+            passed: false,
+            block: grading::redact_block(&escalated),
+            feedback: None,
+            escalation_block: Some(grading::redact_block(&escalation_block)),
+            next_block: None,
+        })
+    }
+
+    /// Best-effort too: the answer history only feeds the closing block.
+    fn record_gate_attempt(&self, document_id: &str, block: &NotebookBlock, answer_text: &str, passed: bool) {
+        let attempt = GateAttempt {
+            document_id: document_id.to_string(),
+            block_id: block.id.clone(),
+            block_type: block.block_type,
+            attempt_number: block.attempt_count + 1,
+            answer_text: answer_text.to_string(),
+            passed,
+            at_ms: now_ms(),
+        };
+        if let Err(e) = self.store.append_gate_attempt(&attempt) {
+            tracing::warn!(error = %e, block_id = %block.id, "failed to record gate attempt");
+        }
     }
 
     /// Best-effort, like the memory update: failing to log evidence must
@@ -326,6 +436,7 @@ impl NotebookService {
         outcome: EvidenceOutcome,
         rubric: Vec<RubricCriterion>,
         heavy_scaffolding: bool,
+        ui_hints_shown: u32,
     ) {
         let Some(kind) = EvidenceKind::for_block(block.block_type) else { return };
         let Ok(Some(gen_ctx)) = self.store.class_generation_context(class_id) else { return };
@@ -339,7 +450,7 @@ impl NotebookService {
         let support = scaffolding::plan(&prior, heavy_scaffolding).support_level;
         let evidence = SkillEvidence::new(class_id, &gen_ctx.course.id, kind, outcome)
             .with_block(&block.id)
-            .with_attempt(block.attempt_count + 1, block.attempt_count)
+            .with_attempt(block.attempt_count + 1, block.attempt_count + ui_hints_shown)
             .with_support_level(Some(support.as_str()))
             .with_transfer(block.content_json.get("isTransfer").and_then(|v| v.as_bool()).unwrap_or(false))
             .with_rubric(rubric);
@@ -476,11 +587,12 @@ impl NotebookService {
 
         let initial_prediction = document.initial_prediction.clone();
         let final_result_so_far = render::synthesize_final_result_so_far(&existing_blocks);
+        let gate_attempts = self.store.list_gate_attempts(&document.id)?;
         let mut base_input = if is_closing_block {
             // The original closing block may have been generated by the
             // forced-closure path (mastery not reached yet) — reuse that
             // framing so the repair doesn't get rejected for closing early.
-            render::render_forced_closure_input(&ctx, &existing_blocks, initial_prediction.as_deref(), &final_result_so_far, mastery)
+            render::render_forced_closure_input(&ctx, &existing_blocks, initial_prediction.as_deref(), &final_result_so_far, mastery, &gate_attempts)
         } else {
             render::render_next_block_input(
                 &ctx,
@@ -492,6 +604,7 @@ impl NotebookService {
                 mastery,
                 &learner_memory,
                 now_ms(),
+                &gate_attempts,
             )
         };
         base_input.push_str(&format!(
@@ -639,18 +752,42 @@ fn reconciled_cursor(blocks: &[NotebookBlock]) -> u32 {
 struct EscalationInput {
     failed_block: NotebookBlock,
     recent_wrong_submission: String,
+    /// The student ASKED for an easier step (no failed attempts behind it):
+    /// the re-approach is a more scaffolded version of the same task.
+    voluntary: bool,
 }
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
-fn submission_text_of(submission: &GateSubmission) -> String {
+/// The submission flattened to the text stored as the student's answer
+/// (answer history, `initial_prediction`, escalation context). `block` supplies
+/// the case wording for a `boundary_case_audit` answer, which is only a list of
+/// verdicts on the wire.
+fn submission_text_of(block: &NotebookBlock, submission: &GateSubmission) -> String {
     match submission {
-        GateSubmission::InteractivePredictionGate { selected_option } => selected_option.clone(),
+        GateSubmission::InteractivePredictionGate { selected_option, ordered_steps, case_verdicts } => {
+            if let Some(steps) = ordered_steps {
+                return steps.join(" → ");
+            }
+            if let Some(verdicts) = case_verdicts {
+                let cases = block.content_json.get("boundaryCases").and_then(|v| v.as_array());
+                return verdicts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, follows)| {
+                        let statement = cases.and_then(|c| c.get(i)).and_then(|c| c.get("statement")).and_then(|v| v.as_str()).unwrap_or("caso");
+                        format!("«{statement}»: {}", if *follows { "cumple la regla" } else { "rompe la regla" })
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+            }
+            selected_option.clone().unwrap_or_default()
+        }
         GateSubmission::BranchingScenarioChallenge { selected_choice } => selected_choice.clone(),
-        GateSubmission::HeuristicErrorAudit { diagnosis_text } => diagnosis_text.clone(),
-        GateSubmission::HandsOnMission { submission_text } => submission_text.clone(),
+        GateSubmission::HeuristicErrorAudit { diagnosis_text, .. } => diagnosis_text.clone(),
+        GateSubmission::HandsOnMission { submission_text, .. } => submission_text.clone(),
     }
 }
 
@@ -665,8 +802,8 @@ fn submission_text_of(submission: &GateSubmission) -> String {
 /// attempt, not an error.
 fn misconception_pattern_from_submission(block: &NotebookBlock, submission: &GateSubmission) -> Option<String> {
     match submission {
-        GateSubmission::InteractivePredictionGate { selected_option } => {
-            block.content_json.get("conceptualFeedbackMap")?.get(selected_option)?.as_str().map(str::to_string)
+        GateSubmission::InteractivePredictionGate { selected_option, .. } => {
+            block.content_json.get("conceptualFeedbackMap")?.get(selected_option.as_deref()?)?.as_str().map(str::to_string)
         }
         GateSubmission::BranchingScenarioChallenge { selected_choice } => block
             .content_json
@@ -723,13 +860,14 @@ async fn generate_and_persist_block(
     let mastery = mastery_progress(&existing_blocks);
 
     let base_input = match &escalation {
-        Some(esc) => render::render_escalation_block_input(&ctx, &esc.failed_block, &esc.recent_wrong_submission),
+        Some(esc) => render::render_escalation_block_input(&ctx, &esc.failed_block, &esc.recent_wrong_submission, esc.voluntary),
         None => {
             let document = store.get_document(document_id)?;
             let initial_prediction = document.as_ref().and_then(|d| d.initial_prediction.clone());
             let final_result_so_far = render::synthesize_final_result_so_far(&existing_blocks);
+            let gate_attempts = store.list_gate_attempts(document_id)?;
             if force_close {
-                render::render_forced_closure_input(&ctx, &existing_blocks, initial_prediction.as_deref(), &final_result_so_far, mastery)
+                render::render_forced_closure_input(&ctx, &existing_blocks, initial_prediction.as_deref(), &final_result_so_far, mastery, &gate_attempts)
             } else {
                 render::render_next_block_input(
                     &ctx,
@@ -741,6 +879,7 @@ async fn generate_and_persist_block(
                     mastery,
                     &learner_memory,
                     now,
+                    &gate_attempts,
                 )
             }
         }
@@ -870,11 +1009,13 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
         ));
         violations.extend(block_guardrail_violations(candidate));
         if !violations.is_empty() {
+            self.trace_critique(candidate, "deterministic_rejected", violations.clone());
             tracing::warn!(class_id = %self.class_id, ?violations, "generated block failed deterministic review");
             return CriticVerdict::Reject { feedback: violations };
         }
         *self.last_grounded.lock().unwrap_or_else(|e| e.into_inner()) = Some(candidate.clone());
         if !needs_llm_critic(candidate.block_type()) {
+            self.trace_critique(candidate, "accepted_deterministic_only", Vec::new());
             return CriticVerdict::Accept;
         }
         let input = render::render_block_audit_input(&self.ctx, &self.existing_blocks, candidate);
@@ -883,15 +1024,23 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
             Ok(_) => {
                 let audit = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
                 match audit {
-                    Some(audit) if audit.accepted => CriticVerdict::Accept,
-                    Some(audit) => CriticVerdict::Reject { feedback: audit.feedback },
+                    Some(audit) if audit.accepted => {
+                        self.trace_critique(candidate, "llm_accepted", Vec::new());
+                        CriticVerdict::Accept
+                    }
+                    Some(audit) => {
+                        self.trace_critique(candidate, "llm_rejected", audit.feedback.clone());
+                        CriticVerdict::Reject { feedback: audit.feedback }
+                    }
                     None => {
+                        self.trace_critique(candidate, "llm_no_verdict_fail_open", vec!["el crítico no devolvió veredicto; se aceptó el bloque".to_string()]);
                         tracing::warn!(class_id = %self.class_id, "pedagogical critic returned no verdict, failing open");
                         CriticVerdict::Accept
                     }
                 }
             }
             Err(e) => {
+                self.trace_critique(candidate, "llm_unavailable_fail_open", vec![format!("crítico no disponible ({}); se aceptó el bloque", e.code())]);
                 tracing::warn!(class_id = %self.class_id, error = %e, "pedagogical critic unavailable, failing open");
                 CriticVerdict::Accept
             }
@@ -923,6 +1072,28 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
 
     fn exhausted_error(&self) -> AppError {
         AppError::AgentExecutionFailed("el generador de notebooks no produjo un bloque válido".to_string())
+    }
+
+    fn trace_scope(&self) -> Option<String> {
+        Some(self.class_id.clone())
+    }
+}
+
+impl BlockGenerationJob<'_> {
+    /// Dev-mode record of a critique outcome: which stage decided and why.
+    /// The candidate JSON is attached so a rejected block can be inspected.
+    fn trace_critique(&self, candidate: &GeneratedSectionBlock, verdict: &str, notes: Vec<String>) {
+        if !dev_trace::is_enabled() {
+            return;
+        }
+        let mut entry = TraceEntry::new("critique");
+        entry.flow = Some("block_critique".to_string());
+        entry.scope = Some(self.class_id.clone());
+        entry.verdict = Some(verdict.to_string());
+        entry.notes = notes;
+        entry.tool = Some(candidate.block_type().as_str().to_string());
+        entry.tool_args = serde_json::to_value(candidate).ok();
+        dev_trace::record(entry);
     }
 }
 
