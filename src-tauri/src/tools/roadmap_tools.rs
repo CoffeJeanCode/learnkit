@@ -136,12 +136,8 @@ impl Tool for PresentDiagnosticBatteryTool {
 
     fn description(&self) -> String {
         "Genera la batería situacional de 3 a 4 preguntas (una sola vez, para todo el plan — \
-         nunca dentro de una clase), con simetría psicométrica estricta entre opciones y \
-         distractores basados en malentendidos reales — nunca opciones absurdas ni la correcta \
-         más larga o explicada que las demás. Llámala en el mismo turno que \
-         submit_diagnostic_assessment, SALVO que entryLevel sea absolute_zero (en ese caso \
-         omítela). Después de llamarla, NO llames propose_syllabus_plan todavía: el estudiante \
-         debe responder esta batería primero."
+         nunca dentro de una clase). Cuándo llamarla (y cuándo omitirla) y las reglas \
+         psicométricas de sus opciones: ver Compuerta 2 del prompt."
             .to_string()
     }
 
@@ -171,28 +167,19 @@ fn syllabus_json_schema() -> serde_json::Value {
                     "properties": {
                         "week": {"type": "integer"},
                         "title": {"type": "string"},
-                        "deliverable": {
-                            "type": "string",
-                            "description": "Resumen de UNA frase del hito de la semana — el detalle real va en micromodules."
-                        },
-                        "weeklyGoal": {
-                            "type": "string",
-                            "description": "Meta semanal (Backward Design): qué problema/fricción real resuelve esta semana y qué capacidad operativa nueva desbloquea. Nunca una intención vaga (\"familiarizarse con X\")."
-                        },
+                        "deliverable": {"type": "string"},
+                        "weeklyGoal": {"type": "string"},
                         "micromodules": {
                             "type": "array",
                             "minItems": 2,
                             "maxItems": 20,
-                            "description": "Entre ceil(paceHoursPerWeek / 4) y 5 sesiones (mínimo 2) homogéneas en horas (diferencia máxima de 1h entre la más larga y la más corta, p. ej. 2 x 3.5h para 7h o 4 x 3.5h para 14h); solo se admiten más de 5 cuando las horas semanales superan 20 — anti-monolito: ninguna sesión supera 4 horas. La suma de horas debe igualar paceHoursPerWeek.",
+                            "description": "Sesiones de la semana: cantidad, reparto y suma de horas según DOSIFICACIÓN HORARIA del prompt.",
                             "items": {
                                 "type": "object",
                                 "properties": {
                                     "label": {"type": "string", "description": "p. ej. \"Días 1-2 — Recorrer el árbol sin clonar nodos\""},
                                     "hours": {"type": "number", "maximum": 4},
-                                    "focus": {
-                                        "type": "string",
-                                        "description": "Conceptos centrales y relación causa-efecto que explora ESTA sesión, aterrizados en la fricción real que resuelve (nunca una definición enciclopédica ni jerga de proceso)."
-                                    },
+                                    "focus": {"type": "string"},
                                     "deliverable": {
                                         "type": "object",
                                         "description": "Artefacto concreto y verificable de ESTA sesión — nunca texto libre.",
@@ -211,13 +198,12 @@ fn syllabus_json_schema() -> serde_json::Value {
                                     },
                                     "objective": {
                                         "type": "string",
-                                        "description": "Qué sabrá HACER el estudiante al terminar esta sesión: una capacidad observable, una sola frase en infinitivo (p. ej. \"Explicar por qué el ciclo se reinicia con oxalacetato\"). NO es el entregable (el artefacto) ni una intención vaga (\"comprender la teoría\")."
+                                        "description": "Capacidad observable, UNA frase en infinitivo. NO es el entregable (el artefacto) ni una intención vaga (\"comprender la teoría\")."
                                     },
                                     "interactiveBlocks": {
                                         "type": "array",
                                         "minItems": 3,
                                         "maxItems": 4,
-                                        "description": "Metadata interna para el orquestador de notebooks — el estudiante NUNCA ve estos nombres.",
                                         "items": {
                                             "type": "string",
                                             "enum": [
@@ -253,15 +239,9 @@ fn capstone_project_json_schema() -> serde_json::Value {
         "type": "object",
         "description": "El proyecto de transferencia terminal (Backward Design): el mismo punto de llegada desde el que se diseñó todo el temario hacia atrás — distinto del deliverable del último milestone.",
         "properties": {
-            "title": {"type": "string", "description": "Nombre corto y directo del proyecto terminal."},
-            "description": {
-                "type": "string",
-                "description": "Escenario o problema real que integra capacidades de varias semanas (nunca una lista de temas)."
-            },
-            "verifiableEvidence": {
-                "type": "string",
-                "description": "Artefacto tangible que certifica el cierre — qué se entrega o demuestra (nunca \"dominio del tema\")."
-            }
+            "title": {"type": "string"},
+            "description": {"type": "string"},
+            "verifiableEvidence": {"type": "string"}
         },
         "required": ["title", "description", "verifiableEvidence"]
     })
@@ -290,10 +270,9 @@ impl Tool for ProposeSyllabusPlanTool {
     fn description(&self) -> String {
         "Propone (sin persistir nada todavía) el diagnóstico consolidado y las semanas del \
          temario, calibrados por los resultados reales del diagnóstico (batería respondida, o el \
-         nivel absolute_zero declarado si la batería se omitió). Llama propose_capstone_project \
-         DE INMEDIATO después, en el MISMO turno, antes de terminar con closingQuestion. NO genera \
-         el notebook de la primera clase ni guarda el curso — eso ocurre solo si el estudiante \
-         confirma (confirm_syllabus_plan)."
+         nivel absolute_zero declarado si la batería se omitió). NO genera el notebook de la \
+         primera clase ni guarda el curso — eso ocurre solo si el estudiante confirma \
+         (confirm_syllabus_plan)."
             .to_string()
     }
 
@@ -341,10 +320,9 @@ impl Tool for ProposeCapstoneProjectTool {
 
     fn description(&self) -> String {
         "Propone el proyecto de transferencia terminal (Backward Design) del temario: el mismo \
-         punto de llegada desde el que se diseñó todo el temario hacia atrás. Llámala \
-         INMEDIATAMENTE después de propose_syllabus_plan, en el MISMO turno — nunca antes, nunca \
-         en un turno separado. title, description y verifiableEvidence van en el nivel superior \
-         de los argumentos, igual que capstoneProject solía ir dentro de syllabus."
+         punto de llegada desde el que se diseñó todo el temario hacia atrás. Su orden respecto \
+         a propose_syllabus_plan está en el prompt. title, description y verifiableEvidence van \
+         en el nivel superior de los argumentos."
             .to_string()
     }
 

@@ -460,7 +460,7 @@ fn visual_aid_json_schema() -> serde_json::Value {
 fn visual_aid_pointer_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
-        "description": "Mismo shape que `visualAid` de declarative_visual_diagram (renderEngine mermaid | declarative_svg | conceptual_matrix)"
+        "description": "Opcional. Mismo shape que `visualAid` de declarative_visual_diagram (renderEngine mermaid | declarative_svg | conceptual_matrix)"
     })
 }
 
@@ -493,19 +493,19 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     }
                 },
                 "required": ["blockType", "items"],
-                "description": "SOLO como PRIMER bloque de la clase, y SOLO cuando learnerMemory.dueRetrieval del input trae elementos — 1 a 2 preguntas que reactivan conceptos de clases anteriores antes de tocar material nuevo. Nunca un gate: es autocomprobación (el estudiante recuerda, luego revela la respuesta)."
+                "description": "Ver MEMORIA COGNITIVA: SOLO como primer bloque y SOLO con learnerMemory.dueRetrieval. Autocomprobación, nunca un gate."
             },
             {
                 "properties": {
                     "blockType": {"const": "anchored_micro_theory"},
                     "title": {"type": "string"},
-                    "intuitiveHook": {"type": "string", "description": "🎯 Analogía cotidiana, cero términos técnicos, 1-2 líneas"},
-                    "analogyBoundary": {"type": "string", "description": "Dónde deja de aplicar la analogía de intuitiveHook — qué NO cubre técnicamente, 1 línea, para que el estudiante no extienda la metáfora más allá de lo que soporta"},
-                    "systemRule": {"type": "string", "description": "📐 La regla o mecanismo en una SECUENCIA CLARA de micro-pasos numerados (1 ➔ 2 ➔ 3) con un ejemplo concreto de entrada/salida (qué escribe el estudiante, qué responde la pantalla, qué significa cada parte), con el detalle técnico completo (hasta 240 palabras) — nunca un párrafo abstracto"},
-                    "frequentError": {"type": "string", "description": "⚠️ Contraste explícito entre un caso VÁLIDO y la confusión típica ('esto SÍ / esto NO, porque...'), no solo describir el error en aislamiento"}
+                    "intuitiveHook": {"type": "string", "description": "🎯 El Gancho Intuitivo"},
+                    "analogyBoundary": {"type": "string", "description": "🚧 El Límite de la Analogía"},
+                    "systemRule": {"type": "string", "description": "📐 La Regla del Sistema"},
+                    "frequentError": {"type": "string", "description": "⚠️ El Error Frecuente"}
                 },
                 "required": ["blockType", "title", "intuitiveHook", "systemRule", "frequentError"],
-                "description": "intuitiveHook + analogyBoundary + frequentError suman máximo 100 palabras combinadas (terse); systemRule tiene su propio máximo (ver su campo) — nunca texto enciclopédico plano"
+                "description": "Capas, contenido y topes de palabras: ver CATÁLOGO DE BLOQUES, bloque 1"
             },
             {
                 "properties": {
@@ -550,7 +550,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "visualAid": visual_aid_pointer_schema()
                 },
                 "required": ["blockType", "scenario", "decisionPoint", "branches"],
-                "description": "Ideal para liderazgo, estrategia y gestión — cuando el dominio ES una decisión con consecuencias, no un concepto o procedimiento. El estudiante debe elegir una branch para desbloquear el siguiente bloque. visualAid es opcional — solo inclúyelo si un diagrama (org chart, estado del sistema) realmente aclara el escenario."
+                "description": "El estudiante debe elegir una branch para desbloquear el siguiente bloque."
             },
             {
                 "properties": {
@@ -578,7 +578,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "visualAid": visual_aid_pointer_schema()
                 },
                 "required": ["blockType", "instruction", "flawedRepresentation", "guidingQuestions", "modelSolution"],
-                "description": "El estudiante escribe su propio diagnóstico de la causa raíz (texto libre) para desbloquear el siguiente bloque — lo califica notebook_gate_grader contra modelSolution. visualAid es opcional — úsalo cuando el fallo es espacial/visual (un diagrama mal etiquetado, un flujo roto), no solo textual."
+                "description": "El estudiante escribe su propio diagnóstico de la causa raíz (texto libre) para desbloquear el siguiente bloque — lo califica notebook_gate_grader contra modelSolution."
             },
             {
                 "properties": {
@@ -587,7 +587,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "interactionMode": {
                         "type": "string",
                         "enum": ["multiple_choice", "causal_chain_order", "boundary_case_audit"],
-                        "description": "Cómo responde el estudiante. Omitir = multiple_choice. causal_chain_order: ordena 3-4 eslabones de un mecanismo (usa shuffledSteps + correctOrder, SIN options). boundary_case_audit: clasifica 2-3 micro-casos al borde de la regla como «cumple»/«rompe» (usa boundaryCases, SIN options). Varía el modo entre compuertas: no uses multiple_choice por defecto."
+                        "description": "Cómo responde el estudiante. Omitir = multiple_choice. Cada modo usa SOLO sus campos (ver CATÁLOGO, bloque 5)."
                     },
                     "options": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4, "description": "SOLO multiple_choice"},
                     "conceptualFeedbackMap": {"type": "object", "description": "SOLO multiple_choice: una entrada por cada opción de options"},
@@ -614,7 +614,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "visualAid": visual_aid_pointer_schema()
                 },
                 "required": ["blockType", "question"],
-                "description": "La respuesta se registra ANTES de revelar nada — bloquea el avance hasta acertar. En multiple_choice (por defecto) exige options + conceptualFeedbackMap + correctOption; en causal_chain_order exige shuffledSteps + correctOrder; en boundary_case_audit exige boundaryCases. visualAid es opcional — solo si la predicción realmente depende de leer un diagrama primero."
+                "description": "Bloquea el avance hasta acertar. Campos requeridos por modo: ver CATÁLOGO, bloque 5."
             },
             {
                 "properties": {
@@ -624,11 +624,11 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "constraints": {"type": "array", "items": {"type": "string"}, "description": "Restricciones reales, no genéricas"},
                     "scaffoldingHints": {"type": "array", "items": {"type": "string"}},
                     "evaluationRubricSummary": {"type": "array", "items": {"type": "string"}},
-                    "isTransfer": {"type": "boolean", "description": "true SOLO para el reto de transferencia: el mismo skill en un caso NUEVO, con restricciones distintas a las de misiones anteriores y scaffoldingHints VACÍO. Omitir (false) en una misión normal."},
+                    "isTransfer": {"type": "boolean", "description": "true SOLO en el reto de transferencia (ver RETO DE TRANSFERENCIA). Omitir (false) en una misión normal."},
                     "supportLevel": {
                         "type": "string",
                         "enum": ["full", "guided", "faded", "independent"],
-                        "description": "OBLIGATORIO: cuánto apoyo da esta misión (sigue scaffolding.supportLevel). La primera misión tras una teoría/diagrama es SIEMPRE guided o faded, nunca independent. independent solo en la misión de transferencia (isTransfer=true)."
+                        "description": "OBLIGATORIO: cuánto apoyo da esta misión (sigue scaffolding.supportLevel; ver ANDAMIAJE, regla 9)."
                     },
                     "workedTemplate": {
                         "type": "string",
@@ -650,7 +650,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "visualAid": visual_aid_pointer_schema()
                 },
                 "required": ["blockType", "challengeStatement", "expectedMilestoneArtifact", "constraints", "scaffoldingHints", "evaluationRubricSummary", "supportLevel"],
-                "description": "El estudiante entrega su solución en texto libre para desbloquear el siguiente bloque — lo califica notebook_gate_grader contra evaluationRubricSummary. visualAid es opcional — un diagrama de referencia del objetivo, solo si ayuda."
+                "description": "El estudiante entrega su solución en texto libre para desbloquear el siguiente bloque — lo califica notebook_gate_grader contra evaluationRubricSummary."
             },
             {
                 "properties": {
@@ -669,7 +669,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "selfEvaluationChecklist": {"type": "array", "items": {"type": "string"}}
                 },
                 "required": ["blockType", "synthesisTask", "predictionComparison", "selfEvaluationChecklist"],
-                "description": "SIEMPRE el último bloque del notebook — nunca es un gate (no bloquea nada), pero es obligatorio entre el bloque 3 y el 5"
+                "description": "Último bloque de la clase; nunca es un gate (no bloquea nada)."
             }
         ]
     });
@@ -791,21 +791,16 @@ pub(crate) fn diagnostic_battery_json_schema() -> serde_json::Value {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "dimension": {
-                            "type": "string",
-                            "enum": ["intuition", "mechanics", "critical_case", "boundary"],
-                            "description": "intuition/mechanics/critical_case son obligatorias (al menos una pregunta de cada una); boundary es opcional, solo si hay una 4ª pregunta."
-                        },
+                        "dimension": {"type": "string", "enum": ["intuition", "mechanics", "critical_case", "boundary"]},
                         "prompt": {"type": "string"},
                         "options": {
                             "type": "array",
                             "items": {"type": "string"},
                             "minItems": 2,
-                            "maxItems": 4,
-                            "description": "Longitudes de texto similares entre sí (variación menor al 15%) — nunca la opción correcta más larga o más explicada que las demás. Ninguna opción debe contener su propia justificación."
+                            "maxItems": 4
                         },
                         "correctOption": {"type": "string"},
-                        "diagnosticInsight": {"type": "string", "description": "Qué revela sobre su modelo mental elegir una opción incorrecta — AQUÍ va la explicación, nunca dentro del texto de una opción"}
+                        "diagnosticInsight": {"type": "string", "description": "Qué revela sobre su modelo mental elegir una opción incorrecta"}
                     },
                     "required": ["dimension", "prompt", "options", "correctOption", "diagnosticInsight"]
                 }

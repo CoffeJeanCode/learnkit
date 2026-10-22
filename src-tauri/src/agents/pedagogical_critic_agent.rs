@@ -37,8 +37,8 @@ interactive_prediction_gate:
   plausibles del dominio, no absurdos descartables.
 branching_scenario_challenge:
 - El escenario es una decisión real con consecuencias (no un concepto disfrazado).
-- EXACTAMENTE una branch es isOptimal y esa rama es genuinamente la mejor jugada; las
-  consecuencias son realistas y distintas entre sí.
+- La rama marcada isOptimal es genuinamente la mejor jugada; las consecuencias son realistas y
+  distintas entre sí.
 Coherencia transversal:
 - El bloque enseña algo que la clase (topic + targetGoal) realmente necesita y que no repite lo
   que blocksSoFar ya cubrió — si el tipo de bloque no encaja con la naturaleza del tema, dilo.

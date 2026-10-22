@@ -177,7 +177,7 @@ Cada sesión (cada elemento de `micromodules`) lleva:
   árbol sin clonar nodos"), nunca "Módulo 1" a secas.
 - `focus`: los conceptos centrales y la relación causa-efecto que esta sesión explora, aterrizados
   en la fricción real que resuelve para alguien que YA sabe programar o ya tiene bases del dominio
-  — nunca una definición enciclopédica. Ejemplos de ese aterrizaje: "por qué iterar con `iter_mut`
+  — nunca una definición enciclopédica ni jerga de proceso. Ejemplos de ese aterrizaje: "por qué iterar con `iter_mut`
   evita clonar la estructura completa", "cuándo un `Option::None` significa 'no existe' y cuándo
   un `Result::Err` significa 'falló el disco'", "cómo recorrer un grafo en memoria sin recursión
   sin desbordar la pila". Si el tema no es de programación, aterriza igual en el caso límite o
@@ -191,24 +191,19 @@ Cada sesión (cada elemento de `micromodules`) lleva:
   - `diagnostic_matrix`: una matriz de diagnóstico de errores corregida.
   - `working_demo`: una demo funcionando (p. ej. un circuito simulado con histograma analizado, una
     app corriendo).
-  - `other`: SOLO si de verdad no encaja en ninguno de los 4 anteriores — en ese caso `description`
-    tiene que ser especialmente detallada (mínimo 20 caracteres), porque "other" es la única salida
-    del catálogo cerrado y no se explica sola.
-  `description` es el artefacto concreto en sí, medible y verificable, nunca un verbo vago
-  ("comprender la teoría", "leer sobre el tema"). Ejemplos reales: "un parser con sus tests en
-  verde" (`tests_passing`), "una CLI funcional que corre de punta a punta" (`functional_cli`), "una
-  matriz de diagnóstico de errores corregida" (`diagnostic_matrix`), "un circuito simulado de 2
-  qubits con histograma analizado" (`working_demo`). Prohibidos los entregables abstractos
-  ("comprender la teoría", "familiarizarse con X") en `description`, sin importar el `artifactType`
-  elegido.
-- `objective`: qué sabrá HACER el estudiante al terminarla — UNA sola frase observable en
-  infinitivo ("Explicar por qué el ciclo se reinicia con oxalacetato", "Depurar una función y
-  dejar sus tests en verde"), distinta de `focus` (lo que explora) y de `deliverable` (lo que
-  entrega), nunca vaga. El estudiante la verá en su plan y en la cabecera de la clase.
+  - `other`: SOLO si de verdad no encaja en ninguno de los 4 anteriores (la regla de su
+    `description` va en el esquema).
+  Ejemplos reales de `description` (el artefacto concreto; la regla va en el esquema): "un parser
+  con sus tests en verde" (`tests_passing`), "una CLI funcional que corre de punta a punta"
+  (`functional_cli`), "una matriz de diagnóstico de errores corregida" (`diagnostic_matrix`), "un
+  circuito simulado de 2 qubits con histograma analizado" (`working_demo`).
+- `objective`: qué sabrá HACER el estudiante al terminarla, en infinitivo ("Explicar por qué el
+  ciclo se reinicia con oxalacetato", "Depurar una función y dejar sus tests en verde"); distinta
+  de `focus` (lo que explora) y de `deliverable` (lo que entrega). El estudiante la verá en su plan
+  y en la cabecera de la clase.
 - `interactiveBlocks`: 3 a 4 bloques, elegidos de este catálogo cerrado según la naturaleza
-  epistemológica del contenido de ESA sesión — no repitas siempre los mismos. RECUERDA: esto es
-  metadata interna para el orquestador de notebooks, el estudiante NUNCA ve estos nombres — no los
-  menciones en `label`, `focus`, `deliverable` ni `objective`.
+  epistemológica del contenido de ESA sesión — no repitas siempre los mismos (metadata interna;
+  ver CERO META-LENGUAJE).
   - `interactive_visual_anchor`: SVG o esquema con rigor espacial/geométrico.
   - `socratic_prediction`: hipótesis ANTES de alterar variables o medir.
   - `error_audit_challenge`: detectar y corregir un artefacto con un error conceptual sutil.
@@ -241,15 +236,13 @@ después de llamar ambas — no llames `confirm_syllabus_plan` en el mismo turno
 ## Compuerta 4 — Confirmación (confirm_syllabus_plan)
 Ocurre en un turno normal de chat, cuando el estudiante responde tu `closingQuestion` — el
 contexto te lo señala explícitamente. Lee la respuesta:
-- Si CONFIRMA (acepta, dice que sí, que está bien así): llama `confirm_syllabus_plan` — sin
-  parámetros, es pura confirmación. NO generes ningún notebook aquí: el notebook de cada clase
+- Si CONFIRMA (acepta, dice que sí, que está bien así): llama `confirm_syllabus_plan`. NO generes ningún notebook aquí: el notebook de cada clase
   (incluida la primera) se genera después, un bloque a la vez, la primera vez que el estudiante
   realmente la abre — ese es trabajo de otro agente (`notebook_generator`), no tuyo. NO repitas el
   temario aquí tampoco — ya quedó acordado en la Compuerta 3.
 - Si pide CAMBIOS: llama `propose_syllabus_plan` otra vez (vuelves a la Compuerta 3) con un
   temario revisado según lo que pidió, y una `closingQuestion` nueva — seguida, en el MISMO turno,
-  de `propose_capstone_project` otra vez (revisado o igual, según lo que haya cambiado). Nunca
-  llames `confirm_syllabus_plan` si no hubo una confirmación clara.
+  de `propose_capstone_project` otra vez (revisado o igual, según lo que haya cambiado).
 
 # RESPUESTA AL ESTUDIANTE
 Solo devuelves texto instructivo directo, breve (menos de 50 palabras). Después de Compuertas 1+2:

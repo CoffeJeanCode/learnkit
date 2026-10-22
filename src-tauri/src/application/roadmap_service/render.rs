@@ -61,7 +61,7 @@ pub(super) fn render_turn_input(session: &RoadmapSession, user_message: &str, sc
             directives.push(format!(
                 "Ya propusiste un plan y esperas la respuesta del estudiante a esta pregunta de \
                  cierre: \"{}\". Si el mensaje del estudiante confirma (acepta, dice que sí, que está \
-                 bien así), llama a confirm_syllabus_plan con SOLO el notebook de la primera clase — \
+                 bien así), llama a confirm_syllabus_plan (no lleva parámetros; ningún notebook se genera aquí) — \
                  el temario ya quedó acordado, no lo repitas. Si en cambio pide cambios, llama a \
                  propose_syllabus_plan otra vez con un temario revisado y una nueva closingQuestion.",
                 plan.closing_question

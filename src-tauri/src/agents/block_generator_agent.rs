@@ -145,10 +145,10 @@ El bloque de cierre (metacognitive_closure) es OBLIGATORIO pero SOLO es válido 
 (ver RETO DE TRANSFERENCIA) — el sistema RECHAZA cualquier cierre prematuro. Mientras falte una de las dos, sigue generando bloques de teoría/práctica hacia
 la que falte: si `hasPassedConceptualGate` es `false`, prioriza otra oportunidad de predicción o
 decisión; si `hasPassedPracticeGate` es `false`, prioriza otra oportunidad de auditoría o misión
-práctica — nunca repitas el mismo blockType dos veces seguidas para lograrlo, varía el ángulo o la
-dificultad. No te preocupes por que la clase se alargue: es preferible una clase más larga con
-maestría real a una corta que solo aparenta estar completa. Nunca el mismo blockType dos veces
-seguidas — el sistema lo rechaza si lo haces:
+práctica — varía el ángulo o la dificultad. No te preocupes por que la clase se alargue: es
+preferible una clase más larga con maestría real a una corta que solo aparenta estar completa.
+REGLA: nunca el mismo blockType dos veces seguidas (el sistema lo rechaza; única excepción: el reto
+de transferencia, ver abajo):
 
 Identifica primero a cuál de estos 5 perfiles epistemológicos pertenece el tema de HOY (nunca el
 curso entero — un mismo curso puede cruzar varios perfiles clase a clase) y usa esa disposición
@@ -177,9 +177,9 @@ como punto de partida, no como molde rígido:
   framed como justificación elaborativa (el estudiante debe explicar POR QUÉ ese curso de acción,
   no solo elegirlo) -> metacognitive_closure.
 
-Estas 5 disposiciones son puntos de partida, no una tabla que copias — sigues respetando arriba
-que nunca el mismo blockType dos veces seguidas, que el cierre solo llega con ambas compuertas de
-maestría superadas, y todo lo demás de esta sección.
+Estas 5 disposiciones son puntos de partida, no una tabla que copias — sigues respetando la regla
+de repetición de arriba, que el cierre solo llega con ambas compuertas de maestría superadas, y todo
+lo demás de esta sección.
 
 ## `compositionHint` (perfil inferido y bloque sugerido para ESTA posición)
 Si el input trae `compositionHint`, el sistema ya infirió el perfil epistemológico del tema
@@ -197,8 +197,7 @@ cuando el systemRule de un anchored_micro_theory que acabas de generar (o el que
 continuación) describe estado de sistema o arquitectura — memoria, stocks/flujos, estructuras de
 datos, componentes que interactúan entre sí — prioriza que el SIGUIENTE bloque sea un
 declarative_visual_diagram propio para ese mismo concepto, nunca un diagrama embebido dentro del
-propio anchored_micro_theory (ese bloque ya no acepta visualAid — ver su entrada en el CATÁLOGO DE
-BLOQUES abajo). El diagrama separado ya resuelve solapamiento y anclaje geométrico (ver REGLAS DE
+propio anchored_micro_theory (ese bloque no acepta visualAid). El diagrama separado ya resuelve solapamiento y anclaje geométrico (ver REGLAS DE
 ORO DE GEOMETRÍA, GROUNDING Y COLISIONES más abajo); duplicar esa lógica dentro de la microteoría
 solo genera el mismo problema dos veces.
 
@@ -213,8 +212,8 @@ bloque es OBLIGATORIAMENTE una `hands_on_mission` con `isTransfer: true` — el 
   restricción repetida) y reales, no genéricas.
 - `scaffoldingHints` VACÍO: se evalúa sin pistas. El apoyo ya se atenuó hasta `independent`.
 - Nivel de reto apenas por encima de lo demostrado (obedece `challengeBalance`), nunca el techo.
-- Puede ir justo después de la misión que completó la maestría (esta es la única excepción a "nunca
-  el mismo blockType dos veces seguidas").
+- Puede ir justo después de la misión que completó la maestría (la excepción a la regla de repetición
+  de COMPOSICIÓN DINÁMICA).
 - Abre con la micro-meta: qué podrá hacer el estudiante "sin ayuda" al terminar. Fuera de este caso
   usa SIEMPRE `isTransfer` ausente/false.
 Si el estudiante no la supera tras sus intentos, el flujo continúa solo; no cuenta como dominio.
@@ -364,16 +363,14 @@ regla formal paso a paso con soporte gráfico.
    intuitiveHook + analogyBoundary + frequentError suman MÁXIMO 100 PALABRAS combinadas entre las
    3 — mantenlas terse, el sistema las rechaza si te pasas; el detalle técnico vive en systemRule,
    no aquí.
-   Ya no lleva visualAid embebido: si systemRule describe estado de sistema o arquitectura
-   (memoria, stocks/flujos, estructuras de datos, componentes que interactúan entre sí), NO lo
-   dibujes aquí — genera un declarative_visual_diagram propio para ese mismo concepto, normalmente
-   inmediatamente después de este bloque (ver también COMPOSICIÓN DINÁMICA arriba).
+   Sin visualAid embebido: el diagrama va en un declarative_visual_diagram propio (regla de
+   emparejamiento en COMPOSICIÓN DINÁMICA).
 2. declarative_visual_diagram — title, visualAid (OBLIGATORIO), guidedWalkthrough: pasos numerados
    que referencian partes concretas del diagrama (targetVisualElement debe nombrar un nodo/label
    real de visualAid, nunca un elemento genérico). Diagrama estático con etiquetas conectadas y
    mapa de relaciones explícito.
 3. branching_scenario_challenge — scenario, decisionPoint, branches (2 a 4, cada una con choice +
-   consequence visible + isOptimal). EXACTAMENTE una branch con isOptimal true. Úsalo cuando el
+   consequence visible + isOptimal). Úsalo cuando el
    contenido de la clase ES una decisión con consecuencias — liderazgo, estrategia, gestión de
    proyecto, ética aplicada — nunca para un concepto o procedimiento técnico. visualAid es
    OPCIONAL aquí — inclúyelo solo si un diagrama (org chart, estado del sistema) aclara de verdad
@@ -427,8 +424,7 @@ regla formal paso a paso con soporte gráfico.
    genérica o inventada; `contrastNarrative` debe decir con honestidad si falló al primer intento
    (`firstAttemptWasWrong`), en qué intento acertó y qué cambió en su modelo mental entre ambas.
 
-Cada bloque es CORTO — nada de párrafos largos. PROHIBIDO repetir el mismo blockType en dos
-posiciones consecutivas — el sistema rechaza el notebook si lo haces, sin excepción.
+Cada bloque es CORTO — nada de párrafos largos.
 
 # PLANTILLAS (modo híbrido) — PREFIÉRELAS para los bloques sencillos
 
@@ -454,10 +450,9 @@ auditoría, misión, cierre).
 - `tpl_quick_recall` — items [1-2 × {conceptLabel, prompt, expectedAnswer}]. Mismas reglas que
   spaced_interleaved_retrieval (solo primer bloque y solo con dueRetrieval). Equivale a ese bloque.
 
-Cada plantilla CUENTA como el blockType al que equivale para TODAS las reglas de arriba: no
-repetir el mismo tipo en bloques consecutivos, el ritmo de compuertas, el andamiaje, el tope de
-tipos dominantes y el tipo exacto que pida una regeneración. Varía entre plantillas y modos: no
-conviertas todo en opción múltiple.
+Cada plantilla CUENTA como el blockType al que equivale para TODAS las reglas de arriba (repetición
+consecutiva, ritmo de compuertas, andamiaje, tope de tipos dominantes, tipo exacto que pida una
+regeneración). Varía entre plantillas y modos: no conviertas todo en opción múltiple.
 
 # VISUALES ESTÁTICOS (visualAid) — arXiv:2605.30174
 
