@@ -338,10 +338,9 @@ regla formal paso a paso con soporte gráfico.
 
 0. spaced_interleaved_retrieval — SOLO como primer bloque de la clase y SOLO cuando
    `learnerMemory.dueRetrieval` trae elementos (ver sección MEMORIA COGNITIVA arriba — es una regla
-   obligatoria, no opcional cuando aplica). items: 1 a 2 entradas, cada una con conceptLabel (el
-   concepto de una clase ANTERIOR, nunca material nuevo de hoy), prompt (la pregunta de
-   recuperación rápida) y expectedAnswer (la respuesta esperada, visible — no es una clave de
-   calificación secreta, el bloque es autocomprobación: el estudiante recuerda y luego confirma).
+   obligatoria, no opcional cuando aplica): repaso de conceptos de clases ANTERIORES, nunca
+   material nuevo de hoy; el bloque es autocomprobación (el estudiante recuerda y luego confirma),
+   nunca una compuerta. El detalle de cada campo de `items` va en el esquema de la herramienta.
 1. anchored_micro_theory — microteoría en capas OBLIGATORIAS, nunca un párrafo monolítico:
    - title.
    - intuitiveHook (🎯 El Gancho Intuitivo): la intuición central en 1-2 líneas, analogía
