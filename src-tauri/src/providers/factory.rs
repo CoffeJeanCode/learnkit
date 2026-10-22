@@ -9,7 +9,7 @@ use crate::tools::{
     BlockAuditCapture, ClosureFeedbackCapture, ConfirmSyllabusPlanTool, DiagnosticToolScope, EchoTool, GateGradingCapture,
     GradeClosureSubmissionTool, GradeGateSubmissionTool, NotebookBlockCapture, PresentDiagnosticBatteryTool,
     ProposeCapstoneProjectTool, ProposeSyllabusPlanTool, PublishNotebookBlockTool, SharedRoadmapCapture, SubmitBlockAuditTool,
-    SubmitDiagnosticAssessmentTool, is_known_tool,
+    SubmitDiagnosticAssessmentTool, accept_terminal_stop, is_known_tool, stop_when_roadmap_captured, stop_when_some,
 };
 
 /// Límite para una llamada al LLM: sin esto, una red colgada o un proveedor
@@ -288,6 +288,7 @@ impl ProviderFactory {
         // `if scope... { builder = builder.tool(...) }` won't typecheck. Each
         // scope registers its subset in its own branch instead — every scope
         // has at least one tool, so every branch ends in `.tool(...)`.
+        let hook = stop_when_roadmap_captured(scope, capture.clone());
         let base = AgentBuilder::new(model)
             .preamble(system_prompt)
             // Presupuesto por proveedor (ver `output_budget`): un turno puede
@@ -324,11 +325,11 @@ impl ProviderFactory {
         const DIAGNOSTIC_MAX_TURNS: usize = 6;
         let text = tokio::time::timeout(
             std::time::Duration::from_secs(prompt_timeout_secs()),
-            agent.prompt(input).max_turns(DIAGNOSTIC_MAX_TURNS),
+            agent.prompt(input).max_turns(DIAGNOSTIC_MAX_TURNS).add_hook(hook),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?
-        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?;
+        let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput {
             text,
             tool_calls: vec!["submit_diagnostic_assessment".to_string(), "generate_syllabus_execution".to_string()],
@@ -421,17 +422,18 @@ impl ProviderFactory {
         // walkthrough steps): the budget comes from the provider (see
         // `output_budget`), not the modest plain-turn default — same as the
         // retired whole-notebook call, just spent on one block instead of 3-5.
+        let hook = stop_when_some(capture.clone());
         let agent = AgentBuilder::new(model).preamble(system_prompt).max_tokens(max_tokens).tool(PublishNotebookBlockTool(capture)).build();
         // A single tool call still sometimes needs a follow-up turn (provider
         // dependent) — same generous budget as the roadmap execution turn.
         const NOTEBOOK_BLOCK_MAX_TURNS: usize = 6;
         let text = tokio::time::timeout(
             std::time::Duration::from_secs(prompt_timeout_secs()),
-            agent.prompt(input).max_turns(NOTEBOOK_BLOCK_MAX_TURNS),
+            agent.prompt(input).max_turns(NOTEBOOK_BLOCK_MAX_TURNS).add_hook(hook),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?
-        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?;
+        let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["publish_notebook_block".to_string()] })
     }
 
@@ -520,16 +522,17 @@ impl ProviderFactory {
         // A grading verdict + one short scaffold hint is tiny compared to a
         // notebook block — the modest plain-turn budget is plenty, no need
         // for the per-provider `output_budget`.
+        let hook = stop_when_some(capture.clone());
         let agent =
             AgentBuilder::new(model).preamble(system_prompt).max_tokens(PLAIN_MAX_TOKENS).tool(GradeGateSubmissionTool(capture)).build();
         const GATE_GRADING_MAX_TURNS: usize = 4;
         let text = tokio::time::timeout(
             std::time::Duration::from_secs(prompt_timeout_secs()),
-            agent.prompt(input).max_turns(GATE_GRADING_MAX_TURNS),
+            agent.prompt(input).max_turns(GATE_GRADING_MAX_TURNS).add_hook(hook),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?
-        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?;
+        let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["grade_gate_submission".to_string()] })
     }
 
@@ -617,6 +620,7 @@ impl ProviderFactory {
     {
         // A verdict + one short student-facing feedback is tiny — the same
         // modest plain-turn budget as gate grading is plenty.
+        let hook = stop_when_some(capture.clone());
         let agent = AgentBuilder::new(model)
             .preamble(system_prompt)
             .max_tokens(PLAIN_MAX_TOKENS)
@@ -625,11 +629,11 @@ impl ProviderFactory {
         const CLOSURE_GRADING_MAX_TURNS: usize = 4;
         let text = tokio::time::timeout(
             std::time::Duration::from_secs(prompt_timeout_secs()),
-            agent.prompt(input).max_turns(CLOSURE_GRADING_MAX_TURNS),
+            agent.prompt(input).max_turns(CLOSURE_GRADING_MAX_TURNS).add_hook(hook),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?
-        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?;
+        let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["grade_closure_submission".to_string()] })
     }
 
@@ -713,15 +717,16 @@ impl ProviderFactory {
     {
         // One verdict + a short feedback list — same plain-turn budget as the
         // gate grader, no per-provider output_budget needed.
+        let hook = stop_when_some(capture.clone());
         let agent = AgentBuilder::new(model).preamble(system_prompt).max_tokens(PLAIN_MAX_TOKENS).tool(SubmitBlockAuditTool(capture)).build();
         const BLOCK_AUDIT_MAX_TURNS: usize = 4;
         let text = tokio::time::timeout(
             std::time::Duration::from_secs(prompt_timeout_secs()),
-            agent.prompt(input).max_turns(BLOCK_AUDIT_MAX_TURNS),
+            agent.prompt(input).max_turns(BLOCK_AUDIT_MAX_TURNS).add_hook(hook),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?
-        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?;
+        let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["submit_block_audit".to_string()] })
     }
 

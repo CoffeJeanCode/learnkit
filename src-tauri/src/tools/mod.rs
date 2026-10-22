@@ -1,4 +1,5 @@
 pub mod echo;
+pub mod hooks;
 pub mod notebook_tools;
 pub mod registry;
 pub mod roadmap_tools;
@@ -14,6 +15,7 @@ pub use notebook_tools::{
     GateScaffold, GradeClosureSubmissionTool, GradeGateSubmissionTool, NotebookBlockCapture, PublishedBlock, PublishNotebookBlockTool,
     ScaffoldType, SubmitBlockAuditTool,
 };
+pub use hooks::{STOP_REASON, StopWhenCaptured, accept_terminal_stop, roadmap_capture_complete, stop_when_roadmap_captured, stop_when_some};
 pub use registry::{ToolInfo, is_known_tool, list_tools};
 pub use roadmap_tools::{
     ConfirmSyllabusPlanTool, DiagnosticToolScope, PresentDiagnosticBatteryTool, ProposeCapstoneProjectTool, ProposeSyllabusPlanTool,
