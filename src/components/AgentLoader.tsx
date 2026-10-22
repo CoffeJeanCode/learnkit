@@ -33,6 +33,48 @@ export function ThinkingSketch({ label }: { label: string }) {
   );
 }
 
+/** Seconds since this component mounted. Mount it only while a call is in
+ *  flight and it doubles as the call's stopwatch. */
+export function useElapsedSeconds(): number {
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    const started = Date.now();
+    const id = setInterval(() => setSeconds(Math.floor((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return seconds;
+}
+
+export function formatElapsed(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/** Hint tiers, ordered by the elapsed second they kick in. Honest by
+ *  design: reasoning models stream nothing until they answer, so the row
+ *  can only say how long it has been and what to expect — never fake
+ *  progress. Copy speaks to the student: no "modelo"/"IA" jargon, no
+ *  promised ETA. The last tier matches the real timeout-then-retry path. */
+const WAIT_HINTS: { from: number; text: string }[] = [
+  { from: 8, text: "Pensar bien toma unos segundos. Vale la pena." },
+  { from: 30, text: "Lo estoy armando a tu medida, no es una plantilla. Dame un momento." },
+  { from: 75, text: "Las respuestas bien pensadas a veces tardan un par de minutos. Todo sigue en marcha, no cierres la ventana." },
+  { from: 150, text: "Se está alargando más de lo normal. Si no llega pronto, podrás reintentar con un clic." },
+];
+
+/** Stopwatch + expectation hint shown under a loader row. Remount per call. */
+export function WaitingHint() {
+  const seconds = useElapsedSeconds();
+  if (seconds < WAIT_HINTS[0].from) return null;
+  const hint = [...WAIT_HINTS].reverse().find((h) => seconds >= h.from)!;
+  return (
+    <span className="waiting-hint" role="status">
+      <span className="waiting-clock">{formatElapsed(seconds)}</span> {hint.text}
+    </span>
+  );
+}
+
 /** "Trabajando…" row: two hand-drawn gears grinding — shown while the
  *  agent is RUNNING TOOLS (agent://tool), not just thinking its reply. */
 export function ToolSketch({ label }: { label: string }) {

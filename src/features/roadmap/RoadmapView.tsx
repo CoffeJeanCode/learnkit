@@ -1,6 +1,6 @@
 ﻿import { useEffect, useRef, useState } from "react";
 import type { UnlistenFn } from "@tauri-apps/api/event";
-import { ThinkingSketch, ToolSketch } from "../../components/AgentLoader";
+import { ThinkingSketch, ToolSketch, WaitingHint } from "../../components/AgentLoader";
 import { ClassPath } from "../../components/ClassPath";
 import { DiagnosticBatteryCard } from "../../components/DiagnosticBatteryCard";
 import { DiagnosticBatteryStage } from "../../components/DiagnosticBatteryStage";
@@ -619,6 +619,9 @@ export function RoadmapView() {
               // or it looks like the same call is just hanging again.
               <ThinkingSketch label={retryPhase ? "Reintentando…" : "Pensando…"} />
             )}
+            {/* Keyed by the active label so the stopwatch restarts when the
+                phase changes (thinking -> tool, or into a retry). */}
+            <WaitingHint key={`${workingTool ?? "think"}-${retryPhase ? "retry" : "first"}`} />
           </div>
         </div>
       )}
