@@ -516,7 +516,14 @@ async fn main() -> AnyResult<()> {
             let type_ok = matches!(t, DynamicBlockType::AnchoredMicroTheory | DynamicBlockType::SpacedInterleavedRetrieval);
             let steps_ok = has_step_marker(rule, 1) && has_step_marker(rule, 2);
             let lower = rule.to_lowercase();
-            let example_ok = lower.contains("ejemplo") || lower.contains("example") || rule.contains('`') || lower.contains("p. ej");
+            // A literal input/output transcript (a "$ cmd" or "> expr" line) is
+            // the strongest form of concrete example, so it counts too.
+            let shows_transcript = rule.lines().any(|l| l.trim_start().starts_with("$ ") || l.trim_start().starts_with("> "));
+            let example_ok = lower.contains("ejemplo")
+                || lower.contains("example")
+                || rule.contains('`')
+                || lower.contains("p. ej")
+                || shows_transcript;
             if t == DynamicBlockType::AnchoredMicroTheory {
                 check(
                     "a) primer bloque = teoría anclada con pasos numerados y ejemplo",
