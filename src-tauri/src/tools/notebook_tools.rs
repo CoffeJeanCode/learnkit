@@ -423,7 +423,7 @@ fn visual_aid_json_schema() -> serde_json::Value {
                                         "properties": {
                                             "tag": {"type": "string", "enum": ["rect", "circle", "line", "path", "text"]},
                                             "props": {"type": "object"},
-                                            "label": {"type": ["string", "null"], "description": "Solo en `text`. En formas geométricas usa null u omite la clave."}
+                                            "label": {"type": ["string", "null"]}
                                         },
                                         "required": ["tag", "props"]
                                     }
@@ -447,6 +447,20 @@ fn visual_aid_json_schema() -> serde_json::Value {
                 "required": ["renderEngine", "headers", "rows", "contrastFocus"]
             }
         ]
+    })
+}
+
+/// Compact stand-in for the optional `visualAid` of the blocks that accept one.
+/// The full schema (~2.5 KB) is declared once, on `declarative_visual_diagram`
+/// (where it is required); repeating it in four more variants cost ~10 KB per
+/// call. A natural-language pointer is used instead of `$ref`/`$defs`: Gemini
+/// flattens refs but only reads the first `oneOf` variant, and DeepSeek /
+/// Xiaomi / OpenRouter backends are unverified. The accepted arguments are
+/// unchanged: deserialization lives in Rust, not in this schema.
+fn visual_aid_pointer_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "description": "Mismo shape que `visualAid` de declarative_visual_diagram (renderEngine mermaid | declarative_svg | conceptual_matrix)"
     })
 }
 
@@ -491,7 +505,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "frequentError": {"type": "string", "description": "⚠️ Contraste explícito entre un caso VÁLIDO y la confusión típica ('esto SÍ / esto NO, porque...'), no solo describir el error en aislamiento"}
                 },
                 "required": ["blockType", "title", "intuitiveHook", "systemRule", "frequentError"],
-                "description": "intuitiveHook + analogyBoundary + frequentError suman máximo 100 palabras combinadas (terse); systemRule tiene su propio máximo de 240 palabras (micro-pasos numerados con ejemplo de entrada/salida) — nunca texto enciclopédico plano"
+                "description": "intuitiveHook + analogyBoundary + frequentError suman máximo 100 palabras combinadas (terse); systemRule tiene su propio máximo (ver su campo) — nunca texto enciclopédico plano"
             },
             {
                 "properties": {
@@ -533,7 +547,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                             "required": ["choice", "consequence", "isOptimal"]
                         }
                     },
-                    "visualAid": visual_aid_json_schema()
+                    "visualAid": visual_aid_pointer_schema()
                 },
                 "required": ["blockType", "scenario", "decisionPoint", "branches"],
                 "description": "Ideal para liderazgo, estrategia y gestión — cuando el dominio ES una decisión con consecuencias, no un concepto o procedimiento. El estudiante debe elegir una branch para desbloquear el siguiente bloque. visualAid es opcional — solo inclúyelo si un diagrama (org chart, estado del sistema) realmente aclara el escenario."
@@ -561,7 +575,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                         "minimum": 1,
                         "description": "Línea (desde 1) de buggySnippetOrDiagram donde está la causa raíz. Inclúyelo SIEMPRE que el snippet sea de varias líneas: el estudiante primero hace clic en la línea defectuosa y luego escribe su diagnóstico. Clave de calificación, no se envía al estudiante hasta que apruebe."
                     },
-                    "visualAid": visual_aid_json_schema()
+                    "visualAid": visual_aid_pointer_schema()
                 },
                 "required": ["blockType", "instruction", "flawedRepresentation", "guidingQuestions", "modelSolution"],
                 "description": "El estudiante escribe su propio diagnóstico de la causa raíz (texto libre) para desbloquear el siguiente bloque — lo califica notebook_gate_grader contra modelSolution. visualAid es opcional — úsalo cuando el fallo es espacial/visual (un diagrama mal etiquetado, un flujo roto), no solo textual."
@@ -597,7 +611,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                             "required": ["statement", "followsRule"]
                         }
                     },
-                    "visualAid": visual_aid_json_schema()
+                    "visualAid": visual_aid_pointer_schema()
                 },
                 "required": ["blockType", "question"],
                 "description": "La respuesta se registra ANTES de revelar nada — bloquea el avance hasta acertar. En multiple_choice (por defecto) exige options + conceptualFeedbackMap + correctOption; en causal_chain_order exige shuffledSteps + correctOrder; en boundary_case_audit exige boundaryCases. visualAid es opcional — solo si la predicción realmente depende de leer un diagrama primero."
@@ -633,7 +647,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                             "required": ["prompt", "expectedToken"]
                         }
                     },
-                    "visualAid": visual_aid_json_schema()
+                    "visualAid": visual_aid_pointer_schema()
                 },
                 "required": ["blockType", "challengeStatement", "expectedMilestoneArtifact", "constraints", "scaffoldingHints", "evaluationRubricSummary", "supportLevel"],
                 "description": "El estudiante entrega su solución en texto libre para desbloquear el siguiente bloque — lo califica notebook_gate_grader contra evaluationRubricSummary. visualAid es opcional — un diagrama de referencia del objetivo, solo si ayuda."
@@ -670,31 +684,39 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
 /// shorter than their free-form counterparts: the model supplies the facts,
 /// Rust derives the answer key and shuffles the options.
 fn block_template_schemas() -> Vec<serde_json::Value> {
-    let option = |what: &str| {
+    // The `feedback`/`consequence` hints are declared on the first use only
+    // (`correct` / `optimal`); the repeated item schemas stay bare.
+    let option = |what: &str, hints: bool| {
+        let feedback = if hints {
+            serde_json::json!({"type": "string", "description": "Retroalimentación conceptual que ve el estudiante al elegir esta opción"})
+        } else {
+            serde_json::json!({"type": "string"})
+        };
         serde_json::json!({
             "type": "object",
-            "properties": {
-                "text": {"type": "string", "description": what},
-                "feedback": {"type": "string", "description": "Retroalimentación conceptual que ve el estudiante al elegir esta opción"}
-            },
+            "properties": {"text": {"type": "string", "description": what}, "feedback": feedback},
             "required": ["text", "feedback"]
         })
     };
-    let branch = serde_json::json!({
-        "type": "object",
-        "properties": {
-            "choice": {"type": "string"},
-            "consequence": {"type": "string", "description": "Consecuencia visible tras elegir esta rama"}
-        },
-        "required": ["choice", "consequence"]
-    });
+    let branch = |hints: bool| {
+        let consequence = if hints {
+            serde_json::json!({"type": "string", "description": "Consecuencia visible tras elegir esta rama"})
+        } else {
+            serde_json::json!({"type": "string"})
+        };
+        serde_json::json!({
+            "type": "object",
+            "properties": {"choice": {"type": "string"}, "consequence": consequence},
+            "required": ["choice", "consequence"]
+        })
+    };
     vec![
         serde_json::json!({
             "properties": {
                 "blockType": {"const": "tpl_multiple_choice"},
                 "question": {"type": "string"},
-                "correct": option("La opción correcta"),
-                "distractors": {"type": "array", "minItems": 1, "maxItems": 3, "items": option("Un distractor plausible (error típico), de longitud parecida a la correcta")}
+                "correct": option("La opción correcta", true),
+                "distractors": {"type": "array", "minItems": 1, "maxItems": 3, "items": option("Un distractor plausible (error típico), de longitud parecida a la correcta", false)}
             },
             "required": ["blockType", "question", "correct", "distractors"],
             "description": "PLANTILLA de opción múltiple (compuerta conceptual). Solo das la correcta y los distractores: el sistema mezcla el orden y deriva la clave. Equivale a interactive_prediction_gate multiple_choice."
@@ -723,8 +745,8 @@ fn block_template_schemas() -> Vec<serde_json::Value> {
                 "blockType": {"const": "tpl_scenario_choice"},
                 "scenario": {"type": "string"},
                 "decisionPoint": {"type": "string"},
-                "optimal": branch.clone(),
-                "alternatives": {"type": "array", "minItems": 1, "maxItems": 3, "items": branch}
+                "optimal": branch(true),
+                "alternatives": {"type": "array", "minItems": 1, "maxItems": 3, "items": branch(false)}
             },
             "required": ["blockType", "scenario", "decisionPoint", "optimal", "alternatives"],
             "description": "PLANTILLA de decisión situacional (seleccionar caso). Das la rama óptima y las alternativas; el sistema mezcla el orden. Equivale a branching_scenario_challenge."
@@ -982,6 +1004,29 @@ mod tests {
             "systemRule": "r", "frequentError": "f"
         }))
         .await);
+    }
+
+    #[test]
+    fn visual_aid_is_declared_in_full_once_and_every_accepting_variant_still_offers_it() {
+        let schema = single_block_json_schema();
+        let variants = schema["oneOf"].as_array().expect("oneOf");
+        let with_aid: Vec<&str> = variants
+            .iter()
+            .filter(|v| v["properties"].get("visualAid").is_some())
+            .map(|v| v["properties"]["blockType"]["const"].as_str().expect("tag"))
+            .collect();
+        assert_eq!(
+            with_aid,
+            ["declarative_visual_diagram", "branching_scenario_challenge", "heuristic_error_audit", "interactive_prediction_gate", "hands_on_mission"]
+        );
+        let full: Vec<&str> = variants
+            .iter()
+            .filter(|v| v["properties"]["visualAid"].get("oneOf").is_some())
+            .map(|v| v["properties"]["blockType"]["const"].as_str().expect("tag"))
+            .collect();
+        assert_eq!(full, ["declarative_visual_diagram"], "the engines are spelled out in exactly one place");
+        // It stays required where it was required.
+        assert!(variants[2]["required"].as_array().unwrap().iter().any(|r| r == "visualAid"));
     }
 
     #[test]
