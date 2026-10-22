@@ -633,6 +633,7 @@ impl NotebookService {
             required_block_type: Some(required),
             is_regeneration: true,
             last_grounded: Mutex::new(None),
+            mechanical_template: Mutex::new(false),
         };
         let report = run_generator_critic_loop(&job, MAX_ATTEMPTS, RETRY_BACKOFF_BASE).await?;
         let content_json = serde_json::to_value(&report.value).map_err(|e| AppError::Persistence(e.to_string()))?;
@@ -909,6 +910,7 @@ async fn generate_and_persist_block(
         required_block_type: None,
         is_regeneration: false,
         last_grounded: Mutex::new(None),
+        mechanical_template: Mutex::new(false),
     };
     let report = run_generator_critic_loop(&job, MAX_ATTEMPTS, RETRY_BACKOFF_BASE).await?;
     let block_type = report.value.block_type();
@@ -960,6 +962,13 @@ struct BlockGenerationJob<'a> {
     /// must still be able to repair its own broken block).
     is_regeneration: bool,
     last_grounded: Mutex<Option<GeneratedSectionBlock>>,
+    /// Set by [`generate`](GeneratorCriticLoop::generate) from the published
+    /// block's provenance: `true` when a MECHANICAL template (`tpl_true_false`,
+    /// `tpl_ordering`) produced the candidate, so [`critique`](GeneratorCriticLoop::critique)
+    /// skips the LLM pedagogical critic and keeps only the deterministic
+    /// guardrails. Reset on every generate so a retry never inherits a stale
+    /// verdict from the previous attempt.
+    mechanical_template: Mutex<bool>,
 }
 
 #[async_trait::async_trait]
@@ -970,8 +979,12 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
         let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
         let turn_input = format!("{}{note}", self.base_input);
         self.orchestrator.run_notebook_block_agent(self.app, NOTEBOOK_AGENT_ID, &turn_input, capture.clone()).await?;
-        let generated = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
-        Ok(generated)
+        let published = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
+        // Stash the mechanical-template provenance for the critique that
+        // follows this attempt (never a stale value from a prior one).
+        let mechanical = published.as_ref().is_some_and(|p| p.mechanical_template);
+        *self.mechanical_template.lock().unwrap_or_else(|e| e.into_inner()) = mechanical;
+        Ok(published.map(|p| p.block))
     }
 
     async fn critique(&self, candidate: &GeneratedSectionBlock) -> CriticVerdict {
@@ -1014,8 +1027,15 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
             return CriticVerdict::Reject { feedback: violations };
         }
         *self.last_grounded.lock().unwrap_or_else(|e| e.into_inner()) = Some(candidate.clone());
-        if !needs_llm_critic(candidate.block_type()) {
-            self.trace_critique(candidate, "accepted_deterministic_only", Vec::new());
+        let mechanical = *self.mechanical_template.lock().unwrap_or_else(|e| e.into_inner());
+        if !needs_llm_critic(candidate.block_type()) || mechanical {
+            // Either the type never needed the LLM critic, or a MECHANICAL
+            // template (tpl_true_false / tpl_ordering) expanded it to a grading
+            // shape fully determined by construction — the deterministic
+            // guardrails above already ran, so a pedagogical-critic round-trip
+            // would add latency without adding judgment.
+            let verdict = if mechanical { "accepted_mechanical_template" } else { "accepted_deterministic_only" };
+            self.trace_critique(candidate, verdict, Vec::new());
             return CriticVerdict::Accept;
         }
         let input = render::render_block_audit_input(&self.ctx, &self.existing_blocks, candidate);

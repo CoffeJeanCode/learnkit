@@ -13,7 +13,7 @@
     };
     use crate::orchestration::PromptRunner;
     use crate::providers::factory::PromptOutput;
-    use crate::tools::{BlockAuditCapture, BlockAuditResult, ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult, GateScaffold, NotebookBlockCapture, ScaffoldType};
+    use crate::tools::{BlockAuditCapture, BlockAuditResult, ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult, GateScaffold, NotebookBlockCapture, PublishedBlock, ScaffoldType};
 
     fn sealed_roadmap_session() -> RoadmapSession {
         let mut session = RoadmapSession::new("SID".to_string(), 0);
@@ -177,7 +177,7 @@
         ) -> AppResult<PromptOutput> {
             *self.block_calls.lock().unwrap() += 1;
             if let Some(block) = self.blocks.lock().unwrap().pop_front().flatten() {
-                *capture.lock().unwrap() = Some(block);
+                *capture.lock().unwrap() = Some(PublishedBlock { block, mechanical_template: false });
             }
             Ok(PromptOutput { text: String::new(), tool_calls: vec![] })
         }
@@ -233,6 +233,11 @@
         inputs: Mutex<Vec<String>>,
         block_calls: Mutex<usize>,
         audit_calls: Mutex<usize>,
+        /// Simulates the model having authored the NEXT block via a MECHANICAL
+        /// template (`tpl_true_false`/`tpl_ordering`): the published block is
+        /// flagged so the critique skips the LLM critic. Read-and-reset per
+        /// block so it only ever applies to the next one.
+        mechanical_next: Mutex<bool>,
     }
 
     #[async_trait]
@@ -252,7 +257,13 @@
             *self.block_calls.lock().unwrap() += 1;
             self.inputs.lock().unwrap().push(input.to_string());
             if let Some(block) = self.blocks.lock().unwrap().pop_front().flatten() {
-                *capture.lock().unwrap() = Some(block);
+                let mechanical = {
+                    let mut flag = self.mechanical_next.lock().unwrap();
+                    let m = *flag;
+                    *flag = false;
+                    m
+                };
+                *capture.lock().unwrap() = Some(PublishedBlock { block, mechanical_template: mechanical });
             }
             Ok(PromptOutput { text: String::new(), tool_calls: vec![] })
         }
@@ -844,6 +855,33 @@
         assert_eq!(payload.blocks.len(), 1);
         assert_eq!(*runner.block_calls.lock().unwrap(), 1, "a critic ERROR must not burn a generation retry");
         assert_eq!(*runner.audit_calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_mechanical_template_block_skips_the_llm_critic_but_keeps_the_deterministic_review() {
+        // `prediction_gate` is an InteractivePredictionGate — a type that
+        // normally REACHES the pedagogical critic. Flagged as produced by a
+        // mechanical template (`tpl_true_false`/`tpl_ordering`), the critique
+        // must accept it after the deterministic guardrails alone, spending
+        // zero critic round-trips. If the skip regresses, the critic runs,
+        // hits the empty scripted `audits` queue, and the test fails loudly.
+        let runner = Arc::new(CriticRunner {
+            blocks: Mutex::new(vec![Some(prediction_gate("B"))].into()),
+            mechanical_next: Mutex::new(true),
+            ..Default::default()
+        });
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("block ships");
+        assert_eq!(payload.blocks.len(), 1);
+        assert_eq!(payload.blocks[0].block_type, DynamicBlockType::InteractivePredictionGate);
+        assert_eq!(*runner.block_calls.lock().unwrap(), 1);
+        assert_eq!(
+            *runner.audit_calls.lock().unwrap(),
+            0,
+            "a mechanical template must not spend an LLM critic round-trip"
+        );
     }
 
     #[tokio::test]

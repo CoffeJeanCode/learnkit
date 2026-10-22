@@ -80,6 +80,19 @@ impl BlockTemplate {
         block_type.starts_with(TEMPLATE_PREFIX)
     }
 
+    /// Whether expansion fully determines this template's grading shape: the
+    /// answer key, the option set and the ordering are fixed by construction
+    /// (see [`expand`](Self::expand)), so no LLM judgment is left for the
+    /// pedagogical critic to audit — it would only cost an extra round-trip
+    /// on top of the deterministic guardrails that always run. `false` for
+    /// the content-heavy templates (`tpl_multiple_choice`,
+    /// `tpl_scenario_choice`) whose distractors / branches still warrant a
+    /// semantic read, and for `tpl_quick_recall` (already critic-free by
+    /// block type).
+    pub fn is_mechanical(&self) -> bool {
+        matches!(self, Self::TrueFalse { .. } | Self::Ordering { .. })
+    }
+
     /// Shape checks the type system can't express. A failure here is reported
     /// to the model like any malformed tool call, naming the exact problem.
     pub fn validate(&self) -> Result<(), String> {

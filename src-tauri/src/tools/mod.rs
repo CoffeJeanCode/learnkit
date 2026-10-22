@@ -11,8 +11,8 @@ use crate::domain::message::AgentEvent;
 pub use echo::EchoTool;
 pub use notebook_tools::{
     BlockAuditCapture, BlockAuditResult, ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult,
-    GateScaffold, GradeClosureSubmissionTool, GradeGateSubmissionTool, NotebookBlockCapture, PublishNotebookBlockTool, ScaffoldType,
-    SubmitBlockAuditTool,
+    GateScaffold, GradeClosureSubmissionTool, GradeGateSubmissionTool, NotebookBlockCapture, PublishedBlock, PublishNotebookBlockTool,
+    ScaffoldType, SubmitBlockAuditTool,
 };
 pub use registry::{ToolInfo, is_known_tool, list_tools};
 pub use roadmap_tools::{
