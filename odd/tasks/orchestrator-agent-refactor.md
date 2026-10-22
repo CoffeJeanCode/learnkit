@@ -38,8 +38,8 @@ hours/sessions rule that force-closes sessions, and false-positive option-length
 - A hook stop is mapped to success only when it carries our own stop reason.
 
 ## Tasks
-- [ ] T1 Terminal-tool stop hook + first-call-wins (factory.rs, tools/hooks.rs): all five flows; `PromptCancelled` mapped to success
-- [ ] T2 Critic salvage before fail-open (orchestrator.rs, generation.rs)
+- [x] T1 Terminal-tool stop hook + first-call-wins (factory.rs, tools/hooks.rs): all five flows; `PromptCancelled` mapped to success
+- [x] T2 Critic salvage before fail-open (orchestrator.rs, generation.rs)
 - [ ] T3 Session-count rule: `grounding.rs`, `synth.rs`, `roadmap_tools.rs` schema, tests
 - [ ] T4 Hybrid option-length rule (25% AND >25 chars) in `pedagogy_guardrails.rs`, tests
 - [ ] T5 Roadmap prompt: replace the hours section and the other "2 sesiones" mentions; docs line 160
@@ -48,7 +48,8 @@ hours/sessions rule that force-closes sessions, and false-positive option-length
 - T1-T5: delegated direct, one writer (mandatory trigger: 2+ non-trivial files, 4+ files touched).
 
 ## Progress / evidence
-(none yet)
+- T1 `31a7e1c`: `cargo test --lib` 321 passed, 0 failed.
+- T2 `9845403`: `cargo test --lib` 324 passed, 0 failed.
 
 ## Next step
 Commit pre-existing session work, then delegate the writer.

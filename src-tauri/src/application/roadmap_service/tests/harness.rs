@@ -94,6 +94,13 @@ use super::*;
     }
 
     pub(super) fn full_syllabus(weeks: u16, hours: f32, topic: &str) -> RoadmapSyllabusPackage {
+        let sessions = super::super::grounding::session_count_bounds(hours).0;
+        syllabus_with_session_hours(weeks, hours, topic, &vec![hours / sessions as f32; sessions])
+    }
+
+    /// Like [`full_syllabus`] but with explicit per-session hours, so tests can
+    /// script count / spread violations.
+    pub(super) fn syllabus_with_session_hours(weeks: u16, hours: f32, topic: &str, session_hours: &[f32]) -> RoadmapSyllabusPackage {
         RoadmapSyllabusPackage {
             course_title: topic.to_string(),
             total_weeks: weeks,
@@ -104,38 +111,25 @@ use super::*;
                     title: format!("Semana {week}"),
                     deliverable: "Entregable de la semana".to_string(),
                     weekly_goal: Some("Avanzar un paso concreto hacia la meta declarada".to_string()),
-                    micromodules: vec![
-                        Micromodule {
-                            label: "Días 1-2".to_string(),
-                            hours: hours / 2.0,
-                            focus: Some("Conceptos centrales de la primera sesión".to_string()),
+                    micromodules: session_hours
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &session_hours)| Micromodule {
+                            label: format!("Sesión {}", i + 1),
+                            hours: session_hours,
+                            focus: Some(format!("Conceptos centrales de la sesión {}", i + 1)),
                             deliverable: Deliverable {
                                 artifact_type: DeliverableArtifactType::TestsPassing,
-                                description: "Artefacto verificable".to_string(),
+                                description: format!("Artefacto verificable {}", i + 1),
                             },
-                            objective: Some("Explicar el concepto central de la sesión con un ejemplo propio".to_string()),
+                            objective: Some(format!("Explicar el concepto central de la sesión {} con un ejemplo propio", i + 1)),
                             interactive_blocks: vec![
-                                "socratic_prediction".to_string(),
+                                if i % 2 == 0 { "socratic_prediction" } else { "error_audit_challenge" }.to_string(),
                                 "hands_on_mission".to_string(),
                                 "metacognitive_closure".to_string(),
                             ],
-                        },
-                        Micromodule {
-                            label: "Días 3-4".to_string(),
-                            hours: hours / 2.0,
-                            focus: Some("Profundización y casos límite".to_string()),
-                            deliverable: Deliverable {
-                                artifact_type: DeliverableArtifactType::TestsPassing,
-                                description: "Artefacto verificable 2".to_string(),
-                            },
-                            objective: Some("Resolver un caso límite del concepto central".to_string()),
-                            interactive_blocks: vec![
-                                "error_audit_challenge".to_string(),
-                                "hands_on_mission".to_string(),
-                                "metacognitive_closure".to_string(),
-                            ],
-                        },
-                    ],
+                        })
+                        .collect(),
                 })
                 .collect(),
             capstone_project: CapstoneProject {
@@ -193,6 +187,10 @@ use super::*;
     /// `answer_diagnostic_question`/`skip_diagnostic_battery`, or chained
     /// with `assessment` for the `absolute_zero` skip path) expects.
     pub(super) fn full_propose_step(text: &str, weeks: u16, hours: f32, topic: &str) -> ScriptedStep {
+        propose_step_with_syllabus(text, full_syllabus(weeks, hours, topic))
+    }
+
+    pub(super) fn propose_step_with_syllabus(text: &str, syllabus: RoadmapSyllabusPackage) -> ScriptedStep {
         ScriptedStep {
             text: text.to_string(),
             assessment: None,
@@ -201,7 +199,7 @@ use super::*;
                 core_focus: "Lo esencial".to_string(),
                 identified_needs: vec!["Entender el flujo".to_string()],
                 learning_strategy: "Guiado".to_string(),
-                syllabus: full_syllabus(weeks, hours, topic),
+                syllabus,
                 closing_question: "¿Te parece adecuada esta distribución?".to_string(),
             }),
             propose_capstone_project: Some(full_capstone_args()),

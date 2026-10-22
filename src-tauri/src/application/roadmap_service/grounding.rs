@@ -129,16 +129,39 @@ fn check_student_facing_text(v: &mut Vec<String>, field_name: &str, text: &str) 
     }
 }
 
-/// EXACTLY 2 sessions per week, homogeneous in hours (max 1h of spread
-/// between them) and never more than 4h each — the anti-monolito dosing rule
-/// (see `agents::roadmap_agent`'s "DOSIFICACIÓN HORARIA HOMOGÉNEA").
+/// Sessions per week scale with the weekly hours: never more than 4h each
+/// (the anti-monolito dosing rule — see `agents::roadmap_agent`'s
+/// "DOSIFICACIÓN HORARIA HOMOGÉNEA"), and homogeneous in hours (at most
+/// `MAX_SESSION_HOUR_SPREAD` between the longest and the shortest). The
+/// allowed count comes from [`session_count_bounds`].
 pub(super) const MAX_SESSION_HOURS: f32 = 4.0;
-pub(super) const MAX_SESSION_HOUR_SPREAD: f32 = 1.0;
+/// Validator tolerance. The roadmap prompt asks the model for at most 1h of
+/// spread, so it keeps margin under this limit.
+pub(super) const MAX_SESSION_HOUR_SPREAD: f32 = 1.5;
+
+/// Allowed number of sessions (min, max) for a week of `pace_hours_per_week`.
+///
+/// `min = max(2, ceil(pace / 4))` so no session exceeds 4h; `max = max(5, min)`.
+/// Deviation from the briefed flat cap of 5: that cap would make any week over
+/// 20h unsatisfiable (5 x 4h), and learner profiles allow up to 80h/week.
+pub(super) fn session_count_bounds(pace_hours_per_week: f32) -> (usize, usize) {
+    let needed = if pace_hours_per_week.is_finite() && pace_hours_per_week > 0.0 {
+        (pace_hours_per_week / MAX_SESSION_HOURS).ceil() as usize
+    } else {
+        0
+    };
+    let min = needed.max(2);
+    (min, min.max(5))
+}
 
 pub(super) fn micromodule_violations(week: u16, pace_hours_per_week: f32, modules: &[Micromodule]) -> Vec<String> {
     let mut v = Vec::new();
-    if modules.len() != 2 {
-        v.push(format!("la semana {week} tiene {} sesiones, debe tener EXACTAMENTE 2 (anti-monolito)", modules.len()));
+    let (min_sessions, max_sessions) = session_count_bounds(pace_hours_per_week);
+    if !(min_sessions..=max_sessions).contains(&modules.len()) {
+        v.push(format!(
+            "la semana {week} tiene {} sesiones, debe tener entre {min_sessions} y {max_sessions} para {pace_hours_per_week}h semanales              (ninguna sesión puede superar {MAX_SESSION_HOURS}h — anti-monolito)",
+            modules.len()
+        ));
     }
     let mut total_hours = 0.0f32;
     for m in modules {
@@ -201,12 +224,14 @@ pub(super) fn micromodule_violations(week: u16, pace_hours_per_week: f32, module
         }
         total_hours += m.hours;
     }
-    if modules.len() == 2 {
-        let spread = (modules[0].hours - modules[1].hours).abs();
+    if let (Some(max_h), Some(min_h)) = (
+        modules.iter().map(|m| m.hours).reduce(f32::max),
+        modules.iter().map(|m| m.hours).reduce(f32::min),
+    ) {
+        let spread = max_h - min_h;
         if spread > MAX_SESSION_HOUR_SPREAD {
             v.push(format!(
-                "las 2 sesiones de la semana {week} no son homogéneas — {}h vs {}h, diferencia de {spread}h (máximo {MAX_SESSION_HOUR_SPREAD}h)",
-                modules[0].hours, modules[1].hours
+                "las sesiones de la semana {week} no son homogéneas — van de {min_h}h a {max_h}h, diferencia de {spread}h (máximo {MAX_SESSION_HOUR_SPREAD}h)"
             ));
         }
     }
@@ -382,3 +407,19 @@ pub(super) fn battery_satisfied(profile: &LearnerProfileCard, pending: &Option<D
     profile.entry_level == EntryLevel::AbsoluteZero || pending.as_ref().is_some_and(|p| p.fully_answered())
 }
 
+#[cfg(test)]
+mod session_rule_tests {
+    use super::*;
+
+    #[test]
+    fn session_count_bounds_scale_with_weekly_hours() {
+        assert_eq!(session_count_bounds(3.0), (2, 5));
+        assert_eq!(session_count_bounds(8.0), (2, 5));
+        assert_eq!(session_count_bounds(8.5), (3, 5));
+        assert_eq!(session_count_bounds(14.0), (4, 5));
+        assert_eq!(session_count_bounds(20.0), (5, 5));
+        assert_eq!(session_count_bounds(21.0), (6, 6), "over 20h the cap of 5 would make 4h sessions unsatisfiable");
+        assert_eq!(session_count_bounds(80.0), (20, 20));
+        assert_eq!(session_count_bounds(f32::NAN), (2, 5));
+    }
+}

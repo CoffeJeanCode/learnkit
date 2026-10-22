@@ -182,8 +182,8 @@ fn syllabus_json_schema() -> serde_json::Value {
                         "micromodules": {
                             "type": "array",
                             "minItems": 2,
-                            "maxItems": 2,
-                            "description": "EXACTAMENTE 2 sesiones homogéneas en horas (diferencia máxima de 1h entre ambas, p. ej. 3.5h/3.5h o 4h/3h) — anti-monolito: ninguna sesión supera 4 horas. La suma de horas debe igualar paceHoursPerWeek.",
+                            "maxItems": 20,
+                            "description": "Entre ceil(paceHoursPerWeek / 4) y 5 sesiones (mínimo 2) homogéneas en horas (diferencia máxima de 1h entre la más larga y la más corta, p. ej. 2 x 3.5h para 7h o 4 x 3.5h para 14h); solo se admiten más de 5 cuando las horas semanales superan 20 — anti-monolito: ninguna sesión supera 4 horas. La suma de horas debe igualar paceHoursPerWeek.",
                             "items": {
                                 "type": "object",
                                 "properties": {

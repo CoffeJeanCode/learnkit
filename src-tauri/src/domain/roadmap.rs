@@ -218,8 +218,8 @@ pub struct Milestone {
     /// field existed keep deserializing.
     #[serde(default)]
     pub weekly_goal: Option<String>,
-    /// The week's real decomposition — EXACTLY 2 sessions, homogeneous in
-    /// hours (see `syllabus_violations`), replacing what used to be a single
+    /// The week's real decomposition — between ceil(hours / 4) and 5 sessions
+    /// (at least 2), homogeneous in hours (see `syllabus_violations`), replacing what used to be a single
     /// flat `interactive_blocks` list on the week itself.
     pub micromodules: Vec<Micromodule>,
 }

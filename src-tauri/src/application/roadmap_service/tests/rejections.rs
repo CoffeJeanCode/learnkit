@@ -82,7 +82,7 @@ use super::*;
     }
 
     #[tokio::test]
-    async fn a_monolithic_micromodule_over_5_hours_is_rejected() {
+    async fn a_monolithic_micromodule_over_4_hours_is_rejected() {
         let battery = full_battery();
         let step1 = ScriptedStep {
             text: "..".to_string(),
@@ -91,7 +91,7 @@ use super::*;
             ..Default::default()
         };
         // The exact anti-pattern the spec calls out: 14 hours crammed into
-        // one undifferentiated block instead of 2 homogeneous sessions of
+        // one undifferentiated block instead of 4 homogeneous sessions of
         // <=4h each.
         let monolithic_syllabus = RoadmapSyllabusPackage {
             course_title: "Tema".to_string(),
@@ -142,13 +142,72 @@ use super::*;
 
         let result = answer_all_questions(&harness, &sid, &battery).await;
 
-        assert_eq!(result.session.status, SessionStatus::Active, "a monolithic (>5h) block must be rejected");
+        assert_eq!(result.session.status, SessionStatus::Active, "a monolithic (>4h) block must be rejected");
         assert!(result.session.proposed_plan.is_none(), "no proposal stored while grounding fails");
         assert!(
             result.session.last_rejection_reasons.iter().any(|r| r.contains("anti-monolito")),
             "rejection must name the anti-monolith rule: {:?}",
             result.session.last_rejection_reasons
         );
+        let _ = std::fs::remove_dir_all(&harness.dir);
+    }
+
+    /// Drives one full propose turn whose syllabus carries the given per-session
+    /// hours for a 1-week course, and returns the result after the battery is
+    /// answered (the step is queued twice so the in-turn grounding retry also
+    /// gets the same bad syllabus).
+    async fn propose_with_session_hours(hours: f32, session_hours: &[f32]) -> (RoadmapServiceHarness, RoadmapTurnResult) {
+        let battery = full_battery();
+        let step1 = ScriptedStep {
+            text: "..".to_string(),
+            assessment: Some(full_assessment("Tema", 1, hours, EntryLevel::TheoreticalFoundations)),
+            diagnostic_battery: Some(battery.clone()),
+            ..Default::default()
+        };
+        let step2 = propose_step_with_syllabus("..", syllabus_with_session_hours(1, hours, "Tema", session_hours));
+        let harness = service_with_runner(Arc::new(ScriptedRunner::new(vec![step1, step2.clone(), step2])));
+        let r0 = harness.service.start_session(None).await.expect("start ok");
+        let sid = r0.session.session_id.clone();
+        harness.service.send_message(None, &sid, "Hazlo").await.expect("turn ok");
+        let result = answer_all_questions(&harness, &sid, &battery).await;
+        (harness, result)
+    }
+
+    #[tokio::test]
+    async fn four_sessions_of_3_5_hours_are_accepted_for_a_14_hour_week() {
+        let (harness, result) = propose_with_session_hours(14.0, &[3.5, 3.5, 3.5, 3.5]).await;
+        assert!(result.session.proposed_plan.is_some(), "rejected: {:?}", result.session.last_rejection_reasons);
+        let _ = std::fs::remove_dir_all(&harness.dir);
+    }
+
+    #[tokio::test]
+    async fn two_sessions_are_rejected_for_a_14_hour_week() {
+        let (harness, result) = propose_with_session_hours(14.0, &[7.0, 7.0]).await;
+        assert!(result.session.proposed_plan.is_none());
+        assert!(
+            result.session.last_rejection_reasons.iter().any(|r| r.contains("debe tener entre 4 y 5")),
+            "{:?}",
+            result.session.last_rejection_reasons
+        );
+        let _ = std::fs::remove_dir_all(&harness.dir);
+    }
+
+    #[tokio::test]
+    async fn sessions_with_more_than_1_5_hours_of_spread_are_rejected() {
+        let (harness, result) = propose_with_session_hours(14.0, &[2.0, 4.0, 4.0, 4.0]).await;
+        assert!(result.session.proposed_plan.is_none());
+        assert!(
+            result.session.last_rejection_reasons.iter().any(|r| r.contains("no son homogéneas")),
+            "{:?}",
+            result.session.last_rejection_reasons
+        );
+        let _ = std::fs::remove_dir_all(&harness.dir);
+    }
+
+    #[tokio::test]
+    async fn two_sessions_are_still_accepted_for_an_8_hour_week() {
+        let (harness, result) = propose_with_session_hours(8.0, &[4.0, 4.0]).await;
+        assert!(result.session.proposed_plan.is_some(), "rejected: {:?}", result.session.last_rejection_reasons);
         let _ = std::fs::remove_dir_all(&harness.dir);
     }
 

@@ -453,6 +453,49 @@
         assert_eq!(ctx.class.objective.as_deref(), Some("Explicar el flujo con un ejemplo"));
     }
 
+    /// A 14h week is dosed as 4 sessions: every one becomes its own class,
+    /// numbered and ordered in sequence.
+    #[test]
+    fn import_creates_one_class_per_micromodule_beyond_two_sessions() {
+        use crate::domain::roadmap::{CapstoneProject, Deliverable, DeliverableArtifactType, Milestone, Micromodule, RoadmapSyllabusPackage};
+        let store = NotebookStore::open_in_memory().expect("open");
+        let module = |i: usize| Micromodule {
+            label: format!("Sesión {i}"),
+            hours: 3.5,
+            focus: Some("Conceptos centrales de la sesión".to_string()),
+            deliverable: Deliverable {
+                artifact_type: DeliverableArtifactType::TestsPassing,
+                description: "Artefacto verificable".to_string(),
+            },
+            objective: Some(format!("Explicar el concepto {i} con un ejemplo")),
+            interactive_blocks: vec!["socratic_prediction".to_string(), "hands_on_mission".to_string(), "metacognitive_closure".to_string()],
+        };
+        let syllabus = RoadmapSyllabusPackage {
+            course_title: "Tema".to_string(),
+            total_weeks: 1,
+            pace_hours_per_week: 14.0,
+            milestones: vec![Milestone {
+                week: 1,
+                title: "Semana 1".to_string(),
+                deliverable: "Entregable".to_string(),
+                weekly_goal: Some("Avanzar en el tema".to_string()),
+                micromodules: (1..=4).map(module).collect(),
+            }],
+            capstone_project: CapstoneProject {
+                title: "Proyecto terminal".to_string(),
+                description: "Integrar lo aprendido en un escenario real de transferencia".to_string(),
+                verifiable_evidence: "Repositorio con la app corriendo + demo grabada".to_string(),
+            },
+        };
+
+        let (course_id, first_class_id, _) = import_syllabus_into_store(&store, &syllabus, "Meta").expect("import");
+
+        let classes = store.list_classes_for_course(&course_id).expect("classes");
+        assert_eq!(classes.len(), 4);
+        assert_eq!(first_class_id.as_deref(), Some(classes[0].id.as_str()));
+        assert_eq!(classes[3].objective.as_deref(), Some("Explicar el concepto 4 con un ejemplo"));
+    }
+
     #[test]
     fn skill_evidence_is_append_only_ordered_and_filterable_by_skill_and_course() {
         use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, RubricCriterion, SkillEvidence};

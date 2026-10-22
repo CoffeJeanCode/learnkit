@@ -1,5 +1,6 @@
 //! Deterministic stand-ins for everything the model is NOT asked to
 //! fabricate (diagnostic summary, micromodules, fallback notebookâ€¦).
+use super::grounding::session_count_bounds;
 use super::*;
 
 pub(super) fn synth_profile_card(draft: &serde_json::Value) -> LearnerProfileCard {
@@ -38,16 +39,18 @@ pub(super) fn synth_diagnostic_card() -> DiagnosticSummaryCard {
     }
 }
 
-/// Splits a week's total hours into EXACTLY 2 homogeneous sessions (the
-/// anti-monolith dosing rule — see `grounding::micromodule_violations`),
-/// used by the force-close fallback so even a synthesized syllabus respects
-/// the same rule a real `propose_syllabus_plan` call is held to.
+/// Splits a week's total hours into the minimum number of equal sessions the
+/// validator allows (see `grounding::session_count_bounds`), so each stays
+/// under 4h and the spread is zero. Used by the force-close fallback so even a
+/// synthesized syllabus respects the same rule a real `propose_syllabus_plan`
+/// call is held to.
 pub(super) fn synth_micromodules(total_hours: f32) -> Vec<Micromodule> {
-    let half = total_hours / 2.0;
-    (1..=2)
+    let sessions = session_count_bounds(total_hours).0;
+    let per_session = total_hours / sessions as f32;
+    (1..=sessions)
         .map(|i| Micromodule {
             label: format!("Sesión {i}"),
-            hours: half,
+            hours: per_session,
             focus: Some(format!("Conceptos centrales de la sesión {i}, aplicados a un caso concreto del curso")),
             deliverable: Deliverable {
                 artifact_type: DeliverableArtifactType::WorkingDemo,
@@ -204,5 +207,24 @@ mod tests {
         let long = format!("Quiero {}", "a".repeat(200));
         assert_eq!(clean_topic(&long).chars().count(), MAX_TOPIC_CHARS);
     }
-}
 
+    #[test]
+    fn synthesized_weeks_satisfy_the_session_rules_for_any_pace() {
+        use super::super::grounding::{MAX_SESSION_HOUR_SPREAD, MAX_SESSION_HOURS, micromodule_violations};
+        for pace in [3.0f32, 8.0, 14.0, 20.0, 21.0, 80.0] {
+            let modules = synth_micromodules(pace);
+            let (min, max) = session_count_bounds(pace);
+            assert!((min..=max).contains(&modules.len()), "pace {pace}: {} sessions outside {min}..={max}", modules.len());
+            assert_eq!(modules.len(), min, "pace {pace}: the fallback uses the minimum session count");
+            assert!(modules.iter().all(|m| m.hours > 0.0 && m.hours <= MAX_SESSION_HOURS), "pace {pace}: a session exceeds 4h");
+            let sum: f32 = modules.iter().map(|m| m.hours).sum();
+            assert!((sum - pace).abs() <= 0.5, "pace {pace}: sum {sum}");
+            let hours: Vec<f32> = modules.iter().map(|m| m.hours).collect();
+            let spread = hours.iter().cloned().fold(f32::MIN, f32::max) - hours.iter().cloned().fold(f32::MAX, f32::min);
+            assert!(spread <= MAX_SESSION_HOUR_SPREAD);
+            // The count/hours/sum/spread rules must all pass through the real validator.
+            let violations = micromodule_violations(1, pace, &modules);
+            assert!(violations.is_empty(), "pace {pace}: {violations:?}");
+        }
+    }
+}
