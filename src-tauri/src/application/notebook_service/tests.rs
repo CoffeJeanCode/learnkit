@@ -238,6 +238,9 @@
         /// flagged so the critique skips the LLM critic. Read-and-reset per
         /// block so it only ever applies to the next one.
         mechanical_next: Mutex<bool>,
+        /// Makes an `Ok` scripted audit ALSO fail the run after the verdict was
+        /// captured (rig's turn cap firing after `submit_block_audit` ran).
+        fail_after_capture: bool,
     }
 
     #[async_trait]
@@ -280,6 +283,9 @@
             match self.audits.lock().unwrap().pop_front().expect("scripted audit verdict available") {
                 Ok(result) => {
                     *capture.lock().unwrap() = Some(result);
+                    if self.fail_after_capture {
+                        return Err(AppError::AgentExecutionFailed("MaxTurnsError: reached max turns limit: 4".to_string()));
+                    }
                     Ok(PromptOutput { text: String::new(), tool_calls: vec![] })
                 }
                 Err(e) => Err(e),
@@ -885,6 +891,28 @@
         assert_eq!(payload.blocks.len(), 1);
         assert_eq!(*runner.block_calls.lock().unwrap(), 1, "a critic ERROR must not burn a generation retry");
         assert_eq!(*runner.audit_calls.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_captured_critic_rejection_beats_fail_open_when_the_run_then_errors() {
+        let runner = Arc::new(CriticRunner {
+            blocks: Mutex::new(vec![Some(micro_theory()), Some(micro_theory())].into()),
+            audits: Mutex::new(
+                vec![
+                    Ok(BlockAuditResult { accepted: false, feedback: vec!["el hook es vago".to_string()] }),
+                    Ok(BlockAuditResult { accepted: true, feedback: vec![] }),
+                ]
+                .into(),
+            ),
+            fail_after_capture: true,
+            ..Default::default()
+        });
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        service.start_class_notebook(None, &class_id).await.expect("recovers on the corrected retry");
+        assert_eq!(*runner.block_calls.lock().unwrap(), 2, "the rejection must be honoured, not failed open on the first attempt");
+        assert!(runner.inputs.lock().unwrap()[1].contains("el hook es vago"));
     }
 
     #[tokio::test]

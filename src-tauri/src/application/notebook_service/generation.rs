@@ -1103,26 +1103,26 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
         }
         let input = render::render_block_audit_input(&self.ctx, &self.existing_blocks, candidate);
         let capture: BlockAuditCapture = Arc::new(Mutex::new(None));
-        match self.orchestrator.run_pedagogical_critic_agent(self.app, PEDAGOGICAL_CRITIC_AGENT_ID, &input, capture.clone()).await {
-            Ok(_) => {
-                let audit = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
-                match audit {
-                    Some(audit) if audit.accepted => {
-                        self.trace_critique(candidate, "llm_accepted", Vec::new());
-                        CriticVerdict::Accept
-                    }
-                    Some(audit) => {
-                        self.trace_critique(candidate, "llm_rejected", audit.feedback.clone());
-                        CriticVerdict::Reject { feedback: audit.feedback }
-                    }
-                    None => {
-                        self.trace_critique(candidate, "llm_no_verdict_fail_open", vec!["el crítico no devolvió veredicto; se aceptó el bloque".to_string()]);
-                        tracing::warn!(class_id = %self.class_id, "pedagogical critic returned no verdict, failing open");
-                        CriticVerdict::Accept
-                    }
-                }
+        let run = self.orchestrator.run_pedagogical_critic_agent(self.app, PEDAGOGICAL_CRITIC_AGENT_ID, &input, capture.clone()).await;
+        // A verdict the critic already submitted wins over the run's outcome: a
+        // turn-cap or transport error AFTER `submit_block_audit` ran must not
+        // turn a real rejection into a fail-open accept.
+        let audit = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
+        match (run, audit) {
+            (_, Some(audit)) if audit.accepted => {
+                self.trace_critique(candidate, "llm_accepted", Vec::new());
+                CriticVerdict::Accept
             }
-            Err(e) => {
+            (_, Some(audit)) => {
+                self.trace_critique(candidate, "llm_rejected", audit.feedback.clone());
+                CriticVerdict::Reject { feedback: audit.feedback }
+            }
+            (Ok(_), None) => {
+                self.trace_critique(candidate, "llm_no_verdict_fail_open", vec!["el crítico no devolvió veredicto; se aceptó el bloque".to_string()]);
+                tracing::warn!(class_id = %self.class_id, "pedagogical critic returned no verdict, failing open");
+                CriticVerdict::Accept
+            }
+            (Err(e), None) => {
                 self.trace_critique(candidate, "llm_unavailable_fail_open", vec![format!("crítico no disponible ({}); se aceptó el bloque", e.code())]);
                 tracing::warn!(class_id = %self.class_id, error = %e, "pedagogical critic unavailable, failing open");
                 CriticVerdict::Accept

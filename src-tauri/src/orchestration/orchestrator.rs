@@ -687,7 +687,7 @@ impl Orchestrator {
 
         match self
             .runner
-            .run_block_audit_execution(&def.model.provider_id, &def.model.model, &def.system_prompt, input, capture)
+            .run_block_audit_execution(&def.model.provider_id, &def.model.model, &def.system_prompt, input, capture.clone())
             .await
         {
             Ok(out) => {
@@ -710,6 +710,25 @@ impl Orchestrator {
                 Ok(output)
             }
             Err(e) => {
+                // Same salvage as the notebook block agent: an error after
+                // `submit_block_audit` already ran must not discard the verdict.
+                if capture.lock().unwrap_or_else(|err| err.into_inner()).is_some() {
+                    tracing::warn!(
+                        run_id = %ctx.run_id,
+                        error = %e,
+                        "agent run failed after {} tool call already submitted; salvaging captured output", ctx.agent_id
+                    );
+                    dev_trace::trace_note("salvage", "agent_capture_salvaged", &ctx.run_id, "salvaged_after_error", &[e.to_string()]);
+                    emit(app, AgentEvent::completed(&ctx.run_id, &ctx.agent_id, ""));
+                    return Ok(AgentOutput {
+                        run_id: ctx.run_id.clone(),
+                        agent_id: ctx.agent_id.clone(),
+                        parent_run_id: None,
+                        text: String::new(),
+                        tool_calls: vec![],
+                        duration_ms: started.elapsed().as_millis() as u64,
+                    });
+                }
                 tracing::warn!(
                     run_id = %ctx.run_id,
                     agent_id = %ctx.agent_id,
@@ -798,7 +817,8 @@ mod tests {
     use crate::domain::notebook::GeneratedSectionBlock;
     use crate::domain::roadmap::{DiagnosticAssessmentArgs, EntryLevel};
     use crate::providers::factory::PromptOutput;
-    use crate::tools::{PublishedBlock, RoadmapCapture};
+    use crate::tools::{BlockAuditCapture, BlockAuditResult, PublishedBlock, RoadmapCapture};
+    use crate::agents::pedagogical_critic_agent::PEDAGOGICAL_CRITIC_AGENT_ID;
 
     struct MockRunner {
         text: String,
@@ -925,6 +945,46 @@ mod tests {
             }
             Err(max_turns_error())
         }
+
+        async fn run_block_audit_execution(
+            &self,
+            _provider_id: &str,
+            _model: &str,
+            _system_prompt: &str,
+            _input: &str,
+            capture: BlockAuditCapture,
+        ) -> AppResult<PromptOutput> {
+            if self.write_capture {
+                *capture.lock().unwrap() = Some(BlockAuditResult { accepted: false, feedback: vec!["no llega".to_string()] });
+            }
+            Err(max_turns_error())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_critic_turn_cap_after_a_submitted_verdict_is_salvaged() {
+        let agents = agents_with(def(NOTEBOOK_AGENT_ID), def(PEDAGOGICAL_CRITIC_AGENT_ID));
+        let orch = Orchestrator::new(agents, Arc::new(SalvageRunner { write_capture: true }));
+        let capture: BlockAuditCapture = Arc::new(Mutex::new(None));
+
+        let out = orch.run_pedagogical_critic_agent(None, PEDAGOGICAL_CRITIC_AGENT_ID, "go", capture.clone()).await.expect("salvaged");
+
+        assert!(out.text.is_empty());
+        assert!(capture.lock().unwrap().is_some(), "the submitted verdict must survive the turn-cap error");
+    }
+
+    #[tokio::test]
+    async fn a_critic_turn_cap_with_an_empty_capture_still_propagates_the_error() {
+        let agents = agents_with(def(NOTEBOOK_AGENT_ID), def(PEDAGOGICAL_CRITIC_AGENT_ID));
+        let orch = Orchestrator::new(agents, Arc::new(SalvageRunner { write_capture: false }));
+        let capture: BlockAuditCapture = Arc::new(Mutex::new(None));
+
+        let err = orch
+            .run_pedagogical_critic_agent(None, PEDAGOGICAL_CRITIC_AGENT_ID, "go", capture.clone())
+            .await
+            .expect_err("nothing was captured, so the error must propagate");
+
+        assert!(matches!(&err, AppError::AgentExecutionFailed(msg) if msg.contains("MaxTurnsError")));
     }
 
     #[tokio::test]
