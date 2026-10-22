@@ -27,6 +27,11 @@ a full notebook class (theory → scaffolded practice → gates → closure).
       trigger: needs service/store/orchestrator APIs across 4+ files).
 - [~] T2 Run both harnesses against Xiaomi (run 1: 401 bad key extraction; run 2 2026-10-22: both stalled on 120s provider timeouts — see Evidence; needs
       user action).
+- [x] T4 Timeout/retry/stats hardening (bounded writer): `LEARNKIT_PROMPT_TIMEOUT_SECS`
+      (clamp 30..=900, default 120) in providers/factory.rs; harnesses default 300,
+      xiaomi model allow-list (pro/flash), stall retries, turn retries, shared
+      stats in examples/e2e_support/mod.rs; scripts/run-live-e2e.cmd.
+      Evidence: `cargo build --examples` ok; `cargo test` 313 passed. Tokens not exposed.
 - [ ] T3 Report.
 
 ## Constraints

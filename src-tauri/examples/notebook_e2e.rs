@@ -21,9 +21,14 @@
 //!   $env:LEARNKIT_E2E_API_KEY="<key>"; cargo run --example notebook_e2e
 //! Optional env: LEARNKIT_E2E_PROVIDER (default xiaomi), LEARNKIT_E2E_MODEL
 //! (default mimo-v2.6-flash), LEARNKIT_E2E_MAX_BLOCKS (default 14),
-//! LEARNKIT_E2E_WALL_SECS (default 1500).
+//! LEARNKIT_E2E_WALL_SECS (default 3600), LEARNKIT_PROMPT_TIMEOUT_SECS (default
+//! 300 here; the app default stays 120), LEARNKIT_E2E_STALL_RETRIES (default 3).
+//! With provider xiaomi only `mimo-v2.6-pro` / `mimo-v2.6-flash` are accepted.
 
 use std::collections::{BTreeMap, HashSet};
+
+#[path = "e2e_support/mod.rs"]
+mod e2e_support;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -294,8 +299,14 @@ async fn main() -> AnyResult<()> {
     };
     let provider_id = std::env::var("LEARNKIT_E2E_PROVIDER").unwrap_or_else(|_| "xiaomi".to_string());
     let model = std::env::var("LEARNKIT_E2E_MODEL").ok().filter(|m| !m.trim().is_empty()).unwrap_or_else(|| "mimo-v2.6-flash".to_string());
+    e2e_support::enforce_model_policy(&provider_id, &model);
+    let timeout_secs = e2e_support::ensure_prompt_timeout();
+    let stall_retries: u32 = std::env::var("LEARNKIT_E2E_STALL_RETRIES").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+    // One full loop_runner budget (3 attempts) plus slack before declaring a stall.
+    let stall_window = Duration::from_secs(timeout_secs * 3 + 60);
+    println!("Ventana de estancamiento: {}s; reintentos de estancamiento: {stall_retries}", stall_window.as_secs());
     let max_blocks: usize = std::env::var("LEARNKIT_E2E_MAX_BLOCKS").ok().and_then(|v| v.parse().ok()).unwrap_or(14);
-    let wall_cap = Duration::from_secs(std::env::var("LEARNKIT_E2E_WALL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(1500));
+    let wall_cap = Duration::from_secs(std::env::var("LEARNKIT_E2E_WALL_SECS").ok().and_then(|v| v.parse().ok()).unwrap_or(3600));
     let started = Instant::now();
 
     let memory_vault = MemoryVault::new();
@@ -328,6 +339,7 @@ async fn main() -> AnyResult<()> {
     // Developer-mode traces give us model-call counts and critic verdicts.
     dev_trace::clear();
     dev_trace::set_enabled(true);
+    let mut collector = e2e_support::TraceCollector::new();
 
     let (course_id, first_class_id, _) = import_syllabus_into_store(&store, &beginner_syllabus(), COURSE_GOAL)?;
     let class_id = first_class_id.ok_or("seeded course has no first class")?;
@@ -340,7 +352,7 @@ async fn main() -> AnyResult<()> {
     let mut easier_escalation: Option<(bool, String)> = None; // (produced, description)
     let mut stop_reason = "cierre completado".to_string();
     let mut last_growth = Instant::now();
-    let mut retried_stall = false;
+    let mut stall_retries_used = 0u32;
 
     let first = service.start_class_notebook(None, &class_id).await?;
     println!("start_class_notebook -> {} bloque(s) iniciales ({:.1}s)\n", first.blocks.len(), started.elapsed().as_secs_f32());
@@ -350,6 +362,7 @@ async fn main() -> AnyResult<()> {
             stop_reason = "tope de tiempo (LEARNKIT_E2E_WALL_SECS)".to_string();
             break first.document.id.clone();
         }
+        collector.poll();
         let Some(mut payload) = store.load_notebook_by_class(&class_id)? else {
             tokio::time::sleep(Duration::from_secs(2)).await;
             continue;
@@ -368,7 +381,7 @@ async fn main() -> AnyResult<()> {
             );
             reported += 1;
             last_growth = Instant::now();
-            retried_stall = false;
+            stall_retries_used = 0;
         }
 
         if blocks.len() >= max_blocks {
@@ -434,17 +447,22 @@ async fn main() -> AnyResult<()> {
             break payload.document.id.clone();
         }
 
-        // 3) Nothing to answer: wait for the background chain (retry once on a stall).
-        if last_growth.elapsed() > Duration::from_secs(200) {
-            if retried_stall {
-                stop_reason = "estancado: no se generó el siguiente bloque".to_string();
+        // 3) Nothing to answer: wait for the background chain (bounded retries on a stall).
+        if last_growth.elapsed() > stall_window {
+            if stall_retries_used >= stall_retries {
+                stop_reason = format!("estancado: no se generó el siguiente bloque tras {stall_retries} reintento(s)");
                 break payload.document.id.clone();
             }
-            println!("  (sin bloques nuevos en 200s: retry_pending_block)");
+            stall_retries_used += 1;
+            println!(
+                "  [{}] (sin bloques nuevos en {}s) retry_pending_block {stall_retries_used}/{stall_retries} (+{:.0}s)",
+                e2e_support::stamp(),
+                stall_window.as_secs(),
+                started.elapsed().as_secs_f32()
+            );
             if let Err(e) = service.retry_pending_block(None, &payload.document.id).await {
                 println!("  retry_pending_block falló: {e}");
             }
-            retried_stall = true;
             last_growth = Instant::now();
         }
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -476,23 +494,13 @@ async fn main() -> AnyResult<()> {
 
     // --- Trace summary (model calls, critic verdicts) -------------------------
     let trace = dev_trace::snapshot();
-    let mut runs: BTreeMap<String, (u32, u32, u64)> = BTreeMap::new(); // agent -> (ok, err, ms)
     let mut verdicts: BTreeMap<String, u32> = BTreeMap::new();
     for e in &trace {
-        match e.kind.as_str() {
-            "agent_run" => {
-                let r = runs.entry(e.agent_id.clone().unwrap_or_default()).or_default();
-                if e.ok == Some(false) { r.1 += 1 } else { r.0 += 1 }
-                r.2 += e.duration_ms.unwrap_or(0);
-            }
-            "critique" | "retry" => *verdicts.entry(format!("{}:{}", e.kind, e.verdict.clone().unwrap_or_default())).or_default() += 1,
-            _ => {}
+        if matches!(e.kind.as_str(), "critique" | "retry") {
+            *verdicts.entry(format!("{}:{}", e.kind, e.verdict.clone().unwrap_or_default())).or_default() += 1;
         }
     }
-    println!("\n--- llamadas al modelo (dev trace; buffer de 300 entradas, puede truncar) ---");
-    for (agent, (ok, err, ms)) in &runs {
-        println!("  {agent}: {ok} ok, {err} con error, {:.1}s acumulados", *ms as f32 / 1000.0);
-    }
+    collector.report();
     println!("--- veredictos de crítica / reintentos ---");
     for (v, n) in &verdicts {
         println!("  {v}: {n}");
@@ -618,7 +626,7 @@ async fn main() -> AnyResult<()> {
     }
 
     // g) cost.
-    let total_calls: u32 = runs.values().map(|(ok, err, _)| ok + err).sum();
+    let total_calls = collector.len();
     println!(
         "[INFO] g) tiempo total {:.0}s; llamadas al modelo (agent_run en traza) = {total_calls}; bloques = {}; parada = {stop_reason}",
         started.elapsed().as_secs_f32(),
