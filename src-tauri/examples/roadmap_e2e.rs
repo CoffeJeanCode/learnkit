@@ -25,6 +25,9 @@
 //!
 //! Run: `LEARNKIT_E2E_API_KEY=<key> cargo run --example roadmap_e2e`
 //! Optionally override the provider (default: deepseek): `LEARNKIT_E2E_PROVIDER=anthropic`
+//! (e.g. `xiaomi` pins `mimo-v2.6-flash`), the model with `LEARNKIT_E2E_MODEL`,
+//! and run a single scenario with `LEARNKIT_E2E_SCENARIO=<name substring>`
+//! (case-insensitive).
 
 use std::sync::Arc;
 
@@ -100,6 +103,18 @@ fn scenarios() -> Vec<Scenario> {
             ],
         },
         Scenario {
+            // The real-user beginner case: a messy first message, then plausible
+            // follow-ups. After sealing we check the course/profile title is
+            // clean and the diagnostic battery has no self-perception options.
+            name: "Principiante real — primer servidor sin conocimiento previo",
+            student_turns: vec![
+                "Quiero montar mi primer servidor, y no tengo nada de conocimiento",
+                "Tengo 6 semanas, 5 horas por semana",
+                "sí",
+                "ok",
+            ],
+        },
+        Scenario {
             name: "Vago/monosilábico — fuerza el tope estricto de turnos",
             student_turns: vec!["no sé", "lo que sea", "cualquier cosa"],
         },
@@ -111,6 +126,54 @@ struct TurnLog {
     user_said: String,
     agent_said: String,
     status_after: SessionStatus,
+}
+
+/// Phrases that mean the battery asks the learner to rate themselves instead
+/// of testing knowledge (compared lowercase).
+const SELF_PERCEPTION_OPTIONS: &[&str] = &["no estoy seguro", "no todavía", "una idea concreta", "no tengo ninguna intuición"];
+
+/// Post-seal checks: clean titles and an objective (or absent) diagnostic
+/// battery. Reads the battery from the sealed package and from the SQLite
+/// course row (the copy the app actually serves).
+fn report_beginner_checks(session: &learnkit_lib::domain::roadmap::RoadmapSession, store: &NotebookStore) {
+    println!("--- checks de título y batería diagnóstica ---");
+    let Some(package) = session.roadmap_package.as_ref() else {
+        println!("[N/A] sin paquete sellado.");
+        return;
+    };
+    let titles = [("course_title", package.syllabus.course_title.as_str()), ("topic", package.learner_profile.topic.as_str())];
+    for (label, title) in titles {
+        let lower = title.to_lowercase();
+        let dirty = lower.contains("quiero") || lower.contains("no tengo nada de conocimiento");
+        println!("[{}] {label} limpio: \"{title}\"", if dirty { "FALLO" } else { "OK" });
+    }
+
+    let stored = session.imported_course_id.as_deref().and_then(|id| store.get_course_diagnostic_battery(id).ok().flatten());
+    let batteries = [("paquete sellado", package.diagnostic_battery.clone()), ("SQLite", stored.map(|s| s.battery))];
+    for (source, battery) in batteries {
+        let Some(battery) = battery else {
+            println!("[OK] batería ({source}): None.");
+            continue;
+        };
+        let mut offending: Vec<String> = Vec::new();
+        for q in &battery.questions {
+            for opt in &q.options {
+                let lower = opt.trim().to_lowercase();
+                let bare_yes = matches!(lower.trim_end_matches(['.', '!']), "sí" | "si");
+                if bare_yes || SELF_PERCEPTION_OPTIONS.iter().any(|p| lower.contains(p)) {
+                    offending.push(format!("\"{opt}\" (en: {})", q.prompt));
+                }
+            }
+        }
+        if offending.is_empty() {
+            println!("[OK] batería ({source}): {} preguntas, sin opciones de autopercepción.", battery.questions.len());
+        } else {
+            println!("[FALLO] batería ({source}): opciones de autopercepción:");
+            for o in &offending {
+                println!("  - {o}");
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -133,12 +196,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("openai", "gpt-5"),
         ("gemini", "gemini-2.5-flash"),
         ("openrouter", "anthropic/claude-sonnet-4"),
+        ("xiaomi", "mimo-v2.6-flash"),
     ];
-    let model = MODEL_FOR
-        .iter()
-        .find(|(p, _)| *p == provider_id)
-        .map(|(_, m)| *m)
-        .unwrap_or_else(|| panic!("no model pin for provider '{provider_id}'"));
+    let model: String = match std::env::var("LEARNKIT_E2E_MODEL") {
+        Ok(m) if !m.trim().is_empty() => m.trim().to_string(),
+        _ => MODEL_FOR
+            .iter()
+            .find(|(p, _)| *p == provider_id)
+            .map(|(_, m)| m.to_string())
+            .unwrap_or_else(|| panic!("no model pin for provider '{provider_id}'")),
+    };
+    let scenario_filter = std::env::var("LEARNKIT_E2E_SCENARIO").ok().map(|f| f.to_lowercase()).filter(|f| !f.is_empty());
 
     let memory_vault = MemoryVault::new();
     memory_vault.save_provider_key(&provider_id, &api_key).expect("seed in-memory vault");
@@ -148,7 +216,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let agents = Arc::new(AgentRegistry::new());
     let mut def = roadmap_agent::definition();
-    def.model = learnkit_lib::domain::model::ModelRef::new(provider_id.clone(), model);
+    def.model = learnkit_lib::domain::model::ModelRef::new(provider_id.clone(), model.as_str());
     agents.register(def).expect("register roadmap agent");
 
     let orchestrator = Arc::new(Orchestrator::with_rig_runner(Arc::clone(&agents), providers, vault));
@@ -161,9 +229,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut all_json_leaks = 0usize;
     let mut sealed_count = 0usize;
     let mut sealed_within_2_turns = 0usize;
-    let total_scenarios = scenarios().len();
+    let selected: Vec<Scenario> = scenarios()
+        .into_iter()
+        .filter(|sc| scenario_filter.as_ref().map_or(true, |f| sc.name.to_lowercase().contains(f)))
+        .collect();
+    if selected.is_empty() {
+        eprintln!("LEARNKIT_E2E_SCENARIO matched no scenario.");
+        return Ok(());
+    }
+    let total_scenarios = selected.len();
 
-    for scenario in scenarios() {
+    for scenario in selected {
         println!("======================================================================");
         println!("ESCENARIO: {}", scenario.name);
         println!("======================================================================\n");
@@ -264,6 +340,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Curso importado en SQLite: {} clases (notebooks se generan bajo demanda, no aquí).", classes.len());
             }
             _ => println!("[FALLO] Selló sin course_id/first_class_id — el import a SQLite no ocurrió."),
+        }
+
+        if session.status == SessionStatus::Sealed {
+            report_beginner_checks(&session, &notebook_store);
         }
         println!();
     }
