@@ -1,6 +1,17 @@
 use crate::domain::notebook::{DynamicBlockType, GeneratedSectionBlock, MermaidChartType, StaticVisualSpec, SvgTag};
 
-const OPTION_LENGTH_TOLERANCE: f64 = 0.20;
+/// Options are length-biased only when BOTH hold: the relative gap
+/// `(max - min) / max` exceeds this ratio AND the absolute gap exceeds
+/// `OPTION_LENGTH_MIN_ABS_DIFF` characters. The absolute half keeps short
+/// options (e.g. 36 vs 56 chars) from being flagged by the ratio alone.
+const OPTION_LENGTH_TOLERANCE: f64 = 0.25;
+const OPTION_LENGTH_MIN_ABS_DIFF: usize = 25;
+
+/// Pure length-bias rule over option character counts.
+fn options_are_length_biased(min_len: usize, max_len: usize) -> bool {
+    let diff = max_len.saturating_sub(min_len);
+    max_len > 0 && diff as f64 / max_len as f64 > OPTION_LENGTH_TOLERANCE && diff > OPTION_LENGTH_MIN_ABS_DIFF
+}
 
 const JUSTIFICATION_CONNECTORS: [&str; 6] = ["porque", "ya que", "debido a", "puesto que", "lo cual significa", "es decir que"];
 
@@ -190,10 +201,11 @@ pub fn option_set_violations(field: &str, options: &[String]) -> Vec<String> {
     if options.len() >= 2 {
         let lengths: Vec<usize> = options.iter().map(|o| o.chars().count()).collect();
         if let (Some(&max_len), Some(&min_len)) = (lengths.iter().max(), lengths.iter().min()) {
-            if max_len > 0 && (max_len - min_len) as f64 / max_len as f64 > OPTION_LENGTH_TOLERANCE {
+            if options_are_length_biased(min_len, max_len) {
                 v.push(format!(
                     "bloque: {field} tiene opciones con longitudes muy dispares (sesgo de longitud) — \
-                     min {min_len} / max {max_len} caracteres, variación permitida < 20%"
+                     min {min_len} / max {max_len} caracteres; se marca solo si la diferencia supera {}% y {OPTION_LENGTH_MIN_ABS_DIFF} caracteres",
+                    (OPTION_LENGTH_TOLERANCE * 100.0).round()
                 ));
             }
         }
@@ -330,6 +342,43 @@ mod tests {
         }
         let v = block_guardrail_violations(&block);
         assert!(v.iter().any(|s| s.contains("sesgo de longitud")), "{v:?}");
+    }
+
+    #[test]
+    fn a_20_character_gap_between_short_options_is_not_length_bias() {
+        // 36 vs 56 chars: a 36% ratio, but only 20 chars apart.
+        let mut block = valid_gate();
+        if let GeneratedSectionBlock::InteractivePredictionGate { options, .. } = &mut block {
+            options[0] = "a".repeat(36);
+            options[1] = "b".repeat(56);
+        }
+        let v = block_guardrail_violations(&block);
+        assert!(!v.iter().any(|s| s.contains("sesgo de longitud")), "{v:?}");
+    }
+
+    #[test]
+    fn a_clearly_biased_pair_is_still_flagged_with_thresholds_from_constants() {
+        let mut block = valid_gate();
+        if let GeneratedSectionBlock::InteractivePredictionGate { options, .. } = &mut block {
+            options[0] = "a".repeat(20);
+            options[1] = "b".repeat(100);
+        }
+        let v = block_guardrail_violations(&block);
+        let msg = v.iter().find(|s| s.contains("sesgo de longitud")).expect("flagged");
+        assert!(msg.contains("25%") && msg.contains("25 caracteres"), "{msg}");
+    }
+
+    #[test]
+    fn length_bias_needs_both_the_ratio_and_the_absolute_gap() {
+        // Ratio fine (1000 vs 900 = 10%) but 100 chars apart: not biased.
+        assert!(!options_are_length_biased(900, 1000));
+        // Absolute gap over 25 but ratio exactly at the limit (75 vs 100 = 25%): not biased (strict >).
+        assert!(!options_are_length_biased(75, 100));
+        // Ratio over 25% but gap exactly 25 chars (45 vs 70 = 35.7%): not biased (strict >).
+        assert!(!options_are_length_biased(45, 70));
+        // Both just over: 26 chars, 26/100 = 26%.
+        assert!(options_are_length_biased(74, 100));
+        assert!(!options_are_length_biased(0, 0));
     }
 
     #[test]

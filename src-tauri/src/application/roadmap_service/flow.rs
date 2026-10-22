@@ -66,7 +66,10 @@ impl RoadmapService {
                     let captured = capture.lock().unwrap_or_else(|e| e.into_inner()).clone();
                     return Ok((out.text, captured));
                 }
-                Err(e) if e.is_transient() && attempt + 1 < Self::MAX_EXECUTION_ATTEMPTS => {
+                // A `finish_reason=Length` is sampling-dependent (reasoning
+                // models can burn the whole budget thinking), so a fresh
+                // attempt often succeeds where the first one ran dry.
+                Err(e) if (e.is_transient() || e.is_output_budget_exhausted()) && attempt + 1 < Self::MAX_EXECUTION_ATTEMPTS => {
                     let backoff = Self::RETRY_BACKOFF_BASE * (attempt as u32 + 1);
                     tracing::warn!(error = %e, attempt, backoff_ms = backoff.as_millis(), "roadmap diagnostic turn failed, retrying after backoff");
                     last_err = Some(e);
@@ -347,6 +350,30 @@ impl RoadmapService {
             && session.proposed_plan.is_none()
     }
 
+    /// True when a Gate 2 / Gate 3a hand-off turn ended without producing the
+    /// state its tool is responsible for. Other scopes allow plain chat.
+    fn hand_off_unfulfilled(session: &RoadmapSession, scope: DiagnosticToolScope) -> bool {
+        match scope {
+            DiagnosticToolScope::Propose => session.proposed_plan.is_none(),
+            DiagnosticToolScope::Battery => session.pending_diagnostic_battery.is_none(),
+            _ => false,
+        }
+    }
+
+    fn hand_off_missing_reason(scope: DiagnosticToolScope) -> &'static str {
+        match scope {
+            DiagnosticToolScope::Battery => {
+                "No llamaste present_diagnostic_battery en este turno. Es la única herramienta que tienes: \
+                 llámala ahora en lugar de responder solo con texto ni mencionar otras herramientas."
+            }
+            _ => {
+                "No llamaste propose_syllabus_plan ni propose_capstone_project en este turno. Ambas están \
+                 disponibles: llámalas ahora, en ese orden, en lugar de responder solo con texto ni mencionar \
+                 otras herramientas."
+            }
+        }
+    }
+
     /// Runs the model, applies its capture, and — if that capture was
     /// rejected on content grounding — immediately retries WITHIN this one
     /// user-facing turn, up to [`Self::MAX_GROUNDING_RETRIES`] attempts,
@@ -378,6 +405,13 @@ impl RoadmapService {
             let (t, capture) = self.run_diagnostic_turn_with_retry(app, agent_id, scope, &input).await?;
             text = t;
             had_violation = self.apply_capture(session, capture)?;
+            // A hand-off turn exists only to call its tool. Text without the
+            // call (e.g. a model improvising other tool names) used to pass as
+            // a clean turn and reach the student verbatim.
+            if !had_violation && Self::hand_off_unfulfilled(session, scope) {
+                session.last_rejection_reasons = vec![Self::hand_off_missing_reason(scope).to_string()];
+                had_violation = true;
+            }
             if !had_violation || attempt + 1 >= Self::MAX_GROUNDING_RETRIES {
                 break;
             }
@@ -502,11 +536,21 @@ impl RoadmapService {
         }
         let profile = session.learner_profile_card.clone().expect("just ensured above");
         let syllabus = synth_roadmap_package(&profile);
-        // Guaranteed None here: once a battery is successfully generated,
-        // `apply_capture` stops counting gather turns against it (see its
-        // `stable` check), so the cap that triggers force-close can only be
-        // reached while there's no pending battery yet.
-        let diagnostic_battery = Some(DiagnosticBatteryState { battery: synth_diagnostic_battery(&profile), answers: Default::default() });
+        // No synthetic battery — ever. The old fallback fabricated canned
+        // self-perception questions ("¿qué asocias primero con {topic}?")
+        // graded right/wrong, and a real declared-beginner student saw them
+        // and experienced them as absurd (grading "No tengo ninguna
+        // intuición todavía" as WRONG). A sealed session with no battery
+        // renders no battery card at all — silence beats nonsense. This also
+        // matches `force_progress_from_gate3`, which already passes the real
+        // pending battery through unchanged (None stays None).
+        //
+        // A battery captured earlier can never be pending here anyway: once
+        // one is successfully generated, `apply_capture` stops counting
+        // gather turns against it (see its `stable` check), so the cap that
+        // triggers force-close can only be reached while there's no pending
+        // battery yet.
+        let diagnostic_battery: Option<DiagnosticBatteryState> = None;
         if let Err(e) = self.seal_session(session, &profile, syllabus, diagnostic_battery) {
             tracing::warn!(session_id = %session.session_id, error = %e, "force-close failed to persist into the notebook store");
             return Err(e);

@@ -56,6 +56,16 @@ impl AppError {
         matches!(self, Self::AgentExecutionFailed(msg) if msg.contains("finish_reason=Length"))
     }
 
+    /// `MaxTurnsError` from rig: the agent burned its turn budget. When the
+    /// turn cap aborted a run whose tool call ALREADY executed, the capture
+    /// holds the deliverable (salvage it); when nothing was captured, the
+    /// model spent every turn without acting — retrying the identical input
+    /// is deterministic, so callers must feed corrective feedback instead of
+    /// a blind backoff (see `notebook_service::generation::generate`).
+    pub fn is_agent_turn_limit(&self) -> bool {
+        matches!(self, Self::AgentExecutionFailed(msg) if msg.contains("MaxTurnsError"))
+    }
+
     pub fn code(&self) -> &'static str {        match self {
             Self::ProviderNotConfigured(_) => "ProviderNotConfigured",
             Self::ProviderKeyMissing(_) => "ProviderKeyMissing",
@@ -127,5 +137,14 @@ mod tests {
         );
         assert!(!AppError::AgentExecutionFailed("some other failure".to_string()).is_output_budget_exhausted());
         assert!(!AppError::Timeout("slow".to_string()).is_output_budget_exhausted());
+    }
+
+    #[test]
+    fn agent_turn_limit_only_matches_rigs_max_turns_error() {
+        assert!(
+            AppError::AgentExecutionFailed("MaxTurnsError: reached max turns limit: 6".to_string()).is_agent_turn_limit()
+        );
+        assert!(!AppError::AgentExecutionFailed("tool call blew up".to_string()).is_agent_turn_limit());
+        assert!(!AppError::Timeout("slow".to_string()).is_agent_turn_limit());
     }
 }

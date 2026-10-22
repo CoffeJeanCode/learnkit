@@ -7,6 +7,7 @@ pub mod error;
 pub mod notebook_store;
 pub mod orchestration;
 pub mod persistence;
+pub mod prompt_encoding;
 pub mod providers;
 pub mod secrets;
 pub mod state;

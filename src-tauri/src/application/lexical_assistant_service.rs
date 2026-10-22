@@ -59,7 +59,11 @@ fn render_input(term: &str, fragment_context: Option<&str>, key_concepts: &[Stri
         "recentHistory": history.iter().map(|t| serde_json::json!({"question": t.question, "answer": t.answer})).collect::<Vec<_>>(),
         "studentQuestion": question,
     });
-    format!("Responde según tu system prompt, en las 3 capas obligatorias.\n\n{}", serde_json::to_string_pretty(&context).unwrap_or_default())
+    format!(
+        "Responde según tu system prompt, en las 3 capas obligatorias.\n\n{}\n\n{}",
+        crate::prompt_encoding::TOON_HINT,
+        crate::prompt_encoding::toon_payload(&context)
+    )
 }
 
 /// The actual automatable safety net for the anti-shortcut protocol: if the

@@ -722,6 +722,20 @@ pre.output, .quickrun pre {
   transform-origin: left center;
   animation: td-sway 2.6s ease-in-out infinite;
 }
+/* Stopwatch + expectation line under a long-running loader row. */
+.waiting-hint {
+  display: block;
+  margin-top: 6px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--chalk-soft);
+}
+.waiting-hint .waiting-clock {
+  font-variant-numeric: tabular-nums;
+  color: var(--chalk-faint);
+  margin-right: 6px;
+}
 /* --- Tool figure: two hand-drawn gears grinding while tools run --- */
 .tool-doodle { width: 76px; height: 52px; flex: none; }
 /* Gears spin about their own centers (each sits inside a translate() <g>,

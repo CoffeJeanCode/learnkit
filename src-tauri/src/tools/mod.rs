@@ -1,4 +1,5 @@
 pub mod echo;
+pub mod hooks;
 pub mod notebook_tools;
 pub mod registry;
 pub mod roadmap_tools;
@@ -11,9 +12,10 @@ use crate::domain::message::AgentEvent;
 pub use echo::EchoTool;
 pub use notebook_tools::{
     BlockAuditCapture, BlockAuditResult, ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult,
-    GateScaffold, GradeClosureSubmissionTool, GradeGateSubmissionTool, NotebookBlockCapture, PublishNotebookBlockTool, ScaffoldType,
-    SubmitBlockAuditTool,
+    GateScaffold, GradeClosureSubmissionTool, GradeGateSubmissionTool, NotebookBlockCapture, PublishedBlock, PublishNotebookBlockTool,
+    ScaffoldType, SubmitBlockAuditTool,
 };
+pub use hooks::{STOP_REASON, StopWhenCaptured, accept_terminal_stop, roadmap_capture_complete, stop_when_roadmap_captured, stop_when_some};
 pub use registry::{ToolInfo, is_known_tool, list_tools};
 pub use roadmap_tools::{
     ConfirmSyllabusPlanTool, DiagnosticToolScope, PresentDiagnosticBatteryTool, ProposeCapstoneProjectTool, ProposeSyllabusPlanTool,

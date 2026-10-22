@@ -13,7 +13,7 @@
     };
     use crate::orchestration::PromptRunner;
     use crate::providers::factory::PromptOutput;
-    use crate::tools::{BlockAuditCapture, BlockAuditResult, ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult, GateScaffold, NotebookBlockCapture, ScaffoldType};
+    use crate::tools::{BlockAuditCapture, BlockAuditResult, ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult, GateScaffold, NotebookBlockCapture, PublishedBlock, ScaffoldType};
 
     fn sealed_roadmap_session() -> RoadmapSession {
         let mut session = RoadmapSession::new("SID".to_string(), 0);
@@ -177,7 +177,7 @@
         ) -> AppResult<PromptOutput> {
             *self.block_calls.lock().unwrap() += 1;
             if let Some(block) = self.blocks.lock().unwrap().pop_front().flatten() {
-                *capture.lock().unwrap() = Some(block);
+                *capture.lock().unwrap() = Some(PublishedBlock { block, mechanical_template: false });
             }
             Ok(PromptOutput { text: String::new(), tool_calls: vec![] })
         }
@@ -233,6 +233,14 @@
         inputs: Mutex<Vec<String>>,
         block_calls: Mutex<usize>,
         audit_calls: Mutex<usize>,
+        /// Simulates the model having authored the NEXT block via a MECHANICAL
+        /// template (`tpl_true_false`/`tpl_ordering`): the published block is
+        /// flagged so the critique skips the LLM critic. Read-and-reset per
+        /// block so it only ever applies to the next one.
+        mechanical_next: Mutex<bool>,
+        /// Makes an `Ok` scripted audit ALSO fail the run after the verdict was
+        /// captured (rig's turn cap firing after `submit_block_audit` ran).
+        fail_after_capture: bool,
     }
 
     #[async_trait]
@@ -252,7 +260,13 @@
             *self.block_calls.lock().unwrap() += 1;
             self.inputs.lock().unwrap().push(input.to_string());
             if let Some(block) = self.blocks.lock().unwrap().pop_front().flatten() {
-                *capture.lock().unwrap() = Some(block);
+                let mechanical = {
+                    let mut flag = self.mechanical_next.lock().unwrap();
+                    let m = *flag;
+                    *flag = false;
+                    m
+                };
+                *capture.lock().unwrap() = Some(PublishedBlock { block, mechanical_template: mechanical });
             }
             Ok(PromptOutput { text: String::new(), tool_calls: vec![] })
         }
@@ -269,10 +283,43 @@
             match self.audits.lock().unwrap().pop_front().expect("scripted audit verdict available") {
                 Ok(result) => {
                     *capture.lock().unwrap() = Some(result);
+                    if self.fail_after_capture {
+                        return Err(AppError::AgentExecutionFailed("MaxTurnsError: reached max turns limit: 4".to_string()));
+                    }
                     Ok(PromptOutput { text: String::new(), tool_calls: vec![] })
                 }
                 Err(e) => Err(e),
             }
+        }
+    }
+
+    /// Scripts rig's `MaxTurnsError` firing on EVERY turn with NO capture
+    /// write — the model burned its budget without ever calling
+    /// `publish_notebook_block`. Records every input so the test can prove
+    /// the loop stopped resending the identical input.
+    #[derive(Default)]
+    struct MaxTurnsRunner {
+        inputs: Mutex<Vec<String>>,
+        block_calls: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl PromptRunner for MaxTurnsRunner {
+        async fn run(&self, _: &str, _: &str, _: &str, _: &str, _: &[String]) -> AppResult<PromptOutput> {
+            unreachable!("notebook generation never calls the plain envelope runner")
+        }
+
+        async fn run_notebook_block_execution(
+            &self,
+            _provider_id: &str,
+            _model: &str,
+            _system_prompt: &str,
+            input: &str,
+            _capture: NotebookBlockCapture,
+        ) -> AppResult<PromptOutput> {
+            *self.block_calls.lock().unwrap() += 1;
+            self.inputs.lock().unwrap().push(input.to_string());
+            Err(AppError::AgentExecutionFailed("MaxTurnsError: reached max turns limit: 6".to_string()))
         }
     }
 
@@ -847,6 +894,55 @@
     }
 
     #[tokio::test]
+    async fn a_captured_critic_rejection_beats_fail_open_when_the_run_then_errors() {
+        let runner = Arc::new(CriticRunner {
+            blocks: Mutex::new(vec![Some(micro_theory()), Some(micro_theory())].into()),
+            audits: Mutex::new(
+                vec![
+                    Ok(BlockAuditResult { accepted: false, feedback: vec!["el hook es vago".to_string()] }),
+                    Ok(BlockAuditResult { accepted: true, feedback: vec![] }),
+                ]
+                .into(),
+            ),
+            fail_after_capture: true,
+            ..Default::default()
+        });
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        service.start_class_notebook(None, &class_id).await.expect("recovers on the corrected retry");
+        assert_eq!(*runner.block_calls.lock().unwrap(), 2, "the rejection must be honoured, not failed open on the first attempt");
+        assert!(runner.inputs.lock().unwrap()[1].contains("el hook es vago"));
+    }
+
+    #[tokio::test]
+    async fn a_mechanical_template_block_skips_the_llm_critic_but_keeps_the_deterministic_review() {
+        // `prediction_gate` is an InteractivePredictionGate — a type that
+        // normally REACHES the pedagogical critic. Flagged as produced by a
+        // mechanical template (`tpl_true_false`/`tpl_ordering`), the critique
+        // must accept it after the deterministic guardrails alone, spending
+        // zero critic round-trips. If the skip regresses, the critic runs,
+        // hits the empty scripted `audits` queue, and the test fails loudly.
+        let runner = Arc::new(CriticRunner {
+            blocks: Mutex::new(vec![Some(prediction_gate("B"))].into()),
+            mechanical_next: Mutex::new(true),
+            ..Default::default()
+        });
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("block ships");
+        assert_eq!(payload.blocks.len(), 1);
+        assert_eq!(payload.blocks[0].block_type, DynamicBlockType::InteractivePredictionGate);
+        assert_eq!(*runner.block_calls.lock().unwrap(), 1);
+        assert_eq!(
+            *runner.audit_calls.lock().unwrap(),
+            0,
+            "a mechanical template must not spend an LLM critic round-trip"
+        );
+    }
+
+    #[tokio::test]
     async fn a_persistent_semantic_rejection_falls_back_to_the_last_grounded_block_instead_of_dead_ending() {
         let reject = || -> AppResult<BlockAuditResult> { Ok(BlockAuditResult { accepted: false, feedback: vec!["no llega".to_string()] }) };
         let runner = Arc::new(CriticRunner {
@@ -861,6 +957,34 @@
         assert_eq!(payload.blocks[0].block_type, DynamicBlockType::AnchoredMicroTheory);
         assert_eq!(*runner.block_calls.lock().unwrap(), 3, "burned the full attempt budget before the backstop");
         assert_eq!(*runner.audit_calls.lock().unwrap(), 3, "every attempt reached the semantic critic");
+    }
+
+    /// The deterministic-retry bug this guards: a `MaxTurnsError` with an
+    /// EMPTY capture used to propagate as a transient error, so the loop
+    /// blind-retried the IDENTICAL input until the budget burned and surfaced
+    /// that raw error. Now `generate` reports an empty attempt instead —
+    /// attempts 2 and 3 must carry the corrective note, and the loop must
+    /// exhaust with ITS OWN error, not the turn-cap one.
+    #[tokio::test]
+    async fn a_turn_cap_without_a_publish_breaks_the_blind_retry_loop_with_corrective_feedback() {
+        let runner = Arc::new(MaxTurnsRunner::default());
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let err = service.start_class_notebook(None, &class_id).await.expect_err("never publishes a block");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("el generador de notebooks no produjo un bloque válido"),
+            "the loop must exhaust with its own error, got: {message}"
+        );
+        assert!(!message.contains("MaxTurnsError"), "the raw turn-cap error must not leak past the loop");
+        assert_eq!(*runner.block_calls.lock().unwrap(), 3, "the full attempt budget is spent");
+        let inputs = runner.inputs.lock().unwrap();
+        assert_eq!(inputs.len(), 3);
+        assert!(!inputs[0].contains("NOTA_DEL_SISTEMA"), "the first attempt gets no corrective note");
+        assert!(inputs[1].contains("NOTA_DEL_SISTEMA"), "attempt 2 must carry the corrective note");
+        assert!(inputs[2].contains("NOTA_DEL_SISTEMA"), "attempt 3 must carry the corrective note");
     }
 
     /// The repair path behind the notebook's "Este bloque no se pudo mostrar
@@ -1359,5 +1483,20 @@
             for forbidden in ["concept_links", "ConceptLink", "ConceptGraph", "list_concept_graph"] {
                 assert!(!source.contains(forbidden), "{name} must not read the student's knowledge graph ({forbidden})");
             }
+        }
+    }
+
+    /// Prompt-payload hygiene: every structured context embedded in model
+    /// input goes through `prompt_encoding::toon_payload` (TOON, with a
+    /// compact-JSON fallback) — never pretty-printed JSON, which measured
+    /// +34% chars on a representative block context.
+    #[test]
+    fn prompt_side_renderers_never_embed_pretty_printed_json() {
+        for (name, source) in [
+            ("notebook_service/render.rs", include_str!("render.rs")),
+            ("roadmap_service/render.rs", include_str!("../roadmap_service/render.rs")),
+            ("lexical_assistant_service.rs", include_str!("../lexical_assistant_service.rs")),
+        ] {
+            assert!(!source.contains("to_string_pretty"), "{name} must encode prompt payloads with toon_payload, not pretty JSON");
         }
     }

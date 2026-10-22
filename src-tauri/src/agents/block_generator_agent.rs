@@ -229,8 +229,12 @@ carga cognitiva, chequeo formativo inmediato, reto ni aburrido ni frustrante, ad
    anterior, nunca ambos. Máximo 1 término técnico nuevo por bloque; los demás ya deben estar en
    `contentSoFar`.
 2. **Puente explícito.** La primera frase del bloque conecta con `bridgeFrom` ("Ya viste que X; ahora
-   miramos Y"). En el primer bloque de la clase, activa un conocimiento previo cotidiano del
-   estudiante (según `diagnosticProfile`/nivel de entrada) antes de nombrar nada técnico.
+   miramos Y"). En el primer bloque de la clase (input con `stepNumber`/`blocksSoFar` vacíos), activa
+   un conocimiento previo cotidiano del estudiante (según `diagnosticProfile`/nivel de entrada) antes
+   de nombrar nada técnico. PROHIBIDO en ese primer bloque abrir tirando un comando o término técnico
+   aislado (p. ej. `pwd`): primero coloca el mapa mental GENERAL (qué es la terminal vs. una ventana
+   gráfica de carpetas, por qué estamos ahí, qué problema resuelve), y SOLO DESPUÉS nombra el
+   comando, dentro de una secuencia numerada con ejemplo de entrada/salida.
 3. **Una compuerta SOLO evalúa lo ya enseñado.** Antes de generar una compuerta, verifica que su
    pregunta/tarea se pueda resolver únicamente con lo que dice `contentSoFar`. Si exige un concepto,
    término o paso que ningún bloque anterior cubrió, NO la generes: enseña ese paso primero.
@@ -256,6 +260,13 @@ carga cognitiva, chequeo formativo inmediato, reto ni aburrido ni frustrante, ad
    (solución al ~70% con huecos `___`) y/o `interactiveSteps` (micro-pasos de completar un hueco).
    `supportLevel` es OBLIGATORIO en toda misión y sigue `scaffolding.supportLevel`; `"independent"` es
    solo para la misión de transferencia (`isTransfer: true`). El sistema rechaza lo contrario.
+
+**Regla de Oro de progresión:** NUNCA pidas auditar un error (`heuristic_error_audit`) ni clasificar
+casos límite ("cumple/rompe la regla") sobre un comando o concepto que el estudiante acaba de ver por
+primera vez. El primer bloque interactivo tras la teoría inicial debe practicar el caso básico correcto
+(`interactive_prediction_gate` sobre el caso normal, o práctica guiada paso a paso); solo en el BLOQUE
+SIGUIENTE introduce la trampa, el error común o el caso límite. El sistema rechaza un
+`heuristic_error_audit` inmediatamente después del primer `anchored_micro_theory` de la clase.
 
 ## FLUJO Y MOTIVACIÓN (`scaffolding.challengeBalance`, `gatesPassedSoFar`)
 Meta: que el estudiante entre y se mantenga en estado de flujo — objetivo claro, reto a la medida de
@@ -327,10 +338,9 @@ regla formal paso a paso con soporte gráfico.
 
 0. spaced_interleaved_retrieval — SOLO como primer bloque de la clase y SOLO cuando
    `learnerMemory.dueRetrieval` trae elementos (ver sección MEMORIA COGNITIVA arriba — es una regla
-   obligatoria, no opcional cuando aplica). items: 1 a 2 entradas, cada una con conceptLabel (el
-   concepto de una clase ANTERIOR, nunca material nuevo de hoy), prompt (la pregunta de
-   recuperación rápida) y expectedAnswer (la respuesta esperada, visible — no es una clave de
-   calificación secreta, el bloque es autocomprobación: el estudiante recuerda y luego confirma).
+   obligatoria, no opcional cuando aplica): repaso de conceptos de clases ANTERIORES, nunca
+   material nuevo de hoy; el bloque es autocomprobación (el estudiante recuerda y luego confirma),
+   nunca una compuerta. El detalle de cada campo de `items` va en el esquema de la herramienta.
 1. anchored_micro_theory — microteoría en capas OBLIGATORIAS, nunca un párrafo monolítico:
    - title.
    - intuitiveHook (🎯 El Gancho Intuitivo): la intuición central en 1-2 líneas, analogía
@@ -341,9 +351,12 @@ regla formal paso a paso con soporte gráfico.
      distorsionado. Nunca la omitas ni la dejes genérica ("no es exactamente igual, pero sirve").
    - systemRule (📐 La Regla del Sistema): la regla o principio que gobierna el sistema, paso a
      paso, con el detalle técnico completo — aquí sí se introduce terminología técnica, ya anclada
-     en el gancho. Esta capa tiene su PROPIO tope de 160-180 PALABRAS (el sistema la rechaza si te
-     pasas) — úsalo: sé exhaustivo describiendo el mecanismo, no lo comprimas de más solo porque
-     antes compartía presupuesto con las otras capas.
+     en el gancho. Debe ser una SECUENCIA CLARA de micro-pasos NUMERADOS (1 ➔ 2 ➔ 3) con un
+     ejemplo CONCRETO de entrada/salida (qué escribe el estudiante, qué le responde la pantalla,
+     qué significa cada parte), NUNCA un párrafo abstracto. Esta capa tiene su PROPIO tope de
+     hasta 240 PALABRAS (el sistema la rechaza si te pasas) — úsalo: sé exhaustivo describiendo
+     el mecanismo, no lo comprimas de más solo porque antes compartía presupuesto con las otras
+     capas.
    - frequentError (⚠️ El Error Frecuente): PROHIBIDO describir el error aislado. Contrasta un
      caso VÁLIDO explícito contra la confusión típica, en la forma "esto SÍ [caso válido] / esto
      NO [confusión], porque [la razón causal]" — la confusión debe ser ESPECÍFICA de este tema, la

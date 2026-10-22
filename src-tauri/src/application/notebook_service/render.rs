@@ -10,6 +10,7 @@ use crate::domain::lesson_composition::{infer_profile, suggest_next_block, sugge
 use crate::domain::notebook::{BlockStatus, DynamicBlockType, GateAttempt, GeneratedSectionBlock, NotebookBlock};
 use crate::domain::scaffolding;
 use crate::notebook_store::ClassGenerationContext;
+use crate::prompt_encoding::{TOON_HINT, toon_payload};
 
 use super::grounding::MasteryProgress;
 
@@ -237,8 +238,8 @@ pub(super) fn render_next_block_input(
     }
     format!(
         "Genera el SIGUIENTE bloque de esta clase, llamando a publish_notebook_block según tu system \
-         prompt.\n\n{}",
-        serde_json::to_string_pretty(&context).unwrap_or_default()
+         prompt.\n\n{TOON_HINT}\n\n{}",
+        toon_payload(&context)
     )
 }
 
@@ -274,8 +275,8 @@ pub(super) fn render_forced_closure_input(
          a publish_notebook_block con metacognitive_closure — sin excepción, aunque el estudiante no \
          haya completado ambas dimensiones de maestría todavía (revísalas en masteryStatus). Sé \
          honesto en contrastNarrative sobre lo que sí se logró y lo que quedó pendiente, en vez de \
-         fingir que la clase se dominó por completo.\n\n{}",
-        serde_json::to_string_pretty(&context).unwrap_or_default()
+         fingir que la clase se dominó por completo.\n\n{TOON_HINT}\n\n{}",
+        toon_payload(&context)
     )
 }
 
@@ -314,7 +315,7 @@ pub(super) fn render_escalation_block_input(
         "El estudiante falló la misma compuerta 3 veces. Genera el bloque de re-enfoque según la \
          sección MODO ESCALACIÓN de tu system prompt, llamando a publish_notebook_block."
     };
-    format!("{intro}\n\n{}", serde_json::to_string_pretty(&context).unwrap_or_default())
+    format!("{intro}\n\n{TOON_HINT}\n\n{}", toon_payload(&context))
 }
 
 /// Input for `notebook_gate_grader`'s `grade_gate_submission` call — one
@@ -338,8 +339,8 @@ pub(super) fn render_grading_input(block: &NotebookBlock, submission_text: &str,
         context["studentSelectedLine"] = serde_json::json!(line);
     }
     format!(
-        "Califica esta entrega llamando a grade_gate_submission según tu system prompt.\n\n{}",
-        serde_json::to_string_pretty(&context).unwrap_or_default()
+        "Califica esta entrega llamando a grade_gate_submission según tu system prompt.\n\n{TOON_HINT}\n\n{}",
+        toon_payload(&context)
     )
 }
 
@@ -358,8 +359,8 @@ pub(super) fn render_retrieval_grading_input(item: &serde_json::Value, answer: &
     });
     format!(
         "Califica esta respuesta de repaso llamando a grade_gate_submission según tu system prompt \
-         (modo spaced_interleaved_retrieval).\n\n{}",
-        serde_json::to_string_pretty(&context).unwrap_or_default()
+         (modo spaced_interleaved_retrieval).\n\n{TOON_HINT}\n\n{}",
+        toon_payload(&context)
     )
 }
 
@@ -376,8 +377,8 @@ pub(super) fn render_closure_grading_input(block: &NotebookBlock, reflection: &s
         "attemptNumber": attempt_number,
     });
     format!(
-        "Califica esta reflexión de cierre llamando a grade_closure_submission según tu system prompt.\n\n{}",
-        serde_json::to_string_pretty(&context).unwrap_or_default()
+        "Califica esta reflexión de cierre llamando a grade_closure_submission según tu system prompt.\n\n{TOON_HINT}\n\n{}",
+        toon_payload(&context)
     )
 }
 
@@ -399,8 +400,8 @@ pub(super) fn render_block_audit_input(
         "block": block,
     });
     format!(
-        "Revisa este bloque llamando a submit_block_audit según tu system prompt.\n\n{}",
-        serde_json::to_string_pretty(&context).unwrap_or_default()
+        "Revisa este bloque llamando a submit_block_audit según tu system prompt.\n\n{TOON_HINT}\n\n{}",
+        toon_payload(&context)
     )
 }
 

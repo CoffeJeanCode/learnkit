@@ -77,6 +77,14 @@ impl DisciplineProfile {
 /// prompt. This is a STARTING disposition, not a mold: the prompt explicitly
 /// tells the model these are "puntos de partida, no una tabla que copias", so
 /// nothing in this crate treats a deviation from this sequence as invalid.
+/// One invariant every chain respects (golden progression): no chain places a
+/// `HeuristicErrorAudit` immediately after an `AnchoredMicroTheory` — at
+/// least one intervening block (a happy-path `InteractivePredictionGate` or
+/// `HandsOnMission`, or a causal-map `DeclarativeVisualDiagram`) always comes
+/// between, because the first interactive block after the initial theory must
+/// practice the basic correct case before auditing errors (mirrored by the
+/// positional guardrail in
+/// `notebook_service::grounding::single_block_violations`).
 ///
 /// Two things the prompt itself calls out that this table intentionally does
 /// NOT capture as static data, to avoid silently changing behavior or

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use crate::domain::notebook::{DiagnosticBattery, DiagnosticBatteryState, DiagnosticDimension, DiagnosticQuestion};
+use crate::domain::notebook::{DiagnosticBattery, DiagnosticBatteryState, DiagnosticDimension};
 use crate::domain::roadmap::{
     CapstoneProject, ChatTurn, Deliverable, DeliverableArtifactType, DiagnosticAssessmentArgs, DiagnosticSummaryCard, EntryLevel,
     LearnerProfileCard, Micromodule, Milestone, ProposedPlan, RoadmapPhase, RoadmapSession, RoadmapSessionSummary,

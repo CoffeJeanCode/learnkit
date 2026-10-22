@@ -63,7 +63,7 @@ impl ProviderKind {
                 "deepseek-chat",
                 "deepseek-reasoner",
             ],
-            ProviderKind::Xiaomi => &["mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-flash"],
+            ProviderKind::Xiaomi => &["mimo-v2.6-pro", "mimo-v2.6-flash", "mimo-v2.6-pro-ultraspeed"],
         }
     }
 }

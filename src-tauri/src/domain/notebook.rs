@@ -428,7 +428,7 @@ pub enum GeneratedSectionBlock {
     SpacedInterleavedRetrieval { items: Vec<RetrievalPrompt> },
     /// Layered microtheory in exactly 3-4 parts (🎯📐⚠️, plus an optional
     /// analogy-boundary line) — never one undifferentiated paragraph.
-    /// `systemRule` has its own ~180-word ceiling and the other layers share
+    /// `systemRule` has its own ~240-word ceiling and the other layers share
     /// a combined terse ceiling (see
     /// `notebook_service::grounding::single_block_violations`) so the block
     /// can never degrade into flat encyclopedic text.

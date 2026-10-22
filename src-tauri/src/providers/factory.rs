@@ -9,13 +9,29 @@ use crate::tools::{
     BlockAuditCapture, ClosureFeedbackCapture, ConfirmSyllabusPlanTool, DiagnosticToolScope, EchoTool, GateGradingCapture,
     GradeClosureSubmissionTool, GradeGateSubmissionTool, NotebookBlockCapture, PresentDiagnosticBatteryTool,
     ProposeCapstoneProjectTool, ProposeSyllabusPlanTool, PublishNotebookBlockTool, SharedRoadmapCapture, SubmitBlockAuditTool,
-    SubmitDiagnosticAssessmentTool, is_known_tool,
+    SubmitDiagnosticAssessmentTool, accept_terminal_stop, is_known_tool, stop_when_roadmap_captured, stop_when_some,
 };
 
 /// Límite para una llamada al LLM: sin esto, una red colgada o un proveedor
 /// lento deja el comando Tauri pendiente para siempre y la ventana parece
 /// "no responder" (el composer queda deshabilitado en `sending` sin salida).
-const PROMPT_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_PROMPT_TIMEOUT_SECS: u64 = 200;
+const MIN_PROMPT_TIMEOUT_SECS: u64 = 30;
+const MAX_PROMPT_TIMEOUT_SECS: u64 = 900;
+
+/// Pure parse/clamp of the `LEARNKIT_PROMPT_TIMEOUT_SECS` override: invalid or
+/// missing values fall back to the app default, valid ones are clamped.
+fn parse_prompt_timeout(raw: Option<&str>) -> u64 {
+    raw.and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|v| v.clamp(MIN_PROMPT_TIMEOUT_SECS, MAX_PROMPT_TIMEOUT_SECS))
+        .unwrap_or(DEFAULT_PROMPT_TIMEOUT_SECS)
+}
+
+/// Effective per-call timeout; `LEARNKIT_PROMPT_TIMEOUT_SECS` lets slow
+/// providers (e.g. live e2e runs) raise it without changing app defaults.
+fn prompt_timeout_secs() -> u64 {
+    parse_prompt_timeout(std::env::var("LEARNKIT_PROMPT_TIMEOUT_SECS").ok().as_deref())
+}
 /// Límite para los chequeos HTTP ligeros (verificar conexión, listar modelos).
 const HTTP_TIMEOUT_SECS: u64 = 30;
 /// Presupuesto de salida por defecto: cubre texto + args de herramientas de
@@ -70,11 +86,15 @@ impl ProviderFactory {
     /// Presupuesto de salida según proveedor. Los turnos de ejecución emiten
     /// artefactos enormes (un syllabus de 4 semanas + notebook completo
     /// caben justos en 8192 — observado `finish_reason=Length`), así que se
-    /// pide 16384 donde el proveedor lo admite. DeepSeek capa a 8192 en su
-    /// API: pedir más falla del lado del proveedor.
+    /// pide 16384 donde el proveedor lo admite. DeepSeek y MiMo admiten
+    /// mucho más (DeepSeek V4: hasta 384K según su doc oficial; MiMo:
+    /// 131072): los modelos de razonamiento gastan salida pensando y con
+    /// 8192 agotan el presupuesto (`finish_reason=Length`) antes de emitir
+    /// la llamada a la herramienta. Deliberadamente por proveedor, nunca
+    /// por nombre de modelo.
     pub fn output_budget(provider: &ProviderKind) -> u64 {
         match provider {
-            ProviderKind::DeepSeek => 8192,
+            ProviderKind::DeepSeek | ProviderKind::Xiaomi => 131_072,
             _ => 16384,
         }
     }
@@ -165,10 +185,10 @@ impl ProviderFactory {
         } else {
             builder.build()
         };
-        let text = tokio::time::timeout(std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS), agent.prompt(input))
+        let text = tokio::time::timeout(std::time::Duration::from_secs(prompt_timeout_secs()), agent.prompt(input))
             .await
             .map_err(|_| {
-                AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s"))
+                AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs()))
             })?
             .map_err(|e| agent_error(&e))?;
         Ok(PromptOutput {
@@ -268,6 +288,7 @@ impl ProviderFactory {
         // `if scope... { builder = builder.tool(...) }` won't typecheck. Each
         // scope registers its subset in its own branch instead — every scope
         // has at least one tool, so every branch ends in `.tool(...)`.
+        let hook = stop_when_roadmap_captured(scope, capture.clone());
         let base = AgentBuilder::new(model)
             .preamble(system_prompt)
             // Presupuesto por proveedor (ver `output_budget`): un turno puede
@@ -303,12 +324,12 @@ impl ProviderFactory {
         // last call ever happens.
         const DIAGNOSTIC_MAX_TURNS: usize = 6;
         let text = tokio::time::timeout(
-            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
-            agent.prompt(input).max_turns(DIAGNOSTIC_MAX_TURNS),
+            std::time::Duration::from_secs(prompt_timeout_secs()),
+            agent.prompt(input).max_turns(DIAGNOSTIC_MAX_TURNS).add_hook(hook),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
-        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?;
+        let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput {
             text,
             tool_calls: vec!["submit_diagnostic_assessment".to_string(), "generate_syllabus_execution".to_string()],
@@ -401,17 +422,18 @@ impl ProviderFactory {
         // walkthrough steps): the budget comes from the provider (see
         // `output_budget`), not the modest plain-turn default — same as the
         // retired whole-notebook call, just spent on one block instead of 3-5.
+        let hook = stop_when_some(capture.clone());
         let agent = AgentBuilder::new(model).preamble(system_prompt).max_tokens(max_tokens).tool(PublishNotebookBlockTool(capture)).build();
         // A single tool call still sometimes needs a follow-up turn (provider
         // dependent) — same generous budget as the roadmap execution turn.
         const NOTEBOOK_BLOCK_MAX_TURNS: usize = 6;
         let text = tokio::time::timeout(
-            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
-            agent.prompt(input).max_turns(NOTEBOOK_BLOCK_MAX_TURNS),
+            std::time::Duration::from_secs(prompt_timeout_secs()),
+            agent.prompt(input).max_turns(NOTEBOOK_BLOCK_MAX_TURNS).add_hook(hook),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
-        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?;
+        let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["publish_notebook_block".to_string()] })
     }
 
@@ -500,16 +522,17 @@ impl ProviderFactory {
         // A grading verdict + one short scaffold hint is tiny compared to a
         // notebook block — the modest plain-turn budget is plenty, no need
         // for the per-provider `output_budget`.
+        let hook = stop_when_some(capture.clone());
         let agent =
             AgentBuilder::new(model).preamble(system_prompt).max_tokens(PLAIN_MAX_TOKENS).tool(GradeGateSubmissionTool(capture)).build();
         const GATE_GRADING_MAX_TURNS: usize = 4;
         let text = tokio::time::timeout(
-            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
-            agent.prompt(input).max_turns(GATE_GRADING_MAX_TURNS),
+            std::time::Duration::from_secs(prompt_timeout_secs()),
+            agent.prompt(input).max_turns(GATE_GRADING_MAX_TURNS).add_hook(hook),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
-        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?;
+        let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["grade_gate_submission".to_string()] })
     }
 
@@ -597,6 +620,7 @@ impl ProviderFactory {
     {
         // A verdict + one short student-facing feedback is tiny — the same
         // modest plain-turn budget as gate grading is plenty.
+        let hook = stop_when_some(capture.clone());
         let agent = AgentBuilder::new(model)
             .preamble(system_prompt)
             .max_tokens(PLAIN_MAX_TOKENS)
@@ -604,12 +628,12 @@ impl ProviderFactory {
             .build();
         const CLOSURE_GRADING_MAX_TURNS: usize = 4;
         let text = tokio::time::timeout(
-            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
-            agent.prompt(input).max_turns(CLOSURE_GRADING_MAX_TURNS),
+            std::time::Duration::from_secs(prompt_timeout_secs()),
+            agent.prompt(input).max_turns(CLOSURE_GRADING_MAX_TURNS).add_hook(hook),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
-        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?;
+        let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["grade_closure_submission".to_string()] })
     }
 
@@ -693,15 +717,16 @@ impl ProviderFactory {
     {
         // One verdict + a short feedback list — same plain-turn budget as the
         // gate grader, no per-provider output_budget needed.
+        let hook = stop_when_some(capture.clone());
         let agent = AgentBuilder::new(model).preamble(system_prompt).max_tokens(PLAIN_MAX_TOKENS).tool(SubmitBlockAuditTool(capture)).build();
         const BLOCK_AUDIT_MAX_TURNS: usize = 4;
         let text = tokio::time::timeout(
-            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
-            agent.prompt(input).max_turns(BLOCK_AUDIT_MAX_TURNS),
+            std::time::Duration::from_secs(prompt_timeout_secs()),
+            agent.prompt(input).max_turns(BLOCK_AUDIT_MAX_TURNS).add_hook(hook),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
-        .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?;
+        let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["submit_block_audit".to_string()] })
     }
 

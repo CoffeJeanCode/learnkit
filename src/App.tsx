@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Header } from "./components/Header";
 import { SessionView } from "./components/SessionView";
 import { UpdateBanner } from "./components/UpdateBanner";
@@ -7,6 +7,7 @@ import { GraphView } from "./features/graph/GraphView";
 import { DevPanel } from "./features/dev/DevPanel";
 import { ProvidersView } from "./features/providers/ProvidersView";
 import { RoadmapView } from "./features/roadmap/RoadmapView";
+import { useNotebookNav } from "./stores/notebook";
 import { readActiveSessionId, useRoadmap } from "./stores/roadmap";
 import { useUi } from "./stores/ui";
 import { useDev } from "./stores/dev";
@@ -32,6 +33,16 @@ export default function App() {
   const loadStudy = useStudy((s) => s.load);
   const initDev = useDev((s) => s.init);
   const devEnabled = useDev((s) => s.enabled);
+  const activeClassId = useNotebookNav((s) => s.activeClassId);
+  const workspaceRef = useRef<HTMLElement>(null);
+
+  // `.workspace` is the page's only scroller and survives class changes, so
+  // opening a class (from the roadmap or the class path) would otherwise land
+  // wherever the previous screen was scrolled. Scoped to the notebook: the
+  // roadmap chat manages its own scroll-to-latest.
+  useEffect(() => {
+    if (view === "notebook") workspaceRef.current?.scrollTo({ top: 0 });
+  }, [view, activeClassId]);
 
   // Check for a new version once on entry. Silent by design: no release
   // published yet, or starting offline, must not surface anything.
@@ -70,7 +81,7 @@ export default function App() {
     <div className="app">
       <Header />
       <UpdateBanner />
-      <main className="workspace">
+      <main className="workspace" ref={workspaceRef}>
         {view === "providers" ? (
           <ProvidersView />
         ) : view === "graph" ? (

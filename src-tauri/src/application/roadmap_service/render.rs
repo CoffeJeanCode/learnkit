@@ -1,6 +1,7 @@
 //! Turn input rendering: the compact, machine-readable context handed to
 //! the model on every turn, plus the rejection directive fed back on retry.
 use super::*;
+use crate::prompt_encoding::{TOON_HINT, toon_payload};
 
 /// Builds the compact, machine-readable context sent as `input` on every
 /// turn. Deliberately does NOT resend the model's own prior replies (the
@@ -29,7 +30,11 @@ pub(super) fn render_turn_input(session: &RoadmapSession, user_message: &str, sc
     let turns_remaining = RoadmapService::MAX_GATHER_TURNS.saturating_sub(session.turn_count_in_phase);
     let mut directives: Vec<String> = Vec::new();
     directives.extend(rejection_directive(&session.last_rejection_reasons));
-    if turns_remaining <= 1 {
+    // Only while Gate 1 is still open: once the profile is saved, the rest of
+    // the flow (battery/propose) runs as its own scoped follow-up turn, and
+    // this directive would order a duplicate assessment — or a battery that
+    // `absolute_zero` skips by design.
+    if turns_remaining <= 1 && session.learner_profile_card.is_none() {
         // Scope-aware: the analyst turn only registers
         // `submit_diagnostic_assessment`, so telling IT to also present the
         // battery would name a tool it can't call.
@@ -74,8 +79,8 @@ pub(super) fn render_turn_input(session: &RoadmapSession, user_message: &str, sc
     });
 
     format!(
-        "CONTEXTO_DE_SESION (uso interno, no lo muestres al estudiante):\n{}\n\nÚLTIMO_MENSAJE_DEL_ESTUDIANTE:\n{}",
-        serde_json::to_string_pretty(&context).unwrap_or_default(),
+        "CONTEXTO_DE_SESION (uso interno, no lo muestres al estudiante):\n{TOON_HINT}\n\n{}\n\nÚLTIMO_MENSAJE_DEL_ESTUDIANTE:\n{}",
+        toon_payload(&context),
         user_message
     )
 }
@@ -96,8 +101,8 @@ pub(super) fn render_battery_followup_input(session: &RoadmapSession) -> String 
     });
     format!(
         "Presenta la batería de diagnóstico llamando a present_diagnostic_battery según tu system \
-         prompt.\n\n{}",
-        serde_json::to_string_pretty(&context).unwrap_or_default()
+         prompt.\n\n{TOON_HINT}\n\n{}",
+        toon_payload(&context)
     )
 }
 
@@ -123,8 +128,8 @@ pub(super) fn render_propose_syllabus_input(profile: &LearnerProfileCard, pendin
     });
     format!(
         "Propón el diagnóstico consolidado y el temario llamando a propose_syllabus_plan según tu \
-         system prompt.\n\n{}",
-        serde_json::to_string_pretty(&context).unwrap_or_default()
+         system prompt.\n\n{TOON_HINT}\n\n{}",
+        toon_payload(&context)
     )
 }
 

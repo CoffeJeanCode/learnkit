@@ -45,6 +45,10 @@ impl AppState {
         if let Ok(saved) = store.load_providers() {
             if !saved.is_empty() {
                 providers.replace_all(saved);
+                // A `providers.json` persisted before a new built-in
+                // provider shipped would shadow it forever — backfill any
+                // missing default slots without touching saved entries.
+                providers.ensure_defaults();
             }
         }
         // Slots for providers added after providers.json was first written.

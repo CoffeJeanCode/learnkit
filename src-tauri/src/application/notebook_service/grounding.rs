@@ -23,11 +23,12 @@ use crate::domain::notebook::{
 const PRACTICE_BLOCK_FAMILY: [&str; 3] = ["heuristic_error_audit", "hands_on_mission", "branching_scenario_challenge"];
 
 /// Own word ceiling for `anchored_micro_theory`'s `systemRule` (Capa 2, the
-/// causal/mechanism layer) — widened from the old 160-words-combined cap
-/// specifically so this layer alone can be exhaustive about the mechanism
-/// (see the prompt in `agents::block_generator_agent`), independent of how
-/// terse the other 3 layers stay.
-const MAX_SYSTEM_RULE_WORDS: usize = 180;
+/// causal/mechanism layer) — widened from the old 160-words-combined cap,
+/// then from 180, specifically so this layer alone can be exhaustive about
+/// the mechanism as a numbered micro-steps sequence with a concrete
+/// input/output example (see the prompt in `agents::block_generator_agent`),
+/// independent of how terse the other 3 layers stay.
+const MAX_SYSTEM_RULE_WORDS: usize = 240;
 
 /// Combined word ceiling for `anchored_micro_theory`'s other 3 layers —
 /// `intuitiveHook`, `analogyBoundary`, `frequentError` — kept terse even
@@ -157,6 +158,31 @@ pub(super) fn single_block_violations(
     if !is_first_block && block.block_type() == DynamicBlockType::SpacedInterleavedRetrieval {
         v.push(
             "spaced_interleaved_retrieval solo es válido como el PRIMER bloque de la clase, nunca más adelante"
+                .to_string(),
+        );
+    }
+    // Golden progression, POSITIONAL: the first interactive block after the
+    // class's first theory must practice the basic correct case, never audit
+    // errors the student has never practiced. Deliberately NOT conditioned on
+    // the learner profile: the diagnostic profile is often absent now that
+    // batteries are never synthesized (see `roadmap_service::synth`), and the
+    // real-world failure happened with no usable profile at all. Exempt when
+    // `is_escalation` is set — the call site FUSES `is_escalation ||
+    // is_regeneration` into this one flag (see `generation::critique`), and
+    // regeneration repairs a block IN PLACE: a pre-existing audit at this
+    // position would otherwise be permanently unrepairable (required type ==
+    // audit vs this rule). A `hands_on_mission` in the same position is
+    // already covered by `mission_support_violations` (guided|faded plus a
+    // template/steps required after teaching) — no duplicate rule here.
+    if !is_escalation
+        && prior_types.len() == 1
+        && prior_types[0] == DynamicBlockType::AnchoredMicroTheory
+        && block.block_type() == DynamicBlockType::HeuristicErrorAudit
+    {
+        v.push(
+            "Para un principiante, el bloque inmediatamente posterior a la primera teoría debe practicar primero el caso \
+             básico correcto (interactive_prediction_gate sobre el caso normal o práctica guiada paso a paso), nunca saltar \
+             directo a auditar errores o casos borde sin práctica previa"
                 .to_string(),
         );
     }
@@ -601,20 +627,20 @@ mod tests {
             title: "t".to_string(),
             intuitive_hook: "h".to_string(),
             analogy_boundary: None,
-            system_rule: "palabra ".repeat(181),
+            system_rule: "palabra ".repeat(241),
             frequent_error: "e".to_string(),
         };
         let v = single_block_violations(&[], &block, 1, false, no_mastery(), false, false);
-        assert!(v.iter().any(|s| s.contains("systemRule tiene") && s.contains("máximo 180")), "{v:?}");
+        assert!(v.iter().any(|s| s.contains("systemRule tiene") && s.contains("máximo 240")), "{v:?}");
     }
 
     #[test]
-    fn allows_system_rule_up_to_its_own_180_word_ceiling_even_with_a_near_full_other_layers_budget() {
+    fn allows_system_rule_up_to_its_own_240_word_ceiling_even_with_a_near_full_other_layers_budget() {
         let block = GeneratedSectionBlock::AnchoredMicroTheory {
             title: "t".to_string(),
             intuitive_hook: "palabra ".repeat(40).trim().to_string(),
             analogy_boundary: Some("palabra ".repeat(30).trim().to_string()),
-            system_rule: "palabra ".repeat(180).trim().to_string(),
+            system_rule: "palabra ".repeat(240).trim().to_string(),
             frequent_error: "palabra ".repeat(29).trim().to_string(),
         };
         let v = single_block_violations(&[], &block, 1, false, no_mastery(), false, false);
@@ -838,6 +864,50 @@ mod tests {
         let full = mission_with(Some(MissionSupportLevel::Full), false, Some("___"));
         let v = single_block_violations(&[THEORY, gate], &full, 3, false, no_mastery(), false, false);
         assert!(!v.iter().any(|s| s.contains("primer bloque práctico")), "{v:?}");
+    }
+
+    /// Golden progression violation text (user-facing, kept verbatim in sync
+    /// with the guardrail in `single_block_violations`).
+    const AUDIT_RIGHT_AFTER_FIRST_THEORY: &str = "Para un principiante, el bloque inmediatamente posterior a la primera \
+         teoría debe practicar primero el caso básico correcto (interactive_prediction_gate sobre el caso normal o \
+         práctica guiada paso a paso), nunca saltar directo a auditar errores o casos borde sin práctica previa";
+
+    fn audit_block() -> GeneratedSectionBlock {
+        GeneratedSectionBlock::HeuristicErrorAudit {
+            instruction: "i".to_string(),
+            flawed_representation: crate::domain::notebook::FlawedRepresentation {
+                context: "c".to_string(),
+                buggy_snippet_or_diagram: "s".to_string(),
+                error_type: crate::domain::notebook::FlawErrorType::Syntax,
+            },
+            guiding_questions: vec!["q".to_string()],
+            model_solution: "sol".to_string(),
+            faulty_line_number: None,
+            visual_aid: None,
+        }
+    }
+
+    #[test]
+    fn rejects_an_error_audit_immediately_after_the_first_theory_until_a_happy_path_gate_practices_the_basic_case() {
+        let v = single_block_violations(&[THEORY], &audit_block(), 2, false, no_mastery(), false, false);
+        assert!(v.iter().any(|s| s == AUDIT_RIGHT_AFTER_FIRST_THEORY), "{v:?}");
+
+        let after_practice = [THEORY, DynamicBlockType::InteractivePredictionGate];
+        let ok = single_block_violations(&after_practice, &audit_block(), 3, false, no_mastery(), false, false);
+        assert!(!ok.iter().any(|s| s == AUDIT_RIGHT_AFTER_FIRST_THEORY), "{ok:?}");
+    }
+
+    #[test]
+    fn the_audit_after_first_theory_rule_is_exempt_during_escalation_or_regeneration_and_ignores_position_zero() {
+        // The fused `is_escalation || is_regeneration` flag repairs blocks IN
+        // PLACE — without the exemption a pre-existing audit at this position
+        // could never be regenerated.
+        let escalated = single_block_violations(&[THEORY], &audit_block(), 2, true, no_mastery(), false, false);
+        assert!(!escalated.iter().any(|s| s == AUDIT_RIGHT_AFTER_FIRST_THEORY), "{escalated:?}");
+
+        // Position 0 (audit as the class opener) is outside this rule.
+        let opener = single_block_violations(&[], &audit_block(), 1, false, no_mastery(), false, false);
+        assert!(!opener.iter().any(|s| s == AUDIT_RIGHT_AFTER_FIRST_THEORY), "{opener:?}");
     }
 
     #[test]

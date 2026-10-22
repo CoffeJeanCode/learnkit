@@ -14,7 +14,21 @@ use crate::domain::notebook::GeneratedSectionBlock;
 /// removal): the orchestrator calls `notebook_agent` once per block instead
 /// of once per class, so the model never has to hold 3-5 blocks' worth of
 /// content in one response.
-pub type NotebookBlockCapture = Arc<Mutex<Option<GeneratedSectionBlock>>>;
+pub type NotebookBlockCapture = Arc<Mutex<Option<PublishedBlock>>>;
+
+/// What `publish_notebook_block` hands back to the generation loop: the
+/// expanded block plus the ONE bit of provenance the critique stage can't
+/// recover from the block alone — whether a MECHANICAL template
+/// (`tpl_true_false`, `tpl_ordering`) produced it. Those expand to a grading
+/// shape fully determined by construction, so the critique can skip the LLM
+/// pedagogical critic and keep only the deterministic guardrails (see
+/// `notebook_service::generation::BlockGenerationJob::critique`); the
+/// expanded `GeneratedSectionBlock` itself carries no such marker.
+#[derive(Debug)]
+pub struct PublishedBlock {
+    pub block: GeneratedSectionBlock,
+    pub mechanical_template: bool,
+}
 
 #[derive(Debug, Serialize)]
 pub struct PublishedAck {
@@ -35,11 +49,15 @@ pub enum PublishBlockArgs {
 }
 
 impl PublishBlockArgs {
-    /// The full block the rest of the pipeline works with.
-    pub fn into_block(self) -> GeneratedSectionBlock {
+    /// The expanded block plus whether a MECHANICAL template produced it (the
+    /// provenance the critique stage needs and the block alone can't convey).
+    pub fn into_published(self) -> PublishedBlock {
         match self {
-            Self::Template(t) => t.expand(),
-            Self::Block(b) => b,
+            Self::Template(t) => {
+                let mechanical_template = t.is_mechanical();
+                PublishedBlock { block: t.expand(), mechanical_template }
+            }
+            Self::Block(b) => PublishedBlock { block: b, mechanical_template: false },
         }
     }
 }
@@ -88,7 +106,7 @@ impl Tool for PublishNotebookBlockTool {
         crate::tools::emit_tool_event(Self::NAME);
         let args = repair_double_escaped(args);
         crate::dev_trace::trace_tool(Self::NAME, &args);
-        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args.into_block());
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(args.into_published());
         Ok(PublishedAck { saved: true })
     }
 }
@@ -469,11 +487,11 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "title": {"type": "string"},
                     "intuitiveHook": {"type": "string", "description": "🎯 Analogía cotidiana, cero términos técnicos, 1-2 líneas"},
                     "analogyBoundary": {"type": "string", "description": "Dónde deja de aplicar la analogía de intuitiveHook — qué NO cubre técnicamente, 1 línea, para que el estudiante no extienda la metáfora más allá de lo que soporta"},
-                    "systemRule": {"type": "string", "description": "📐 La regla o mecanismo explicado paso a paso, con el detalle técnico completo (hasta 180 palabras)"},
+                    "systemRule": {"type": "string", "description": "📐 La regla o mecanismo en una SECUENCIA CLARA de micro-pasos numerados (1 ➔ 2 ➔ 3) con un ejemplo concreto de entrada/salida (qué escribe el estudiante, qué responde la pantalla, qué significa cada parte), con el detalle técnico completo (hasta 240 palabras) — nunca un párrafo abstracto"},
                     "frequentError": {"type": "string", "description": "⚠️ Contraste explícito entre un caso VÁLIDO y la confusión típica ('esto SÍ / esto NO, porque...'), no solo describir el error en aislamiento"}
                 },
                 "required": ["blockType", "title", "intuitiveHook", "systemRule", "frequentError"],
-                "description": "intuitiveHook + analogyBoundary + frequentError suman máximo 100 palabras combinadas (terse); systemRule tiene su propio máximo de 180 palabras — nunca texto enciclopédico plano"
+                "description": "intuitiveHook + analogyBoundary + frequentError suman máximo 100 palabras combinadas (terse); systemRule tiene su propio máximo de 240 palabras (micro-pasos numerados con ejemplo de entrada/salida) — nunca texto enciclopédico plano"
             },
             {
                 "properties": {
@@ -877,7 +895,7 @@ mod tests {
         tool.call(&mut ToolContext::new(), block.into()).await.expect("infallible");
 
         let stored = capture.lock().unwrap();
-        let value = serde_json::to_value(stored.as_ref().unwrap()).expect("serializes");
+        let value = serde_json::to_value(&stored.as_ref().unwrap().block).expect("serializes");
         let question = value.get("question").and_then(|q| q.as_str()).expect("question");
         assert!(question.contains('\n'), "escapes became real newlines: {question:?}");
         assert!(!question.contains("\\n"), "no backslash-n left: {question:?}");
@@ -926,7 +944,44 @@ mod tests {
         .unwrap();
         tool.call(&mut ToolContext::new(), args).await.expect("infallible");
         let stored = capture.lock().unwrap();
-        assert!(matches!(stored.as_ref().unwrap(), GeneratedSectionBlock::BranchingScenarioChallenge { branches, .. } if branches.len() == 2));
+        assert!(matches!(&stored.as_ref().unwrap().block, GeneratedSectionBlock::BranchingScenarioChallenge { branches, .. } if branches.len() == 2));
+        // scenario_choice is content-heavy, not mechanical: the LLM critic
+        // still audits its branches.
+        assert!(!stored.as_ref().unwrap().mechanical_template);
+    }
+
+    #[tokio::test]
+    async fn only_mechanical_templates_are_flagged_for_the_critic_skip() {
+        let flag_of = |json: serde_json::Value| async move {
+            let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
+            let tool = PublishNotebookBlockTool(capture.clone());
+            let args: PublishBlockArgs = serde_json::from_value(json).expect("parses");
+            tool.call(&mut ToolContext::new(), args).await.expect("infallible");
+            let flag = capture.lock().unwrap().as_ref().unwrap().mechanical_template;
+            flag
+        };
+        // Mechanical: expansion fully determines the grading shape.
+        assert!(flag_of(serde_json::json!({
+            "blockType": "tpl_true_false", "statement": "s", "isTrue": true, "explanation": "e"
+        }))
+        .await);
+        assert!(flag_of(serde_json::json!({
+            "blockType": "tpl_ordering", "question": "q", "stepsInOrder": ["a", "b", "c"]
+        }))
+        .await);
+        // Not mechanical: distractors still warrant a semantic read.
+        assert!(!flag_of(serde_json::json!({
+            "blockType": "tpl_multiple_choice", "question": "q",
+            "correct": {"text": "A", "feedback": "f"},
+            "distractors": [{"text": "B", "feedback": "g"}]
+        }))
+        .await);
+        // Free-form blocks are never flagged.
+        assert!(!flag_of(serde_json::json!({
+            "blockType": "anchored_micro_theory", "title": "t", "intuitiveHook": "h",
+            "systemRule": "r", "frequentError": "f"
+        }))
+        .await);
     }
 
     #[test]

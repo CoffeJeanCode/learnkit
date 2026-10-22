@@ -25,10 +25,18 @@
 //!
 //! Run: `LEARNKIT_E2E_API_KEY=<key> cargo run --example roadmap_e2e`
 //! Optionally override the provider (default: deepseek): `LEARNKIT_E2E_PROVIDER=anthropic`
+//! (e.g. `xiaomi` pins `mimo-v2.6-flash`), the model with `LEARNKIT_E2E_MODEL`,
+//! and run a single scenario with `LEARNKIT_E2E_SCENARIO=<name substring>`
+//! (case-insensitive). Live-run knobs: LEARNKIT_PROMPT_TIMEOUT_SECS (default 300
+//! here; the app default stays 120), LEARNKIT_E2E_TURN_RETRIES (default 2).
+//! With provider xiaomi only `mimo-v2.6-pro` / `mimo-v2.6-flash` are accepted.
 
 use std::sync::Arc;
 
-use learnkit_lib::agents::{roadmap_agent, AgentRegistry};
+#[path = "e2e_support/mod.rs"]
+mod e2e_support;
+
+use learnkit_lib::agents::{analyst_agent, roadmap_agent, AgentRegistry};
 use learnkit_lib::application::RoadmapService;
 use learnkit_lib::domain::roadmap::SessionStatus;
 use learnkit_lib::notebook_store::NotebookStore;
@@ -100,6 +108,18 @@ fn scenarios() -> Vec<Scenario> {
             ],
         },
         Scenario {
+            // The real-user beginner case: a messy first message, then plausible
+            // follow-ups. After sealing we check the course/profile title is
+            // clean and the diagnostic battery has no self-perception options.
+            name: "Principiante real — primer servidor sin conocimiento previo",
+            student_turns: vec![
+                "Quiero montar mi primer servidor, y no tengo nada de conocimiento",
+                "Tengo 6 semanas, 5 horas por semana",
+                "sí",
+                "ok",
+            ],
+        },
+        Scenario {
             name: "Vago/monosilábico — fuerza el tope estricto de turnos",
             student_turns: vec!["no sé", "lo que sea", "cualquier cosa"],
         },
@@ -111,6 +131,54 @@ struct TurnLog {
     user_said: String,
     agent_said: String,
     status_after: SessionStatus,
+}
+
+/// Phrases that mean the battery asks the learner to rate themselves instead
+/// of testing knowledge (compared lowercase).
+const SELF_PERCEPTION_OPTIONS: &[&str] = &["no estoy seguro", "no todavía", "una idea concreta", "no tengo ninguna intuición"];
+
+/// Post-seal checks: clean titles and an objective (or absent) diagnostic
+/// battery. Reads the battery from the sealed package and from the SQLite
+/// course row (the copy the app actually serves).
+fn report_beginner_checks(session: &learnkit_lib::domain::roadmap::RoadmapSession, store: &NotebookStore) {
+    println!("--- checks de título y batería diagnóstica ---");
+    let Some(package) = session.roadmap_package.as_ref() else {
+        println!("[N/A] sin paquete sellado.");
+        return;
+    };
+    let titles = [("course_title", package.syllabus.course_title.as_str()), ("topic", package.learner_profile.topic.as_str())];
+    for (label, title) in titles {
+        let lower = title.to_lowercase();
+        let dirty = lower.contains("quiero") || lower.contains("no tengo nada de conocimiento");
+        println!("[{}] {label} limpio: \"{title}\"", if dirty { "FALLO" } else { "OK" });
+    }
+
+    let stored = session.imported_course_id.as_deref().and_then(|id| store.get_course_diagnostic_battery(id).ok().flatten());
+    let batteries = [("paquete sellado", package.diagnostic_battery.clone()), ("SQLite", stored.map(|s| s.battery))];
+    for (source, battery) in batteries {
+        let Some(battery) = battery else {
+            println!("[OK] batería ({source}): None.");
+            continue;
+        };
+        let mut offending: Vec<String> = Vec::new();
+        for q in &battery.questions {
+            for opt in &q.options {
+                let lower = opt.trim().to_lowercase();
+                let bare_yes = matches!(lower.trim_end_matches(['.', '!']), "sí" | "si");
+                if bare_yes || SELF_PERCEPTION_OPTIONS.iter().any(|p| lower.contains(p)) {
+                    offending.push(format!("\"{opt}\" (en: {})", q.prompt));
+                }
+            }
+        }
+        if offending.is_empty() {
+            println!("[OK] batería ({source}): {} preguntas, sin opciones de autopercepción.", battery.questions.len());
+        } else {
+            println!("[FALLO] batería ({source}): opciones de autopercepción:");
+            for o in &offending {
+                println!("  - {o}");
+            }
+        }
+    }
 }
 
 #[tokio::main]
@@ -133,12 +201,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ("openai", "gpt-5"),
         ("gemini", "gemini-2.5-flash"),
         ("openrouter", "anthropic/claude-sonnet-4"),
+        ("xiaomi", "mimo-v2.6-flash"),
     ];
-    let model = MODEL_FOR
-        .iter()
-        .find(|(p, _)| *p == provider_id)
-        .map(|(_, m)| *m)
-        .unwrap_or_else(|| panic!("no model pin for provider '{provider_id}'"));
+    let model: String = match std::env::var("LEARNKIT_E2E_MODEL") {
+        Ok(m) if !m.trim().is_empty() => m.trim().to_string(),
+        _ => MODEL_FOR
+            .iter()
+            .find(|(p, _)| *p == provider_id)
+            .map(|(_, m)| m.to_string())
+            .unwrap_or_else(|| panic!("no model pin for provider '{provider_id}'")),
+    };
+    e2e_support::enforce_model_policy(&provider_id, &model);
+    e2e_support::ensure_prompt_timeout();
+    let turn_retries: u32 = std::env::var("LEARNKIT_E2E_TURN_RETRIES").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+    println!("Reintentos por turno fallido: {turn_retries}");
+    let scenario_filter = std::env::var("LEARNKIT_E2E_SCENARIO").ok().map(|f| f.to_lowercase()).filter(|f| !f.is_empty());
 
     let memory_vault = MemoryVault::new();
     memory_vault.save_provider_key(&provider_id, &api_key).expect("seed in-memory vault");
@@ -147,9 +224,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Using provider: {provider_id} (model: {model})\n");
 
     let agents = Arc::new(AgentRegistry::new());
-    let mut def = roadmap_agent::definition();
-    def.model = learnkit_lib::domain::model::ModelRef::new(provider_id.clone(), model);
-    agents.register(def).expect("register roadmap agent");
+    // Gate 1 runs through the dedicated `diagnostic_analyst` agent, so both
+    // agents must be registered on the same provider/model.
+    for mut def in [roadmap_agent::definition(), analyst_agent::definition()] {
+        def.model = learnkit_lib::domain::model::ModelRef::new(provider_id.clone(), model.as_str());
+        agents.register(def).expect("register roadmap agents");
+    }
 
     let orchestrator = Arc::new(Orchestrator::with_rig_runner(Arc::clone(&agents), providers, vault));
     let tmp_dir = std::env::temp_dir().join(format!("learnkit-e2e-{}", uuid::Uuid::new_v4()));
@@ -157,40 +237,83 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let notebook_store = NotebookStore::open(tmp_dir.join("notebook.sqlite3"))?;
     let service = RoadmapService::new(orchestrator, store, notebook_store.clone());
 
+    learnkit_lib::dev_trace::set_enabled(true);
+
     let mut all_jargon_hits = 0usize;
     let mut all_json_leaks = 0usize;
     let mut sealed_count = 0usize;
     let mut sealed_within_2_turns = 0usize;
-    let total_scenarios = scenarios().len();
+    let selected: Vec<Scenario> = scenarios()
+        .into_iter()
+        .filter(|sc| scenario_filter.as_ref().map_or(true, |f| sc.name.to_lowercase().contains(f)))
+        .collect();
+    if selected.is_empty() {
+        eprintln!("LEARNKIT_E2E_SCENARIO matched no scenario.");
+        return Ok(());
+    }
+    let total_scenarios = selected.len();
 
-    for scenario in scenarios() {
+    for scenario in selected {
         println!("======================================================================");
         println!("ESCENARIO: {}", scenario.name);
         println!("======================================================================\n");
 
+        // Fresh trace + collector per scenario so the stats are scenario-scoped.
+        learnkit_lib::dev_trace::clear();
+        let mut collector = e2e_support::TraceCollector::new();
         let mut log: Vec<TurnLog> = Vec::new();
-        let r = service.start_session(None).await?;
-        log.push(TurnLog {
-            label: "start_session".to_string(),
-            user_said: "(apertura de sesión)".to_string(),
-            agent_said: r.message.clone(),
-            status_after: r.session.status,
-        });
-        let session_id = r.session.session_id.clone();
-        let mut session = r.session;
+        let mut aborted: Option<String> = None;
+        let started_session = service.start_session(None).await;
+        let (session_id, mut session) = match started_session {
+            Ok(r) => {
+                log.push(TurnLog {
+                    label: "start_session".to_string(),
+                    user_said: "(apertura de sesión)".to_string(),
+                    agent_said: r.message.clone(),
+                    status_after: r.session.status,
+                });
+                (r.session.session_id.clone(), r.session)
+            }
+            Err(e) => {
+                println!("[FALLO] start_session falló: {e}");
+                println!("
+--- estadísticas del escenario (abortado) ---");
+                collector.report();
+                println!();
+                continue;
+            }
+        };
 
         let mut i = 0;
         while session.status != SessionStatus::Sealed && i < scenario.student_turns.len() {
             let user_msg = scenario.student_turns[i];
-            let r = service.send_message(None, &session_id, user_msg).await?;
-            log.push(TurnLog {
-                label: format!("send_message #{}", i + 1),
-                user_said: user_msg.to_string(),
-                agent_said: r.message.clone(),
-                status_after: r.session.status,
-            });
-            session = r.session;
-            i += 1;
+            let mut result = service.send_message(None, &session_id, user_msg).await;
+            let mut attempt = 0u32;
+            while let Err(e) = &result {
+                attempt += 1;
+                if attempt > turn_retries {
+                    break;
+                }
+                println!("  [{}] turno #{} falló ({e}); retry_pending_turn {attempt}/{turn_retries}", e2e_support::stamp(), i + 1);
+                result = service.retry_pending_turn(None, &session_id).await;
+            }
+            match result {
+                Ok(r) => {
+                    log.push(TurnLog {
+                        label: format!("send_message #{}", i + 1),
+                        user_said: user_msg.to_string(),
+                        agent_said: r.message.clone(),
+                        status_after: r.session.status,
+                    });
+                    session = r.session;
+                    i += 1;
+                }
+                Err(e) => {
+                    aborted = Some(format!("turno #{} falló tras {turn_retries} reintento(s): {e}", i + 1));
+                    break;
+                }
+            }
+            collector.poll();
         }
 
         // --- Transcript ---------------------------------------------------
@@ -202,6 +325,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // --- Per-scenario meta-analysis ------------------------------------
+        if let Some(reason) = &aborted {
+            println!("[FALLO] Escenario abortado: {reason}");
+        }
         println!("--- meta-análisis del escenario ---");
 
         let jargon_hits: Vec<(usize, &str)> = log
@@ -265,6 +391,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             _ => println!("[FALLO] Selló sin course_id/first_class_id — el import a SQLite no ocurrió."),
         }
+
+        if session.status == SessionStatus::Sealed {
+            report_beginner_checks(&session, &notebook_store);
+        }
+        println!("
+--- estadísticas del escenario ---");
+        collector.report();
         println!();
     }
 
@@ -277,6 +410,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Total de fugas de jerga/confirmación pasiva: {all_jargon_hits}");
     println!("Total de fugas de estructura de datos/JSON: {all_json_leaks}");
 
+    learnkit_lib::dev_trace::set_enabled(false);
     let _ = std::fs::remove_dir_all(&tmp_dir);
     Ok(())
 }
