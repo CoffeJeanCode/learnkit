@@ -30,7 +30,11 @@ pub(super) fn render_turn_input(session: &RoadmapSession, user_message: &str, sc
     let turns_remaining = RoadmapService::MAX_GATHER_TURNS.saturating_sub(session.turn_count_in_phase);
     let mut directives: Vec<String> = Vec::new();
     directives.extend(rejection_directive(&session.last_rejection_reasons));
-    if turns_remaining <= 1 {
+    // Only while Gate 1 is still open: once the profile is saved, the rest of
+    // the flow (battery/propose) runs as its own scoped follow-up turn, and
+    // this directive would order a duplicate assessment — or a battery that
+    // `absolute_zero` skips by design.
+    if turns_remaining <= 1 && session.learner_profile_card.is_none() {
         // Scope-aware: the analyst turn only registers
         // `submit_diagnostic_assessment`, so telling IT to also present the
         // battery would name a tool it can't call.

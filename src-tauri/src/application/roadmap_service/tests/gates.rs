@@ -133,6 +133,33 @@ use super::*;
     }
 
     #[tokio::test]
+    async fn a_propose_turn_answered_with_text_only_is_retried_instead_of_shown() {
+        // Regression: the Gate 3a hand-off turn came back as plain text
+        // naming tools that don't exist ("manage_course…") — no tool call, so
+        // the empty capture used to count as a clean turn and that text
+        // reached the student verbatim.
+        let hallucination = ScriptedStep {
+            text: "No puedo ejecutar `propose_syllabus_plan`. Mis herramientas reales son: `manage_course`.".to_string(),
+            ..Default::default()
+        };
+        let step1 = ScriptedStep {
+            text: "Listo, arranquemos.".to_string(),
+            assessment: Some(full_assessment("CAD", 4, 3.0, EntryLevel::AbsoluteZero)),
+            ..Default::default()
+        };
+        let proposal = full_propose_step("Con eso ya puedo armar tu plan. ¿Te parece adecuada esta distribución?", 4, 3.0, "CAD");
+        let harness = service_with_runner(Arc::new(ScriptedRunner::new(vec![step1, hallucination, proposal])));
+        let r0 = harness.service.start_session(None).await.expect("start ok");
+
+        let result = harness.service.send_message(None, &r0.session.session_id, "CAD desde cero, 4 semanas, 3h").await.expect("turn ok");
+
+        assert!(result.session.proposed_plan.is_some(), "the retry produced the proposal");
+        assert!(!result.message.contains("manage_course"), "the improvised text never reaches the student");
+
+        let _ = std::fs::remove_dir_all(&harness.dir);
+    }
+
+    #[tokio::test]
     async fn a_plain_clarifying_question_does_not_seal_and_spends_one_turn() {
         let step = ScriptedStep { text: "¿Qué tema quieres dominar, en cuántas semanas y con cuántas horas por semana?".to_string(), ..Default::default() };
         let harness = service_with_runner(Arc::new(ScriptedRunner::new(vec![step])));
