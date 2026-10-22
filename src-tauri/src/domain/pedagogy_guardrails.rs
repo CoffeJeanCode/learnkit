@@ -357,6 +357,17 @@ mod tests {
     }
 
     #[test]
+    fn three_options_of_36_54_and_56_characters_are_not_length_bias() {
+        // Spread 20 chars (36%): over the ratio but under the 25-char gap.
+        let mut block = valid_gate();
+        if let GeneratedSectionBlock::InteractivePredictionGate { options, .. } = &mut block {
+            *options = vec!["a".repeat(36), "b".repeat(54), "c".repeat(56)];
+        }
+        let v = block_guardrail_violations(&block);
+        assert!(!v.iter().any(|s| s.contains("sesgo de longitud")), "{v:?}");
+    }
+
+    #[test]
     fn a_clearly_biased_pair_is_still_flagged_with_thresholds_from_constants() {
         let mut block = valid_gate();
         if let GeneratedSectionBlock::InteractivePredictionGate { options, .. } = &mut block {

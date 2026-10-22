@@ -181,6 +181,14 @@ use super::*;
     }
 
     #[tokio::test]
+    async fn sessions_of_4_4_3_3_hours_are_accepted_for_a_14_hour_week() {
+        // Spread 1h, within the 1.5h tolerance.
+        let (harness, result) = propose_with_session_hours(14.0, &[4.0, 4.0, 3.0, 3.0]).await;
+        assert!(result.session.proposed_plan.is_some(), "rejected: {:?}", result.session.last_rejection_reasons);
+        let _ = std::fs::remove_dir_all(&harness.dir);
+    }
+
+    #[tokio::test]
     async fn two_sessions_are_rejected_for_a_14_hour_week() {
         let (harness, result) = propose_with_session_hours(14.0, &[7.0, 7.0]).await;
         assert!(result.session.proposed_plan.is_none());
