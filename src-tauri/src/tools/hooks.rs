@@ -13,6 +13,9 @@ use crate::tools::roadmap_tools::{DiagnosticToolScope, RoadmapCapture};
 /// `PromptCancelled` with exactly this reason to success.
 pub const STOP_REASON: &str = "learnkit:terminal-tool-captured";
 
+/// Stable event name logged when a repeated tool call is skipped.
+const TRUNCATED_EVENT: &str = "multiple_tool_calls_truncated";
+
 /// Feedback returned to the model when it repeats an already-captured tool.
 const ALREADY_CAPTURED_FEEDBACK: &str = "ya registrado; no repitas la herramienta";
 
@@ -61,8 +64,13 @@ impl<F> AgentHook for StopWhenCaptured<F>
 where
     F: Fn() -> bool + Send + Sync + 'static,
 {
-    async fn on_tool_call(&self, _ctx: &HookContext, _event: ToolCall<'_>) -> ToolCallAction {
-        tool_call_action((self.0)())
+    async fn on_tool_call(&self, _ctx: &HookContext, event: ToolCall<'_>) -> ToolCallAction {
+        let action = tool_call_action((self.0)());
+        if matches!(action, ToolCallAction::Skip(_)) {
+            tracing::warn!(event = TRUNCATED_EVENT, tool = event.tool_name, "repeated tool call skipped: capture already complete");
+            crate::dev_trace::trace_note("agent", "tool_loop", event.tool_name, TRUNCATED_EVENT, &[]);
+        }
+        action
     }
 
     async fn on_tool_result(&self, _ctx: &HookContext, _event: ToolResultEvent<'_>) -> ToolResultAction {
