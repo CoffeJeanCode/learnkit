@@ -44,6 +44,13 @@ hours/sessions rule that force-closes sessions, and false-positive option-length
 - [x] T4 Hybrid option-length rule (25% AND >25 chars) in `pedagogy_guardrails.rs`, tests
 - [x] T5 Roadmap prompt: replace the hours section and the other "2 sesiones" mentions; docs line 160
 
+## Follow-up (2026-10-22, second brief; shipped in v0.4.0 except the items below)
+Second brief re-requested T1-T4. Verified already shipped; remaining gaps:
+- [ ] T6 Telemetry: warn `multiple_tool_calls_truncated` when the hook skips a repeated call (hooks.rs)
+- [ ] T7 End-to-end proof with a scripted CompletionModel driving the REAL rig loop: one model call, no MaxTurnsError, first publish kept (notebook + critic flows)
+- [ ] T8 Missing cases: option lengths [36,54,56] not flagged; 14h week accepts [4,4,3,3] and [3.5 x4]
+- Not adopted: sum tolerance 0.01 (current 0.5 stays; stricter rejects float-rounded model output), upper bound max(4,min) (kept max(5,min)).
+
 ## Route declaration
 - T1-T5: delegated direct, one writer (mandatory trigger: 2+ non-trivial files, 4+ files touched).
 
