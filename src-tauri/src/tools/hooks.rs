@@ -203,4 +203,130 @@ mod tests {
         let max = Err(PromptError::MaxTurnsError { max_turns: 6, chat_history: Box::new(vec![]), prompt: Box::new("x".into()) });
         assert!(matches!(accept_terminal_stop(max), Err(PromptError::MaxTurnsError { .. })));
     }
+
+    /// Drives the REAL rig loop (as `providers/factory.rs` does) over a scripted
+    /// model, so the "one model call, no MaxTurnsError" claim is observed rather
+    /// than inferred from the pure decision functions.
+    mod rig_loop {
+        use super::*;
+        use crate::tools::{BlockAuditCapture, BlockAuditResult, NotebookBlockCapture, PublishNotebookBlockTool, PublishedBlock, SubmitBlockAuditTool};
+        use rig_agent::agent::AgentBuilder;
+        use rig_agent::completion::Prompt;
+        use rig_core::message::{AssistantContent, ToolCall, ToolFunction};
+        use rig_core::test_utils::{MockCompletionModel, MockTurn};
+
+        const MAX_TURNS: usize = 6;
+
+        fn theory(title: &str) -> serde_json::Value {
+            serde_json::json!({
+                "blockType": "anchored_micro_theory", "title": title, "intuitiveHook": "h", "systemRule": "r", "frequentError": "f"
+            })
+        }
+
+        fn true_false() -> serde_json::Value {
+            serde_json::json!({ "blockType": "tpl_true_false", "statement": "s", "isTrue": true, "explanation": "e" })
+        }
+
+        fn call(id: &str, name: &str, args: serde_json::Value) -> AssistantContent {
+            AssistantContent::ToolCall(ToolCall::from_wire(id, ToolFunction::new(name.to_string(), args)))
+        }
+
+        /// The `lead` turns, then enough identical repeats to outlast `MAX_TURNS`:
+        /// a model that would keep re-calling the tool if the loop let it.
+        fn script(lead: Vec<MockTurn>, repeat: impl Fn(usize) -> MockTurn) -> MockCompletionModel {
+            let tail = (0..MAX_TURNS + 2).map(repeat);
+            MockCompletionModel::from_turns(lead.into_iter().chain(tail))
+        }
+
+        async fn run_notebook(model: MockCompletionModel, capture: NotebookBlockCapture) -> Result<String, PromptError> {
+            let hook = stop_when_some(capture.clone());
+            let agent = AgentBuilder::new(model).tool(PublishNotebookBlockTool(capture)).build();
+            accept_terminal_stop(agent.prompt("go").max_turns(MAX_TURNS).add_hook(hook).await)
+        }
+
+        async fn run_audit(model: MockCompletionModel, capture: BlockAuditCapture) -> Result<String, PromptError> {
+            let hook = stop_when_some(capture.clone());
+            let agent = AgentBuilder::new(model).tool(SubmitBlockAuditTool(capture)).build();
+            accept_terminal_stop(agent.prompt("go").max_turns(MAX_TURNS).add_hook(hook).await)
+        }
+
+        fn block_json(captured: &Option<PublishedBlock>) -> serde_json::Value {
+            serde_json::to_value(&captured.as_ref().expect("captured").block).expect("serializes")
+        }
+
+        #[tokio::test]
+        async fn notebook_flow_ends_after_one_model_call_even_if_the_model_would_repeat() {
+            let model = script(vec![], |_| MockTurn::tool_call("t", "publish_notebook_block", theory("A")));
+            let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
+            let text = run_notebook(model.clone(), capture.clone()).await.expect("no MaxTurnsError");
+            assert_eq!(text, "");
+            assert_eq!(model.request_count(), 1);
+            assert_eq!(block_json(&capture.lock().unwrap())["title"], "A");
+        }
+
+        #[tokio::test]
+        async fn notebook_flow_keeps_only_the_first_of_two_tool_calls_in_one_message() {
+            let both = MockTurn::from_contents([call("a", "publish_notebook_block", theory("A")), call("b", "publish_notebook_block", true_false())]);
+            let model = script(vec![both], |_| MockTurn::tool_call("t", "publish_notebook_block", true_false()));
+            let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
+            let text = run_notebook(model.clone(), capture.clone()).await.expect("no MaxTurnsError");
+            assert_eq!(text, "");
+            assert_eq!(model.request_count(), 1);
+            let v = block_json(&capture.lock().unwrap());
+            assert_eq!(v["blockType"], "anchored_micro_theory");
+            assert_eq!(v["title"], "A");
+        }
+
+        #[tokio::test]
+        async fn notebook_flow_does_not_skip_a_corrected_retry_after_an_invalid_call() {
+            let invalid = MockTurn::tool_call("bad", "publish_notebook_block", serde_json::json!({ "blockType": "tpl_nope" }));
+            let fixed = MockTurn::tool_call("ok", "publish_notebook_block", theory("fixed"));
+            let model = script(vec![invalid, fixed], |_| MockTurn::tool_call("t", "publish_notebook_block", true_false()));
+            let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
+            let text = run_notebook(model.clone(), capture.clone()).await.expect("no MaxTurnsError");
+            assert_eq!(text, "");
+            assert_eq!(model.request_count(), 2);
+            assert_eq!(block_json(&capture.lock().unwrap())["title"], "fixed");
+        }
+
+        #[tokio::test]
+        async fn critic_flow_ends_after_one_model_call_even_if_the_model_would_repeat() {
+            let rejected = serde_json::json!({ "accepted": false, "feedback": ["first"] });
+            let model = script(vec![], |_| MockTurn::tool_call("t", "submit_block_audit", rejected.clone()));
+            let capture: BlockAuditCapture = Arc::new(Mutex::new(None));
+            let text = run_audit(model.clone(), capture.clone()).await.expect("no MaxTurnsError");
+            assert_eq!(text, "");
+            assert_eq!(model.request_count(), 1);
+            let stored = capture.lock().unwrap();
+            let audit: &BlockAuditResult = stored.as_ref().unwrap();
+            assert!(!audit.accepted);
+            assert_eq!(audit.feedback, vec!["first".to_string()]);
+        }
+
+        #[tokio::test]
+        async fn critic_flow_keeps_only_the_first_of_two_tool_calls_in_one_message() {
+            let both = MockTurn::from_contents([
+                call("a", "submit_block_audit", serde_json::json!({ "accepted": false, "feedback": ["first"] })),
+                call("b", "submit_block_audit", serde_json::json!({ "accepted": true, "feedback": [] })),
+            ]);
+            let model = script(vec![both], |_| MockTurn::tool_call("t", "submit_block_audit", serde_json::json!({ "accepted": true, "feedback": [] })));
+            let capture: BlockAuditCapture = Arc::new(Mutex::new(None));
+            let text = run_audit(model.clone(), capture.clone()).await.expect("no MaxTurnsError");
+            assert_eq!(text, "");
+            assert_eq!(model.request_count(), 1);
+            assert!(!capture.lock().unwrap().as_ref().unwrap().accepted);
+        }
+
+        #[tokio::test]
+        async fn critic_flow_does_not_skip_a_corrected_retry_after_an_invalid_call() {
+            let invalid = MockTurn::tool_call("bad", "submit_block_audit", serde_json::json!({ "accepted": "maybe" }));
+            let fixed = MockTurn::tool_call("ok", "submit_block_audit", serde_json::json!({ "accepted": true, "feedback": [] }));
+            let model = script(vec![invalid, fixed], |_| MockTurn::tool_call("t", "submit_block_audit", serde_json::json!({ "accepted": false, "feedback": ["late"] })));
+            let capture: BlockAuditCapture = Arc::new(Mutex::new(None));
+            let text = run_audit(model.clone(), capture.clone()).await.expect("no MaxTurnsError");
+            assert_eq!(text, "");
+            assert_eq!(model.request_count(), 2);
+            assert!(capture.lock().unwrap().as_ref().unwrap().accepted);
+        }
+    }
 }
