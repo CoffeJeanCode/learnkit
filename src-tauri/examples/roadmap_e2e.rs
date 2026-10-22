@@ -31,7 +31,7 @@
 
 use std::sync::Arc;
 
-use learnkit_lib::agents::{roadmap_agent, AgentRegistry};
+use learnkit_lib::agents::{analyst_agent, roadmap_agent, AgentRegistry};
 use learnkit_lib::application::RoadmapService;
 use learnkit_lib::domain::roadmap::SessionStatus;
 use learnkit_lib::notebook_store::NotebookStore;
@@ -215,9 +215,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Using provider: {provider_id} (model: {model})\n");
 
     let agents = Arc::new(AgentRegistry::new());
-    let mut def = roadmap_agent::definition();
-    def.model = learnkit_lib::domain::model::ModelRef::new(provider_id.clone(), model.as_str());
-    agents.register(def).expect("register roadmap agent");
+    // Gate 1 runs through the dedicated `diagnostic_analyst` agent, so both
+    // agents must be registered on the same provider/model.
+    for mut def in [roadmap_agent::definition(), analyst_agent::definition()] {
+        def.model = learnkit_lib::domain::model::ModelRef::new(provider_id.clone(), model.as_str());
+        agents.register(def).expect("register roadmap agents");
+    }
 
     let orchestrator = Arc::new(Orchestrator::with_rig_runner(Arc::clone(&agents), providers, vault));
     let tmp_dir = std::env::temp_dir().join(format!("learnkit-e2e-{}", uuid::Uuid::new_v4()));
