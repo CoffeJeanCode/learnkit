@@ -4,8 +4,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use rig_agent::agent::{AgentHook, HookContext, ToolCall, ToolCallAction, ToolResultAction, ToolResultEvent};
+use rig_agent::agent::{AgentHook, HookContext, ModelTurnAction, ModelTurnFinished, ToolCall, ToolCallAction, ToolResultAction, ToolResultEvent};
 use rig_agent::completion::PromptError;
+use rig_core::completion::Usage;
 
 use crate::tools::roadmap_tools::{DiagnosticToolScope, RoadmapCapture};
 
@@ -18,6 +19,22 @@ const TRUNCATED_EVENT: &str = "multiple_tool_calls_truncated";
 
 /// Feedback returned to the model when it repeats an already-captured tool.
 const ALREADY_CAPTURED_FEEDBACK: &str = "ya registrado; no repitas la herramienta";
+
+/// Stable event name for the per-turn token usage record.
+const USAGE_EVENT: &str = "model_turn_usage";
+
+/// Dev-trace note for one model turn's provider-reported usage. Pure so the
+/// format is testable without a model.
+pub fn usage_notes(turn: usize, usage: &Usage) -> Vec<String> {
+    vec![
+        format!("turn={turn}"),
+        format!("input_tokens={}", usage.input_tokens),
+        format!("output_tokens={}", usage.output_tokens),
+        format!("cached_input_tokens={}", usage.cached_input_tokens),
+        format!("cache_creation_input_tokens={}", usage.cache_creation_input_tokens),
+        format!("reasoning_tokens={}", usage.reasoning_tokens),
+    ]
+}
 
 /// Pure decision for `on_tool_call`: the first valid call wins. A call is only
 /// skipped once the capture is complete, so a corrected retry after an
@@ -75,6 +92,23 @@ where
 
     async fn on_tool_result(&self, _ctx: &HookContext, _event: ToolResultEvent<'_>) -> ToolResultAction {
         tool_result_action((self.0)())
+    }
+
+    /// Observation only: records what the provider billed for this turn so
+    /// prefix-size changes can be checked against real numbers.
+    async fn on_model_turn_finished(&self, _ctx: &HookContext, event: ModelTurnFinished<'_>) -> ModelTurnAction {
+        let u = &event.usage;
+        tracing::info!(
+            event = USAGE_EVENT,
+            turn = event.turn,
+            input_tokens = u.input_tokens,
+            output_tokens = u.output_tokens,
+            cached_input_tokens = u.cached_input_tokens,
+            reasoning_tokens = u.reasoning_tokens,
+            "model turn finished"
+        );
+        crate::dev_trace::trace_note("usage", "tool_loop", "model_turn", USAGE_EVENT, &usage_notes(event.turn, u));
+        ModelTurnAction::Continue
     }
 }
 
@@ -184,6 +218,20 @@ mod tests {
         assert_eq!(tool_result_action(true), ToolResultAction::Stop(STOP_REASON.to_string()));
         assert_eq!(tool_call_action(false), ToolCallAction::Run);
         assert_eq!(tool_call_action(true), ToolCallAction::Skip("ya registrado; no repitas la herramienta".to_string()));
+    }
+
+    #[test]
+    fn usage_notes_carry_every_billed_counter() {
+        let mut u = Usage::new();
+        u.input_tokens = 1200;
+        u.output_tokens = 80;
+        u.cached_input_tokens = 1000;
+        u.cache_creation_input_tokens = 7;
+        u.reasoning_tokens = 3;
+        assert_eq!(
+            usage_notes(2, &u),
+            ["turn=2", "input_tokens=1200", "output_tokens=80", "cached_input_tokens=1000", "cache_creation_input_tokens=7", "reasoning_tokens=3"]
+        );
     }
 
     #[test]

@@ -3,6 +3,8 @@ pub mod hooks;
 pub mod notebook_tools;
 pub mod registry;
 pub mod roadmap_tools;
+#[cfg(test)]
+mod size_report;
 
 use std::sync::OnceLock;
 use tauri::Emitter;

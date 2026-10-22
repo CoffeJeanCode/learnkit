@@ -160,7 +160,7 @@ impl TraceCollector {
         let total_calls = self.calls.len();
         let total_ms: u64 = self.calls.iter().map(|c| c.duration_ms).sum();
         println!("  TOTAL: {total_calls} llamadas, {:.1}s acumulados de modelo, {:.0}s de pared", secs(total_ms), self.origin.elapsed().as_secs_f32());
-        println!("  tokens: no expuestos (ni la traza ni AgentOutput traen usage)");
+        println!("  tokens: por turno en la traza de desarrollo (kind=usage, verdict=model_turn_usage) y en tracing `model_turn_usage`; no se acumulan en AgentOutput");
         println!("--- cronología de llamadas (inicio relativo, duración, resultado) ---");
         let mut calls = self.calls.clone();
         calls.sort_by_key(|c| c.start_ms);
