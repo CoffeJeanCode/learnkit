@@ -1,6 +1,7 @@
 //! Turn input rendering: the compact, machine-readable context handed to
 //! the model on every turn, plus the rejection directive fed back on retry.
 use super::*;
+use crate::prompt_encoding::{TOON_HINT, toon_payload};
 
 /// Builds the compact, machine-readable context sent as `input` on every
 /// turn. Deliberately does NOT resend the model's own prior replies (the
@@ -74,8 +75,8 @@ pub(super) fn render_turn_input(session: &RoadmapSession, user_message: &str, sc
     });
 
     format!(
-        "CONTEXTO_DE_SESION (uso interno, no lo muestres al estudiante):\n{}\n\nÚLTIMO_MENSAJE_DEL_ESTUDIANTE:\n{}",
-        serde_json::to_string_pretty(&context).unwrap_or_default(),
+        "CONTEXTO_DE_SESION (uso interno, no lo muestres al estudiante):\n{TOON_HINT}\n\n{}\n\nÚLTIMO_MENSAJE_DEL_ESTUDIANTE:\n{}",
+        toon_payload(&context),
         user_message
     )
 }
@@ -96,8 +97,8 @@ pub(super) fn render_battery_followup_input(session: &RoadmapSession) -> String 
     });
     format!(
         "Presenta la batería de diagnóstico llamando a present_diagnostic_battery según tu system \
-         prompt.\n\n{}",
-        serde_json::to_string_pretty(&context).unwrap_or_default()
+         prompt.\n\n{TOON_HINT}\n\n{}",
+        toon_payload(&context)
     )
 }
 
@@ -123,8 +124,8 @@ pub(super) fn render_propose_syllabus_input(profile: &LearnerProfileCard, pendin
     });
     format!(
         "Propón el diagnóstico consolidado y el temario llamando a propose_syllabus_plan según tu \
-         system prompt.\n\n{}",
-        serde_json::to_string_pretty(&context).unwrap_or_default()
+         system prompt.\n\n{TOON_HINT}\n\n{}",
+        toon_payload(&context)
     )
 }
 

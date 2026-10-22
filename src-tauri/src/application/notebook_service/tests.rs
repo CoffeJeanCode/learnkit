@@ -1457,3 +1457,18 @@
             }
         }
     }
+
+    /// Prompt-payload hygiene: every structured context embedded in model
+    /// input goes through `prompt_encoding::toon_payload` (TOON, with a
+    /// compact-JSON fallback) — never pretty-printed JSON, which measured
+    /// +34% chars on a representative block context.
+    #[test]
+    fn prompt_side_renderers_never_embed_pretty_printed_json() {
+        for (name, source) in [
+            ("notebook_service/render.rs", include_str!("render.rs")),
+            ("roadmap_service/render.rs", include_str!("../roadmap_service/render.rs")),
+            ("lexical_assistant_service.rs", include_str!("../lexical_assistant_service.rs")),
+        ] {
+            assert!(!source.contains("to_string_pretty"), "{name} must encode prompt payloads with toon_payload, not pretty JSON");
+        }
+    }

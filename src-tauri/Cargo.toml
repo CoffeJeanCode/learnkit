@@ -34,6 +34,7 @@ sha2 = "0.10"
 zeroize = "1"
 async-trait = "0.1"
 rusqlite = { version = "0.32", features = ["bundled"] }
+toon-format = { version = "0.7.0", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
