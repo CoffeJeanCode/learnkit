@@ -46,9 +46,9 @@ hours/sessions rule that force-closes sessions, and false-positive option-length
 
 ## Follow-up (2026-10-22, second brief; shipped in v0.4.0 except the items below)
 Second brief re-requested T1-T4. Verified already shipped; remaining gaps:
-- [ ] T6 Telemetry: warn `multiple_tool_calls_truncated` when the hook skips a repeated call (hooks.rs)
-- [ ] T7 End-to-end proof with a scripted CompletionModel driving the REAL rig loop: one model call, no MaxTurnsError, first publish kept (notebook + critic flows)
-- [ ] T8 Missing cases: option lengths [36,54,56] not flagged; 14h week accepts [4,4,3,3] and [3.5 x4]
+- [x] T6 Telemetry: warn `multiple_tool_calls_truncated` when the hook skips a repeated call (hooks.rs)
+- [x] T7 End-to-end proof with a scripted CompletionModel driving the REAL rig loop: one model call, no MaxTurnsError, first publish kept (notebook + critic flows)
+- [x] T8 Missing cases: option lengths [36,54,56] not flagged; 14h week accepts [4,4,3,3] and [3.5 x4]
 - Not adopted: sum tolerance 0.01 (current 0.5 stays; stricter rejects float-rounded model output), upper bound max(4,min) (kept max(5,min)).
 
 ## Route declaration
@@ -60,6 +60,10 @@ Second brief re-requested T1-T4. Verified already shipped; remaining gaps:
 - T3 `4adf151`: `cargo test --lib` 331 passed, 0 failed.
 - T4 `cc83fb9`: `cargo test --lib` 334 passed, 0 failed.
 - T5 (this commit): `cargo test --lib` 334 passed, 0 failed (prompt/docs only, no pinned prompt text). `cargo clippy --lib` could not run (build script hit os error 32, file locked).
+
+- T6 `629433d`: `cargo test --lib` 334 passed, 0 failed (logging in `on_tool_call`, no new test; decision stays pure).
+- T7 `b51f769`: `cargo test --lib` 340 passed, 0 failed (6 rig_loop tests; real rig loop over rig-core `MockCompletionModel`, dev-dep feature `test-utils`; two tool calls in one message: only the first is captured, 1 model call).
+- T8 `0e65406`: `cargo test --lib` 342 passed, 0 failed.
 
 ## Next step
 Review the branch; push/PR remain the user's decision.
