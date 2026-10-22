@@ -11,6 +11,18 @@
     }
 
     #[test]
+    fn anthropic_models_cache_the_static_prefix_for_an_hour_with_a_moving_tail() {
+        use rig_core::providers::anthropic::completion::CacheTtl;
+        let client = rig_core::providers::anthropic::Client::builder().api_key("sk-test".to_string()).build().expect("client");
+        let plain = client.completion_model("claude-sonnet-4-6");
+        assert!(!plain.automatic_caching && plain.static_prefix_cache_ttl.is_none());
+        let cached = anthropic_cached(plain);
+        assert!(cached.automatic_caching, "top-level breakpoint moves with the conversation tail");
+        assert_eq!(cached.static_prefix_cache_ttl, Some(CacheTtl::OneHour));
+        assert!(!cached.prompt_caching, "manual last-message marker would duplicate the automatic one");
+    }
+
+    #[test]
     fn prompt_timeout_parses_clamps_and_falls_back() {
         assert_eq!(parse_prompt_timeout(None), 200);
         assert_eq!(parse_prompt_timeout(Some("abc")), 200);

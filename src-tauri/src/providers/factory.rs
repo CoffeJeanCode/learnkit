@@ -46,6 +46,26 @@ fn http_client() -> reqwest::Client {
         .unwrap_or_else(|_| reqwest::Client::new())
 }
 
+/// Anthropic prompt caching for the stable prefix (tools + system prompt).
+///
+/// Every flow re-sends a large, byte-identical prefix (generator: ~17k est.
+/// tokens, roadmap: ~5-7k) on each attempt and on every tool-loop turn, and
+/// across calls that are minutes apart. Two knobs, deliberately combined:
+/// - `with_static_prefix_cache_ttl(OneHour)`: explicit markers on the final
+///   tool definition and the system prompt. 1h (not the 5m default) because
+///   roadmap turns are human-paced and a block batch can outlast 5 minutes;
+///   the ~2x write cost is repaid by the first reuse of a prefix this size.
+/// - `with_automatic_caching()`: Anthropic moves a single top-level breakpoint
+///   over the conversation tail (5m), so turn N+1 of a tool loop reuses turn N.
+///   We avoid `with_prompt_caching()` because its manual last-message marker
+///   would be redundant with this and spend one of the 4 breakpoints.
+/// Prefixes under the model minimum (1-4k tokens) are silently not cached by
+/// the API, so the small graders are unaffected. Only the Anthropic arms call
+/// this; other providers' request bodies are untouched.
+fn anthropic_cached(model: rig_core::providers::anthropic::completion::CompletionModel) -> rig_core::providers::anthropic::completion::CompletionModel {
+    model.with_automatic_caching().with_static_prefix_cache_ttl(rig_core::providers::anthropic::completion::CacheTtl::OneHour)
+}
+
 /// Output of a single prompt execution.
 #[derive(Debug, Clone)]
 pub struct PromptOutput {
@@ -132,7 +152,7 @@ impl ProviderFactory {
                     .base_url(base_url)
                     .build()
                     .map_err(|e| connect_error(&e))?;
-                let model = client.completion_model(model_name);
+                let model = anthropic_cached(client.completion_model(model_name));
                 Self::prompt_with(model, system_prompt, input, tools).await
             }
             ProviderKind::Gemini => {
@@ -230,7 +250,7 @@ impl ProviderFactory {
                     .base_url(base_url)
                     .build()
                     .map_err(|e| connect_error(&e))?;
-                let model = client.completion_model(model_name);
+                let model = anthropic_cached(client.completion_model(model_name));
                 Self::prompt_with_diagnostic_tools(model, system_prompt, input, capture, Self::output_budget(&config.provider), scope).await
             }
             ProviderKind::Gemini => {
@@ -366,7 +386,7 @@ impl ProviderFactory {
                     .base_url(base_url)
                     .build()
                     .map_err(|e| connect_error(&e))?;
-                let model = client.completion_model(model_name);
+                let model = anthropic_cached(client.completion_model(model_name));
                 Self::prompt_with_notebook_block_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider)).await
             }
             ProviderKind::Gemini => {
@@ -468,7 +488,7 @@ impl ProviderFactory {
                     .base_url(base_url)
                     .build()
                     .map_err(|e| connect_error(&e))?;
-                let model = client.completion_model(model_name);
+                let model = anthropic_cached(client.completion_model(model_name));
                 Self::prompt_with_gate_grading_tool(model, system_prompt, input, capture).await
             }
             ProviderKind::Gemini => {
@@ -567,7 +587,7 @@ impl ProviderFactory {
                     .base_url(base_url)
                     .build()
                     .map_err(|e| connect_error(&e))?;
-                let model = client.completion_model(model_name);
+                let model = anthropic_cached(client.completion_model(model_name));
                 Self::prompt_with_closure_grading_tool(model, system_prompt, input, capture).await
             }
             ProviderKind::Gemini => {
@@ -664,7 +684,7 @@ impl ProviderFactory {
                     .base_url(base_url)
                     .build()
                     .map_err(|e| connect_error(&e))?;
-                let model = client.completion_model(model_name);
+                let model = anthropic_cached(client.completion_model(model_name));
                 Self::prompt_with_block_audit_tool(model, system_prompt, input, capture).await
             }
             ProviderKind::Gemini => {
