@@ -1,10 +1,10 @@
 import type { DynamicSectionBlock } from "../../../lib/schemas";
-import { InlineText } from "./RichText";
+import { InlineText, RichText } from "./RichText";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "anchored_micro_theory" }>;
 
 // Layered microtheory in 3-4 parts — never one undifferentiated paragraph.
-// `systemRule` has its own ~180-word ceiling and the other layers share a
+// `systemRule` has its own ~240-word ceiling and the other layers share a
 // combined terse ceiling (see `notebook_service::grounding`). Diagrams are
 // their own block now (declarative_visual_diagram), never embedded here.
 //
@@ -44,10 +44,17 @@ export function AnchoredMicroTheoryBlock({ content }: { content: Content }) {
           <InlineText text={withoutLeadingMarker(content.analogyBoundary, "🚧")} />
         </p>
       ) : null}
-      <p className="theory-part theory-rule">
+      {/* systemRule is a numbered micro-steps sequence with input/output
+          examples (see the generator prompt) — rendered block-level so `1. `
+          lines become a real <ol> instead of one flat run. It also carries
+          fenced code occasionally, which InlineText would render as literal
+          backticks. The wrapper is a <div> (not <p>) because .theory-part is
+          flex and RichText renders block-level content (never nest it in a
+          <p>). The other layers stay InlineText: 1-2 lines each, no lists. */}
+      <div className="theory-part theory-rule">
         <span className="theory-part-emoji" aria-hidden="true">📐</span>
-        <InlineText text={withoutLeadingMarker(content.systemRule, "📐")} />
-      </p>
+        <RichText text={withoutLeadingMarker(content.systemRule, "📐")} />
+      </div>
       <p className="theory-part theory-error">
         <span className="theory-part-emoji" aria-hidden="true">⚠️</span>
         <InlineText text={withoutLeadingMarker(content.frequentError, "⚠️")} />

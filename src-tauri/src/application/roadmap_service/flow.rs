@@ -502,11 +502,21 @@ impl RoadmapService {
         }
         let profile = session.learner_profile_card.clone().expect("just ensured above");
         let syllabus = synth_roadmap_package(&profile);
-        // Guaranteed None here: once a battery is successfully generated,
-        // `apply_capture` stops counting gather turns against it (see its
-        // `stable` check), so the cap that triggers force-close can only be
-        // reached while there's no pending battery yet.
-        let diagnostic_battery = Some(DiagnosticBatteryState { battery: synth_diagnostic_battery(&profile), answers: Default::default() });
+        // No synthetic battery — ever. The old fallback fabricated canned
+        // self-perception questions ("¿qué asocias primero con {topic}?")
+        // graded right/wrong, and a real declared-beginner student saw them
+        // and experienced them as absurd (grading "No tengo ninguna
+        // intuición todavía" as WRONG). A sealed session with no battery
+        // renders no battery card at all — silence beats nonsense. This also
+        // matches `force_progress_from_gate3`, which already passes the real
+        // pending battery through unchanged (None stays None).
+        //
+        // A battery captured earlier can never be pending here anyway: once
+        // one is successfully generated, `apply_capture` stops counting
+        // gather turns against it (see its `stable` check), so the cap that
+        // triggers force-close can only be reached while there's no pending
+        // battery yet.
+        let diagnostic_battery: Option<DiagnosticBatteryState> = None;
         if let Err(e) = self.seal_session(session, &profile, syllabus, diagnostic_battery) {
             tracing::warn!(session_id = %session.session_id, error = %e, "force-close failed to persist into the notebook store");
             return Err(e);

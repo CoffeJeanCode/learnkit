@@ -453,16 +453,25 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
   z.object({
     blockType: z.literal("anchored_micro_theory"),
     title: z.string(),
-    intuitiveHook: z.string(),
+    intuitiveHook: z.string().describe("🎯 Analogía cotidiana, cero términos técnicos, 1-2 líneas"),
     // Optional — only present when the model explicitly names what the
     // Capa-1 analogy does NOT cover technically. Nullish (not `.optional()`
     // alone) — Rust's `Option<String>` takes an explicit `null`, matching
     // the same convention as `visualAid` above — so old persisted
     // `anchored_micro_theory` blocks generated before this field existed
     // (which lack the key entirely) still parse, and don't break rendering.
-    analogyBoundary: z.string().nullish(),
-    systemRule: z.string(),
-    frequentError: z.string(),
+    analogyBoundary: z
+      .string()
+      .nullish()
+      .describe("Dónde deja de aplicar la analogía de intuitiveHook — qué NO cubre técnicamente, 1 línea"),
+    systemRule: z
+      .string()
+      .describe(
+        "📐 La regla o mecanismo en una SECUENCIA CLARA de micro-pasos numerados (1 ➔ 2 ➔ 3) con un ejemplo concreto de entrada/salida (qué escribe el estudiante, qué responde la pantalla, qué significa cada parte), con el detalle técnico completo (hasta 240 palabras) — nunca un párrafo abstracto",
+      ),
+    frequentError: z
+      .string()
+      .describe("⚠️ Contraste explícito entre un caso VÁLIDO y la confusión típica ('esto SÍ / esto NO, porque...')"),
   }),
   z.object({
     blockType: z.literal("declarative_visual_diagram"),

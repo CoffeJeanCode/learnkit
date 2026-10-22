@@ -172,6 +172,19 @@ use super::*;
         assert_eq!(r3.session.status, SessionStatus::Sealed);
         assert!(r3.session.learner_profile_card.is_some());
         assert!(r3.session.imported_course_id.is_some(), "force-close still imports into the notebook store");
+        // Force-close NEVER synthesizes a diagnostic battery: the canned
+        // self-perception template read as absurd to real declared
+        // beginners, so the session seals with None and no battery card.
+        assert!(r3.session.pending_diagnostic_battery.is_none(), "force-close seals without a battery");
+        assert!(
+            harness
+                .service
+                .notebook_store
+                .get_course_diagnostic_battery(r3.session.imported_course_id.as_deref().unwrap())
+                .expect("query")
+                .is_none(),
+            "no synthesized battery is persisted onto the course either"
+        );
         let _ = std::fs::remove_dir_all(&harness.dir);
     }
 
@@ -329,6 +342,7 @@ use super::*;
         // (only 4 scripted steps were queued; a 5th call panics).
         let r3 = harness.service.send_message(None, &sid, "cualquier cosa").await.expect("force-close turn ok");
         assert_eq!(r3.session.status, SessionStatus::Sealed, "the loop must be bounded — it always seals eventually");
+        assert!(r3.session.pending_diagnostic_battery.is_none(), "force-close seals without synthesizing a battery");
         let _ = std::fs::remove_dir_all(&harness.dir);
     }
 

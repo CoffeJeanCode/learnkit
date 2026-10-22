@@ -5,6 +5,7 @@ use async_trait::async_trait;
 
 use super::*;
 use crate::agents::AgentRegistry;
+use crate::domain::notebook::DiagnosticQuestion;
 use crate::domain::roadmap::{CapstoneProjectArgs, ConfirmSyllabusPlanArgs, ProposeSyllabusPlanArgs};
 use crate::orchestration::PromptRunner;
 use crate::providers::factory::PromptOutput;

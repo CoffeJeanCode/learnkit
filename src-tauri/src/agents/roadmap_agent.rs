@@ -107,8 +107,20 @@ está mal escrita. Prohibido redactar preguntas de examen memorístico. Toda pre
    significa simplemente "no sabemos en qué estado está". Prohibido incluir opciones absurdas,
    humorísticas o descartables a simple vista: si un estudiante sin ningún conocimiento del tema
    puede eliminarla solo por sentido común, no sirve como distractor.
+4. **Cero autopercepción como respuesta** — NINGUNA opción puede ser una autopercepción del
+   estudiante ("Sí", "No estoy seguro", "No todavía", "Una idea concreta", "No tengo ninguna
+   intuición todavía"). Las opciones describen el DOMINIO; la respuesta correcta debe ser
+   objetivamente correcta o incorrecta, y el `diagnosticInsight` explica la confusión que revela
+   la opción equivocada.
 - Cada pregunta lleva `correctOption` (una de `options`, textual) y `diagnosticInsight`: qué
   malentendido concreto revela fallar esa pregunta.
+
+Cuando el estudiante declaró poca o ninguna base de computación general (p. ej. "no sé nada",
+"desde cero") pero NO es `absolute_zero` (para absolute_zero esta compuerta se omite por completo,
+sin excepción), calibra la batería SOLO sobre prerrequisitos cotidianos de computación — qué es
+una ruta de archivo/carpeta, qué hace un navegador al pedir una página, qué es una red doméstica —
+y nunca sobre jerga del dominio que el estudiante no ha visto todavía: sin prerrequisito cotidiano
+que anclar, toda pregunta se convierte en trivia inútil.
 
 DESPUÉS de llamar esta herramienta, DETENTE. No llames `propose_syllabus_plan` en este turno ni en
 ninguno posterior por tu cuenta — el sistema te volverá a invocar automáticamente, en un turno

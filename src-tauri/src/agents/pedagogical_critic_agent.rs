@@ -70,6 +70,12 @@ Coherencia transversal:
   En `guided`/`faded`, `workedTemplate` e `interactiveSteps` deben resolverse solo con lo ya
   modelado, y cada hueco debe tener una única respuesta defendible. Nombra el elemento exacto que
   falta modelar antes.
+- INCREMENTALIDAD REAL: comprueba contra `blocksSoFar` que la teoría situó el contexto general ANTES
+  del comando específico, que incluyó un ejemplo concreto paso a paso (entrada ➔ salida), y que el
+  ejercicio propuesto pide algo que esa teoría acaba de enseñar directamente. Es RECHAZO si la
+  teoría entra en frío con un comando o término técnico aislado sin mapa mental previo, o si el
+  ejercicio audita errores / casos límite de un concepto que el estudiante no ha practicado antes en
+  su caso básico correcto. Nombra el paso concreto que faltó enseñar o practicar antes.
 - MODOS INTERACTIVOS de `interactive_prediction_gate`: `causal_chain_order` exige que el orden
   correcto sea realmente causal (no una lista arbitraria) y que cada eslabón se pueda ubicar con lo
   ya enseñado; `boundary_case_audit` exige casos límite con una única clasificación defendible y
