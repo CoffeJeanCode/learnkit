@@ -77,7 +77,7 @@ pub fn definition() -> AgentDefinition {
              declarado) vía submit_diagnostic_assessment, sin inferir nada ni proponer temario."
                 .to_string(),
         ),
-        system_prompt: SYSTEM_PROMPT.to_string(),
+        system_prompt: crate::prompt_encoding::with_toon_hint(SYSTEM_PROMPT),
         model: ModelRef::new("anthropic", "claude-sonnet-4-6"),
         tools: vec![],
     }

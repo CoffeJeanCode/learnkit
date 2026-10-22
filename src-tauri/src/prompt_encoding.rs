@@ -3,9 +3,16 @@
 /// OUTPUT stays native tool-JSON (see tools/*).
 use serde::Serialize;
 
-/// One-line orientation for weaker models reading the payload below.
-pub(crate) const TOON_HINT: &str = "El bloque de datos de abajo está en formato TOON (no JSON): la indentación anida \
-                                   niveles y una cabecera como nombre[3]: encabeza 3 filas de datos con sus columnas.";
+/// One-line orientation for weaker models reading the TOON payload. Stated
+/// ONCE in each TOON-consuming agent's system prompt (see [`with_toon_hint`]),
+/// not repeated in every user input: the system prompt is the cacheable prefix.
+pub(crate) const TOON_HINT: &str = "Los datos del mensaje del usuario están en formato TOON (no JSON): la indentación \
+                                   anida niveles y una cabecera como nombre[3]: encabeza 3 filas de datos con sus columnas.";
+
+/// Appends [`TOON_HINT`] to a system prompt, once.
+pub(crate) fn with_toon_hint(system_prompt: &str) -> String {
+    format!("{system_prompt}\n\n{TOON_HINT}")
+}
 
 /// Encodes a value as TOON for embedding in a prompt. Falls back to COMPACT
 /// JSON (never pretty, never empty — the old `.unwrap_or_default()` could
@@ -64,6 +71,34 @@ mod tests {
         // holds; TOON's edge comes from dropping braces/quotes, which dense
         // payloads can negate.
         assert!(toon_len <= compact_len, "TOON ({toon_len}) vs compact JSON ({compact_len})");
+    }
+
+    #[test]
+    fn every_toon_consuming_agent_states_the_hint_once_and_no_input_repeats_it() {
+        use crate::agents::{
+            analyst_agent, block_generator_agent, closure_feedback_grader_agent, lexical_assistant_agent, notebook_gate_grader_agent,
+            pedagogical_critic_agent, roadmap_agent,
+        };
+        for def in [
+            analyst_agent::definition(),
+            block_generator_agent::definition(),
+            closure_feedback_grader_agent::definition(),
+            lexical_assistant_agent::definition(),
+            notebook_gate_grader_agent::definition(),
+            pedagogical_critic_agent::definition(),
+            roadmap_agent::definition(),
+        ] {
+            assert_eq!(def.system_prompt.matches(TOON_HINT).count(), 1, "{} must carry the TOON hint exactly once", def.id);
+        }
+        // The inputs are built from these files; none may interpolate the hint again.
+        for (name, source) in [
+            ("notebook_service/render.rs", include_str!("application/notebook_service/render.rs")),
+            ("roadmap_service/render.rs", include_str!("application/roadmap_service/render.rs")),
+            ("lexical_assistant_service.rs", include_str!("application/lexical_assistant_service.rs")),
+        ] {
+            let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+            assert!(!production.contains("TOON_HINT"), "{name} must not repeat the hint in user inputs");
+        }
     }
 
     /// The documented encode error (>256 nesting levels) must degrade to

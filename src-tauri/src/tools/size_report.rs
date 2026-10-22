@@ -10,7 +10,6 @@ use crate::agents::{
     analyst_agent, block_generator_agent, closure_feedback_grader_agent, lexical_assistant_agent, notebook_gate_grader_agent,
     pedagogical_critic_agent, roadmap_agent,
 };
-use crate::prompt_encoding::TOON_HINT;
 use crate::tools::{
     ConfirmSyllabusPlanTool, DiagnosticToolScope, GradeClosureSubmissionTool, GradeGateSubmissionTool, PresentDiagnosticBatteryTool,
     ProposeCapstoneProjectTool, ProposeSyllabusPlanTool, PublishNotebookBlockTool, RoadmapCapture, SubmitBlockAuditTool,
@@ -45,25 +44,20 @@ fn est_tokens(bytes: usize) -> usize {
     bytes / 4
 }
 
-/// `(label, system prompt, tool JSON, TOON hint included in the user input)`.
-fn rows() -> Vec<(String, String, Vec<String>, bool)> {
+/// `(label, system prompt, tool JSON)`. The TOON hint (since T5) is part of
+/// each TOON-consuming agent's system prompt, so it is counted in `sys B`.
+fn rows() -> Vec<(String, String, Vec<String>)> {
     let mut rows = vec![
-        ("notebook_generator".to_string(), block_generator_agent::definition().system_prompt, vec![tool_json(&PublishNotebookBlockTool(Default::default()))], true),
-        ("pedagogical_critic".to_string(), pedagogical_critic_agent::definition().system_prompt, vec![tool_json(&SubmitBlockAuditTool(Default::default()))], true),
-        ("notebook_gate_grader".to_string(), notebook_gate_grader_agent::definition().system_prompt, vec![tool_json(&GradeGateSubmissionTool(Default::default()))], true),
+        ("notebook_generator".to_string(), block_generator_agent::definition().system_prompt, vec![tool_json(&PublishNotebookBlockTool(Default::default()))]),
+        ("pedagogical_critic".to_string(), pedagogical_critic_agent::definition().system_prompt, vec![tool_json(&SubmitBlockAuditTool(Default::default()))]),
+        ("notebook_gate_grader".to_string(), notebook_gate_grader_agent::definition().system_prompt, vec![tool_json(&GradeGateSubmissionTool(Default::default()))]),
         (
             "closure_feedback_grader".to_string(),
             closure_feedback_grader_agent::definition().system_prompt,
             vec![tool_json(&GradeClosureSubmissionTool(Default::default()))],
-            true,
         ),
-        ("lexical_assistant".to_string(), lexical_assistant_agent::definition().system_prompt, vec![], true),
-        (
-            "diagnostic_analyst [Assessment]".to_string(),
-            analyst_agent::definition().system_prompt,
-            roadmap_tools(DiagnosticToolScope::Assessment),
-            true,
-        ),
+        ("lexical_assistant".to_string(), lexical_assistant_agent::definition().system_prompt, vec![]),
+        ("diagnostic_analyst [Assessment]".to_string(), analyst_agent::definition().system_prompt, roadmap_tools(DiagnosticToolScope::Assessment)),
     ];
     for (name, scope) in [
         ("All", DiagnosticToolScope::All),
@@ -71,7 +65,7 @@ fn rows() -> Vec<(String, String, Vec<String>, bool)> {
         ("Battery", DiagnosticToolScope::Battery),
         ("Propose", DiagnosticToolScope::Propose),
     ] {
-        rows.push((format!("roadmap [{name}]"), roadmap_agent::definition().system_prompt, roadmap_tools(scope), true));
+        rows.push((format!("roadmap [{name}]"), roadmap_agent::definition().system_prompt, roadmap_tools(scope)));
     }
     rows
 }
@@ -79,21 +73,11 @@ fn rows() -> Vec<(String, String, Vec<String>, bool)> {
 #[test]
 #[ignore = "prints a report; run with --ignored --nocapture"]
 fn size_report() {
-    println!("\n{:<34} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9}", "agent [scope]", "sys B", "sys tok", "tools B", "tools tok", "TOON B", "prefix tok");
-    for (label, sys, tools, toon) in rows() {
+    println!("\n{:<34} {:>9} {:>9} {:>9} {:>9} {:>10}", "agent [scope]", "sys B", "sys tok", "tools B", "tools tok", "prefix tok");
+    for (label, sys, tools) in rows() {
         let tools_b: usize = tools.iter().map(String::len).sum();
-        let hint_b = if toon { TOON_HINT.len() } else { 0 };
         let prefix = est_tokens(sys.len()) + est_tokens(tools_b);
-        println!(
-            "{:<34} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9}",
-            label,
-            sys.len(),
-            est_tokens(sys.len()),
-            tools_b,
-            est_tokens(tools_b),
-            hint_b,
-            prefix
-        );
+        println!("{:<34} {:>9} {:>9} {:>9} {:>9} {:>10}", label, sys.len(), est_tokens(sys.len()), tools_b, est_tokens(tools_b), prefix);
     }
-    println!("(prefix tok = est(system) + est(tools), bytes/4; TOON B is per user input, counted outside the prefix)");
+    println!("(prefix tok = est(system) + est(tools), bytes/4; baseline had a separate +165 B TOON hint in every user input)");
 }

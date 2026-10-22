@@ -60,8 +60,7 @@ fn render_input(term: &str, fragment_context: Option<&str>, key_concepts: &[Stri
         "studentQuestion": question,
     });
     format!(
-        "Responde según tu system prompt, en las 3 capas obligatorias.\n\n{}\n\n{}",
-        crate::prompt_encoding::TOON_HINT,
+        "Responde según tu system prompt, en las 3 capas obligatorias.\n\n{}",
         crate::prompt_encoding::toon_payload(&context)
     )
 }

@@ -579,7 +579,7 @@ pub fn definition() -> AgentDefinition {
              síntesis), reaccionando al desempeño real del estudiante en cada compuerta."
                 .to_string(),
         ),
-        system_prompt: SYSTEM_PROMPT.to_string(),
+        system_prompt: crate::prompt_encoding::with_toon_hint(SYSTEM_PROMPT),
         model: ModelRef::new("anthropic", "claude-sonnet-4-6"),
         tools: vec![],
     }
