@@ -6,8 +6,8 @@
 //! fail). Mirrors `roadmap_service::flow`'s retry/grounding-retry shape, one
 //! block at a time instead of one whole payload at a time.
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use tauri::AppHandle;
@@ -669,6 +669,40 @@ fn should_auto_chain(block: &NotebookBlock) -> bool {
     !block.block_type.is_gate() && block.block_type != DynamicBlockType::MetacognitiveClosure
 }
 
+/// Documents whose background generation chain is running RIGHT NOW.
+/// Duplicate external invokes (React StrictMode's double-mount, the
+/// Reintentar button firing twice) would run TWO full chains for the same
+/// document concurrently. Behind a `OnceLock` because `HashSet::new` isn't
+/// const, so a plain `static Mutex<HashSet<String>>` won't compile (same
+/// pattern as `tools::EMITTER`).
+static IN_FLIGHT_CHAINS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn in_flight_chains() -> &'static Mutex<HashSet<String>> {
+    IN_FLIGHT_CHAINS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// First caller for this document wins; every duplicate gets `false` and
+/// must skip its chain. Extracted from `run_background_chain` so the guard
+/// can be unit-tested without tokio spawning.
+fn try_acquire_chain(document_id: &str) -> bool {
+    in_flight_chains().lock().unwrap_or_else(|e| e.into_inner()).insert(document_id.to_string())
+}
+
+fn release_chain(document_id: &str) {
+    in_flight_chains().lock().unwrap_or_else(|e| e.into_inner()).remove(document_id);
+}
+
+/// Scope guard: releases the document's in-flight slot on EVERY exit path,
+/// including the early `return`s inside the generation loop, so a finished
+/// (or failed) chain never wedges the document against future invokes.
+struct ChainGuard(String);
+
+impl Drop for ChainGuard {
+    fn drop(&mut self) {
+        release_chain(&self.0);
+    }
+}
+
 /// The background generation loop shared by `start_class_notebook`'s
 /// buffering call, every gate pass, and an escalation's follow-on chaining.
 /// A free function (not a method) so it can be handed straight to
@@ -680,6 +714,12 @@ async fn run_background_chain(
     class_id: String,
     document_id: String,
 ) {
+    if !try_acquire_chain(&document_id) {
+        tracing::info!(document_id = %document_id, "generation chain already in flight for this document; skipping duplicate invoke");
+        dev_trace::trace_note("dedupe", "chain_guard", &document_id, "duplicate_chain_skipped", &[]);
+        return;
+    }
+    let _guard = ChainGuard(document_id.clone());
     loop {
         super::events::emit_block_generating(app.as_ref(), &document_id);
         match generate_and_persist_block(&store, &orchestrator, app.as_ref(), &class_id, &document_id, None).await {
@@ -978,13 +1018,36 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
     async fn generate(&self, note: &str) -> AppResult<Option<GeneratedSectionBlock>> {
         let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
         let turn_input = format!("{}{note}", self.base_input);
-        self.orchestrator.run_notebook_block_agent(self.app, NOTEBOOK_AGENT_ID, &turn_input, capture.clone()).await?;
+        // The orchestrator salvages a populated capture on error, so an Err
+        // reaching here means the turn cap fired with NOTHING published.
+        let run_result = self
+            .orchestrator
+            .run_notebook_block_agent(self.app, NOTEBOOK_AGENT_ID, &turn_input, capture.clone())
+            .await;
         let published = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
         // Stash the mechanical-template provenance for the critique that
         // follows this attempt (never a stale value from a prior one).
         let mechanical = published.as_ref().is_some_and(|p| p.mechanical_template);
         *self.mechanical_template.lock().unwrap_or_else(|e| e.into_inner()) = mechanical;
-        Ok(published.map(|p| p.block))
+        if let Some(published) = published {
+            return Ok(Some(published.block));
+        }
+        match run_result {
+            // The model burned every turn without ever calling
+            // publish_notebook_block: a blind backoff retry with UNCHANGED
+            // input fails identically, so report an empty attempt and let the
+            // loop append its corrective note instead.
+            Err(e) if e.is_agent_turn_limit() => {
+                tracing::warn!(
+                    class_id = %self.class_id,
+                    error = %e,
+                    "notebook agent burned its turn budget without publishing; feeding corrective feedback"
+                );
+                Ok(None)
+            }
+            Err(e) => Err(e),
+            Ok(_) => Ok(None),
+        }
     }
 
     async fn critique(&self, candidate: &GeneratedSectionBlock) -> CriticVerdict {
@@ -1138,6 +1201,22 @@ mod tests {
     fn cursor_target_points_a_gate_at_itself_and_content_past_itself() {
         assert_eq!(cursor_target_after_insert(4, DynamicBlockType::InteractivePredictionGate), 4);
         assert_eq!(cursor_target_after_insert(4, DynamicBlockType::AnchoredMicroTheory), 5);
+    }
+
+    /// The exact duplicate-invoke failure mode: StrictMode's double-mount
+    /// (or a double Reintentar click) spawning two full generation chains
+    /// for the SAME document — the second one must be refused until the
+    /// first one releases the slot.
+    #[test]
+    fn chain_guard_admits_exactly_one_generation_chain_per_document() {
+        // Unique id: this static is shared with the background chains other
+        // tests spawn, and tests run in parallel.
+        let doc = "chain-guard-unit-test-doc";
+        assert!(try_acquire_chain(doc), "the first invoke must win the slot");
+        assert!(!try_acquire_chain(doc), "a duplicate invoke must be refused");
+        release_chain(doc);
+        assert!(try_acquire_chain(doc), "a released slot must be re-acquirable");
+        release_chain(doc);
     }
 
     #[test]

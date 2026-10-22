@@ -114,7 +114,11 @@ where
                 tokio::time::sleep(delay).await;
             }
             Err(e) => {
-                trace_loop(job, "loop_result", attempt + 1, "failed_permanently", Vec::new(), Some(&e));
+                // A transient error on the LAST attempt exhausted the retry
+                // budget — that is not a permanent failure. Only genuinely
+                // non-transient errors fail permanently here.
+                let verdict = if e.is_transient() { "retries_exhausted" } else { "failed_permanently" };
+                trace_loop(job, "loop_result", attempt + 1, verdict, Vec::new(), Some(&e));
                 tracing::warn!(error = %e, attempt = attempt + 1, "generator failed permanently");
                 last_err = Some(e);
                 break;
@@ -289,6 +293,17 @@ mod tests {
         let notes = job.notes.lock().unwrap();
         assert_eq!(notes[0], "");
         assert_eq!(notes[1], "budget");
+    }
+
+    #[tokio::test]
+    async fn a_transient_error_on_the_last_attempt_propagates_after_the_budget_is_spent() {
+        // Behavior pinned by T4's trace-verdict fix: only the LABEL changed
+        // (`retries_exhausted` vs `failed_permanently`); the last-attempt
+        // transient error still breaks with `last_err` and propagates.
+        let job = ScriptedJob::new(vec![Step::Fail(transient()), Step::Fail(transient()), Step::Fail(transient())], vec![]);
+        let err = run_generator_critic_loop(&job, 3, Duration::ZERO).await.expect_err("budget spent");
+        assert!(matches!(err, AppError::ProviderConnectionFailed(_)), "the original transient error wins, not a fabricated one");
+        assert_eq!(job.notes.lock().unwrap().len(), 3, "the first two attempts back off blindly; a corrective note is not for transient errors");
     }
 
     #[tokio::test]

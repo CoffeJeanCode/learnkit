@@ -287,6 +287,36 @@
         }
     }
 
+    /// Scripts rig's `MaxTurnsError` firing on EVERY turn with NO capture
+    /// write — the model burned its budget without ever calling
+    /// `publish_notebook_block`. Records every input so the test can prove
+    /// the loop stopped resending the identical input.
+    #[derive(Default)]
+    struct MaxTurnsRunner {
+        inputs: Mutex<Vec<String>>,
+        block_calls: Mutex<usize>,
+    }
+
+    #[async_trait]
+    impl PromptRunner for MaxTurnsRunner {
+        async fn run(&self, _: &str, _: &str, _: &str, _: &str, _: &[String]) -> AppResult<PromptOutput> {
+            unreachable!("notebook generation never calls the plain envelope runner")
+        }
+
+        async fn run_notebook_block_execution(
+            &self,
+            _provider_id: &str,
+            _model: &str,
+            _system_prompt: &str,
+            input: &str,
+            _capture: NotebookBlockCapture,
+        ) -> AppResult<PromptOutput> {
+            *self.block_calls.lock().unwrap() += 1;
+            self.inputs.lock().unwrap().push(input.to_string());
+            Err(AppError::AgentExecutionFailed("MaxTurnsError: reached max turns limit: 6".to_string()))
+        }
+    }
+
     /// Like [`service_with`], but with the pedagogical critic registered —
     /// the production registry always has it; `service_with` leaves it out
     /// so the pre-critic tests exercise the "critic unavailable" fail-open.
@@ -899,6 +929,34 @@
         assert_eq!(payload.blocks[0].block_type, DynamicBlockType::AnchoredMicroTheory);
         assert_eq!(*runner.block_calls.lock().unwrap(), 3, "burned the full attempt budget before the backstop");
         assert_eq!(*runner.audit_calls.lock().unwrap(), 3, "every attempt reached the semantic critic");
+    }
+
+    /// The deterministic-retry bug this guards: a `MaxTurnsError` with an
+    /// EMPTY capture used to propagate as a transient error, so the loop
+    /// blind-retried the IDENTICAL input until the budget burned and surfaced
+    /// that raw error. Now `generate` reports an empty attempt instead —
+    /// attempts 2 and 3 must carry the corrective note, and the loop must
+    /// exhaust with ITS OWN error, not the turn-cap one.
+    #[tokio::test]
+    async fn a_turn_cap_without_a_publish_breaks_the_blind_retry_loop_with_corrective_feedback() {
+        let runner = Arc::new(MaxTurnsRunner::default());
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let err = service.start_class_notebook(None, &class_id).await.expect_err("never publishes a block");
+
+        let message = err.to_string();
+        assert!(
+            message.contains("el generador de notebooks no produjo un bloque válido"),
+            "the loop must exhaust with its own error, got: {message}"
+        );
+        assert!(!message.contains("MaxTurnsError"), "the raw turn-cap error must not leak past the loop");
+        assert_eq!(*runner.block_calls.lock().unwrap(), 3, "the full attempt budget is spent");
+        let inputs = runner.inputs.lock().unwrap();
+        assert_eq!(inputs.len(), 3);
+        assert!(!inputs[0].contains("NOTA_DEL_SISTEMA"), "the first attempt gets no corrective note");
+        assert!(inputs[1].contains("NOTA_DEL_SISTEMA"), "attempt 2 must carry the corrective note");
+        assert!(inputs[2].contains("NOTA_DEL_SISTEMA"), "attempt 3 must carry the corrective note");
     }
 
     /// The repair path behind the notebook's "Este bloque no se pudo mostrar

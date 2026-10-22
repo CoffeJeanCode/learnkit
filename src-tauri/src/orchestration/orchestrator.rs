@@ -355,7 +355,7 @@ impl Orchestrator {
 
         match self
             .runner
-            .run_diagnostic_execution(&def.model.provider_id, &def.model.model, &def.system_prompt, input, capture, scope)
+            .run_diagnostic_execution(&def.model.provider_id, &def.model.model, &def.system_prompt, input, capture.clone(), scope)
             .await
         {
             Ok(out) => {
@@ -379,6 +379,41 @@ impl Orchestrator {
                 Ok(output)
             }
             Err(e) => {
+                // Same salvage contract as `run_notebook_block_agent`: a turn
+                // cap firing while preparing the NEXT call means a prior tool
+                // call may already have written into the capture — ANY
+                // populated field is a deliverable the caller can apply.
+                let salvaged = {
+                    let c = capture.lock().unwrap_or_else(|err| err.into_inner());
+                    c.assessment.is_some()
+                        || c.diagnostic_battery.is_some()
+                        || c.propose_syllabus_plan.is_some()
+                        || c.propose_capstone_project.is_some()
+                        || c.confirm_syllabus_plan.is_some()
+                };
+                if salvaged {
+                    tracing::warn!(
+                        run_id = %ctx.run_id,
+                        error = %e,
+                        "agent run failed after {} tool call already captured; salvaging captured output", ctx.agent_id
+                    );
+                    dev_trace::trace_note(
+                        "salvage",
+                        "agent_capture_salvaged",
+                        &ctx.run_id,
+                        "salvaged_after_error",
+                        &[e.to_string()],
+                    );
+                    emit(app, AgentEvent::completed(&ctx.run_id, &ctx.agent_id, ""));
+                    return Ok(AgentOutput {
+                        run_id: ctx.run_id.clone(),
+                        agent_id: ctx.agent_id.clone(),
+                        parent_run_id: None,
+                        text: String::new(),
+                        tool_calls: vec![],
+                        duration_ms: started.elapsed().as_millis() as u64,
+                    });
+                }
                 tracing::warn!(
                     run_id = %ctx.run_id,
                     agent_id = %ctx.agent_id,
@@ -423,7 +458,7 @@ impl Orchestrator {
 
         match self
             .runner
-            .run_notebook_block_execution(&def.model.provider_id, &def.model.model, &def.system_prompt, input, capture)
+            .run_notebook_block_execution(&def.model.provider_id, &def.model.model, &def.system_prompt, input, capture.clone())
             .await
         {
             Ok(out) => {
@@ -446,6 +481,34 @@ impl Orchestrator {
                 Ok(output)
             }
             Err(e) => {
+                // Rig's MaxTurnsError fires while PREPARING the next model
+                // call — AFTER a prior turn's `publish_notebook_block` already
+                // executed and wrote into the capture. Returning Err here
+                // would discard a successfully published block, so a
+                // populated capture is salvaged as a completed run.
+                if capture.lock().unwrap_or_else(|err| err.into_inner()).is_some() {
+                    tracing::warn!(
+                        run_id = %ctx.run_id,
+                        error = %e,
+                        "agent run failed after {} tool call already published; salvaging captured output", ctx.agent_id
+                    );
+                    dev_trace::trace_note(
+                        "salvage",
+                        "agent_capture_salvaged",
+                        &ctx.run_id,
+                        "salvaged_after_error",
+                        &[e.to_string()],
+                    );
+                    emit(app, AgentEvent::completed(&ctx.run_id, &ctx.agent_id, ""));
+                    return Ok(AgentOutput {
+                        run_id: ctx.run_id.clone(),
+                        agent_id: ctx.agent_id.clone(),
+                        parent_run_id: None,
+                        text: String::new(),
+                        tool_calls: vec![],
+                        duration_ms: started.elapsed().as_millis() as u64,
+                    });
+                }
                 tracing::warn!(
                     run_id = %ctx.run_id,
                     agent_id = %ctx.agent_id,
@@ -725,10 +788,17 @@ fn emit(app: Option<&tauri::AppHandle>, event: AgentEvent) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+    use crate::agents::analyst_agent::ANALYST_AGENT_ID;
+    use crate::agents::notebook_agent::NOTEBOOK_AGENT_ID;
     use crate::domain::agent::AgentDefinition;
     use crate::domain::model::ModelRef;
+    use crate::domain::notebook::GeneratedSectionBlock;
+    use crate::domain::roadmap::{DiagnosticAssessmentArgs, EntryLevel};
     use crate::providers::factory::PromptOutput;
+    use crate::tools::{PublishedBlock, RoadmapCapture};
 
     struct MockRunner {
         text: String,
@@ -790,6 +860,114 @@ mod tests {
         r.register(a).expect("a");
         r.register(b).expect("b");
         r
+    }
+
+    fn max_turns_error() -> AppError {
+        AppError::AgentExecutionFailed("MaxTurnsError: reached max turns limit: 6".to_string())
+    }
+
+    fn anchor_block() -> GeneratedSectionBlock {
+        GeneratedSectionBlock::AnchoredMicroTheory {
+            title: "La gran imagen".to_string(),
+            intuitive_hook: "Piensa en una fábrica circular".to_string(),
+            analogy_boundary: None,
+            system_rule: "Explicación breve del tema.".to_string(),
+            frequent_error: "Confundir la entrada con la salida".to_string(),
+        }
+    }
+
+    /// Writes into the capture FIRST (simulating the tool call having
+    /// already executed) and only then fails with rig's turn cap — the exact
+    /// ordering that used to discard a successful deliverable.
+    /// `write_capture: false` scripts the other variant: the model burned
+    /// every turn without ever acting, so the capture stays empty.
+    struct SalvageRunner {
+        write_capture: bool,
+    }
+
+    #[async_trait]
+    impl PromptRunner for SalvageRunner {
+        async fn run(&self, _: &str, _: &str, _: &str, _: &str, _: &[String]) -> AppResult<PromptOutput> {
+            unreachable!("specialized flows never call the plain envelope runner")
+        }
+
+        async fn run_notebook_block_execution(
+            &self,
+            _provider_id: &str,
+            _model: &str,
+            _system_prompt: &str,
+            _input: &str,
+            capture: NotebookBlockCapture,
+        ) -> AppResult<PromptOutput> {
+            if self.write_capture {
+                *capture.lock().unwrap() = Some(PublishedBlock { block: anchor_block(), mechanical_template: false });
+            }
+            Err(max_turns_error())
+        }
+
+        async fn run_diagnostic_execution(
+            &self,
+            _provider_id: &str,
+            _model: &str,
+            _system_prompt: &str,
+            _input: &str,
+            capture: SharedRoadmapCapture,
+            _scope: DiagnosticToolScope,
+        ) -> AppResult<PromptOutput> {
+            if self.write_capture {
+                capture.lock().unwrap().assessment = Some(DiagnosticAssessmentArgs {
+                    topic: "Ciclo de Krebs".to_string(),
+                    target_goal: "Aprobar el examen".to_string(),
+                    entry_level: EntryLevel::TheoreticalFoundations,
+                    timeframe_weeks: 4,
+                    weekly_commitment_hours: 3.0,
+                });
+            }
+            Err(max_turns_error())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_turn_cap_after_a_successful_publish_is_salvaged_instead_of_discarded() {
+        let agents = agents_with(def(NOTEBOOK_AGENT_ID), def(ANALYST_AGENT_ID));
+        let orch = Orchestrator::new(agents, Arc::new(SalvageRunner { write_capture: true }));
+        let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
+
+        let out = orch.run_notebook_block_agent(None, NOTEBOOK_AGENT_ID, "go", capture.clone()).await.expect("salvaged");
+
+        assert!(out.text.is_empty(), "salvage carries no model text; the capture IS the deliverable");
+        assert!(!out.run_id.is_empty());
+        assert!(capture.lock().unwrap().is_some(), "the published block must survive the turn-cap error");
+    }
+
+    #[tokio::test]
+    async fn a_turn_cap_with_an_empty_capture_still_propagates_the_error() {
+        let agents = agents_with(def(NOTEBOOK_AGENT_ID), def(ANALYST_AGENT_ID));
+        let orch = Orchestrator::new(agents, Arc::new(SalvageRunner { write_capture: false }));
+        let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
+
+        let err = orch
+            .run_notebook_block_agent(None, NOTEBOOK_AGENT_ID, "go", capture.clone())
+            .await
+            .expect_err("nothing was captured, so the error must propagate");
+
+        assert!(matches!(&err, AppError::AgentExecutionFailed(msg) if msg.contains("MaxTurnsError")));
+        assert!(capture.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_diagnostic_turn_cap_after_a_captured_tool_call_is_salvaged() {
+        let agents = agents_with(def(NOTEBOOK_AGENT_ID), def(ANALYST_AGENT_ID));
+        let orch = Orchestrator::new(agents, Arc::new(SalvageRunner { write_capture: true }));
+        let capture: SharedRoadmapCapture = Arc::new(Mutex::new(RoadmapCapture::default()));
+
+        let out = orch
+            .run_diagnostic_agent(None, ANALYST_AGENT_ID, "go", capture.clone(), DiagnosticToolScope::Assessment)
+            .await
+            .expect("salvaged");
+
+        assert!(out.text.is_empty());
+        assert!(capture.lock().unwrap().assessment.is_some(), "the submitted assessment must survive the turn-cap error");
     }
 
     fn def(id: &str) -> AgentDefinition {
