@@ -157,7 +157,7 @@ sequenceDiagram
     ORCH->>RIG: run_diagnostic_execution
     RIG->>LLM: prompt
     LLM->>CAP: propose_syllabus_plan (Compuerta 3)
-    RS->>RS: apply_capture(): pace_hours_per_week = weeklyCommitmentHours<br/>+ syllabus_violations (anti-monolito, módulos ≤ 5h)
+    RS->>RS: apply_capture(): pace_hours_per_week = weeklyCommitmentHours<br/>+ syllabus_violations (anti-monolito: sesiones ≤ 4h, entre ceil(horas/4) y 5 por semana (mín. 2))
     RS-->>UI: closingQuestion + temario propuesto (NO persiste)
 
     alt el estudiante confirma

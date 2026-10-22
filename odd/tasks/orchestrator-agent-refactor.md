@@ -40,9 +40,9 @@ hours/sessions rule that force-closes sessions, and false-positive option-length
 ## Tasks
 - [x] T1 Terminal-tool stop hook + first-call-wins (factory.rs, tools/hooks.rs): all five flows; `PromptCancelled` mapped to success
 - [x] T2 Critic salvage before fail-open (orchestrator.rs, generation.rs)
-- [ ] T3 Session-count rule: `grounding.rs`, `synth.rs`, `roadmap_tools.rs` schema, tests
-- [ ] T4 Hybrid option-length rule (25% AND >25 chars) in `pedagogy_guardrails.rs`, tests
-- [ ] T5 Roadmap prompt: replace the hours section and the other "2 sesiones" mentions; docs line 160
+- [x] T3 Session-count rule: `grounding.rs`, `synth.rs`, `roadmap_tools.rs` schema, tests
+- [x] T4 Hybrid option-length rule (25% AND >25 chars) in `pedagogy_guardrails.rs`, tests
+- [x] T5 Roadmap prompt: replace the hours section and the other "2 sesiones" mentions; docs line 160
 
 ## Route declaration
 - T1-T5: delegated direct, one writer (mandatory trigger: 2+ non-trivial files, 4+ files touched).
@@ -50,6 +50,9 @@ hours/sessions rule that force-closes sessions, and false-positive option-length
 ## Progress / evidence
 - T1 `31a7e1c`: `cargo test --lib` 321 passed, 0 failed.
 - T2 `9845403`: `cargo test --lib` 324 passed, 0 failed.
+- T3 `4adf151`: `cargo test --lib` 331 passed, 0 failed.
+- T4 `cc83fb9`: `cargo test --lib` 334 passed, 0 failed.
+- T5 (this commit): `cargo test --lib` 334 passed, 0 failed (prompt/docs only, no pinned prompt text). `cargo clippy --lib` could not run (build script hit os error 32, file locked).
 
 ## Next step
-Commit pre-existing session work, then delegate the writer.
+Review the branch; push/PR remain the user's decision.

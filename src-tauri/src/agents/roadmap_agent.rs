@@ -147,28 +147,30 @@ de cada fallo real). Llama `propose_syllabus_plan` con:
 `paceHoursPerWeek` SIEMPRE es EXACTAMENTE igual a `weeklyCommitmentHours` del diagnóstico — nunca
 un valor distinto, reducido ni "más realista" a tu criterio. No lo recalcules ni lo ajustes: cópialo
 tal cual. La única cifra que de verdad tienes que construir con cuidado es la distribución de
-horas ENTRE las 2 sesiones de cada semana, de forma que sumen ese mismo número.
+horas ENTRE las sesiones de cada semana, de forma que sumen ese mismo número.
 
 Cada milestone es un hito de Diseño Inverso (Wiggins & McTighe): parte de qué capacidad operativa
-nueva necesita el estudiante para acercarse a `targetGoal`, y baja desde ahí a las 2 sesiones que
+nueva necesita el estudiante para acercarse a `targetGoal`, y baja desde ahí a las sesiones que
 la construyen — nunca al revés (nunca "esta semana toca el tema X porque toca"). Cada milestone
 lleva:
 - `title`: el hito de la semana en lenguaje llano — nunca un rótulo de proceso ("Fase 2", "Sprint
   3"), siempre el nombre real de lo que se construye o domina.
-- `deliverable`: resumen de una frase del hito de la semana (el detalle real va en las 2 sesiones).
+- `deliverable`: resumen de una frase del hito de la semana (el detalle real va en las sesiones).
 - `weeklyGoal`: la Meta Semanal — UNA o dos frases que digan QUÉ problema o fricción real resuelve
   esta semana y QUÉ capacidad operativa nueva desbloquea. Nunca una intención vaga
   ("familiarizarse con X", "ver los fundamentos de Y"): tiene que sonar a algo que hoy el
   estudiante NO puede hacer y al final de la semana SÍ.
 
-### DOSIFICACIÓN HORARIA HOMOGÉNEA (ANTI-MONOLITO) — EXACTAMENTE 2 SESIONES POR SEMANA
-Prohibido entregar una semana como un bloque de horas indiferenciado, y prohibido asignar más de
-4 horas a una sola sesión. `micromodules` lleva SIEMPRE EXACTAMENTE 2 elementos — nunca 1, nunca
-3 — repartidos de forma HOMOGÉNEA (diferencia máxima de 1 hora entre ambos): si
-`weeklyCommitmentHours` es 7, la división es 3.5h + 3.5h o 4h + 3h, nunca 5h + 2h. La suma de
-horas de las 2 sesiones debe igualar `weeklyCommitmentHours` EXACTAMENTE — súmalas tú mismo antes
-de responder. Cada sesión representa un tramo de días reales dentro de la semana (p. ej. "Sesión
-1: Días 1-2", "Sesión 2: Días 3-4") — eso va en su `label`.
+### DOSIFICACIÓN HORARIA HOMOGÉNEA (ANTI-MONOLITO) — SESIONES DE MÁXIMO 4 HORAS
+Prohibido entregar una semana como un bloque indiferenciado y PROHIBIDO asignar más de 4 horas a una sola sesión.
+Calcula el número de sesiones (`micromodules`) de cada semana según `weeklyCommitmentHours`:
+- Si `weeklyCommitmentHours` <= 8: usa EXACTAMENTE 2 sesiones por semana.
+- Si `weeklyCommitmentHours` > 8: usa `ceil(weeklyCommitmentHours / 4)` sesiones por semana (ej. para 14 horas usa 4 sesiones: 3.5h + 3.5h + 3.5h + 3.5h, o 4h + 4h + 3h + 3h).
+Reglas matemáticas estrictas (verifícalas antes de llamar a la herramienta):
+1. Ninguna sesión puede tener más de 4 horas (`hours <= 4`).
+2. La diferencia entre las sesiones de una misma semana no puede superar 1 hora.
+3. La suma exacta de `hours` de todas las sesiones de la semana DEBE ser idéntica a `paceHoursPerWeek` (`weeklyCommitmentHours`).
+Cada sesión representa un tramo de días reales dentro de la semana (p. ej. "Días 1-2", "Días 3-4") — eso va en su `label`.
 
 Cada sesión (cada elemento de `micromodules`) lleva:
 - `label`: el tramo de días + el título concreto de la sesión (p. ej. "Días 1-2 — Recorrer el
