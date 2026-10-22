@@ -12,9 +12,9 @@
 
     #[test]
     fn prompt_timeout_parses_clamps_and_falls_back() {
-        assert_eq!(parse_prompt_timeout(None), 120);
-        assert_eq!(parse_prompt_timeout(Some("abc")), 120);
-        assert_eq!(parse_prompt_timeout(Some("")), 120);
+        assert_eq!(parse_prompt_timeout(None), 200);
+        assert_eq!(parse_prompt_timeout(Some("abc")), 200);
+        assert_eq!(parse_prompt_timeout(Some("")), 200);
         assert_eq!(parse_prompt_timeout(Some(" 300 ")), 300);
         assert_eq!(parse_prompt_timeout(Some("5")), 30);
         assert_eq!(parse_prompt_timeout(Some("99999")), 900);
@@ -62,8 +62,8 @@
     }
 
     #[test]
-    fn output_budget_respects_deepseek_ceiling() {
-        assert_eq!(ProviderFactory::output_budget(&ProviderKind::DeepSeek), 8192);
+    fn output_budget_is_set_per_provider() {
+        assert_eq!(ProviderFactory::output_budget(&ProviderKind::DeepSeek), 131_072);
         assert_eq!(ProviderFactory::output_budget(&ProviderKind::Anthropic), 16384);
         assert_eq!(ProviderFactory::output_budget(&ProviderKind::OpenAI), 16384);
         assert_eq!(ProviderFactory::output_budget(&ProviderKind::Gemini), 16384);

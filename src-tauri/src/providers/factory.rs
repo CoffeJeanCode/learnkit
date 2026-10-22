@@ -15,7 +15,7 @@ use crate::tools::{
 /// Límite para una llamada al LLM: sin esto, una red colgada o un proveedor
 /// lento deja el comando Tauri pendiente para siempre y la ventana parece
 /// "no responder" (el composer queda deshabilitado en `sending` sin salida).
-const DEFAULT_PROMPT_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_PROMPT_TIMEOUT_SECS: u64 = 200;
 const MIN_PROMPT_TIMEOUT_SECS: u64 = 30;
 const MAX_PROMPT_TIMEOUT_SECS: u64 = 900;
 
@@ -86,13 +86,15 @@ impl ProviderFactory {
     /// Presupuesto de salida según proveedor. Los turnos de ejecución emiten
     /// artefactos enormes (un syllabus de 4 semanas + notebook completo
     /// caben justos en 8192 — observado `finish_reason=Length`), así que se
-    /// pide 16384 donde el proveedor lo admite. DeepSeek capa a 8192 en su
-    /// API: pedir más falla del lado del proveedor. MiMo admite hasta
-    /// 131072 tokens de salida.
+    /// pide 16384 donde el proveedor lo admite. DeepSeek y MiMo admiten
+    /// mucho más (DeepSeek V4: hasta 384K según su doc oficial; MiMo:
+    /// 131072): los modelos de razonamiento gastan salida pensando y con
+    /// 8192 agotan el presupuesto (`finish_reason=Length`) antes de emitir
+    /// la llamada a la herramienta. Deliberadamente por proveedor, nunca
+    /// por nombre de modelo.
     pub fn output_budget(provider: &ProviderKind) -> u64 {
         match provider {
-            ProviderKind::DeepSeek => 8192,
-            ProviderKind::Xiaomi => 131_072,
+            ProviderKind::DeepSeek | ProviderKind::Xiaomi => 131_072,
             _ => 16384,
         }
     }
