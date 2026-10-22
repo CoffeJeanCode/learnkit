@@ -11,6 +11,16 @@
     }
 
     #[test]
+    fn prompt_timeout_parses_clamps_and_falls_back() {
+        assert_eq!(parse_prompt_timeout(None), 120);
+        assert_eq!(parse_prompt_timeout(Some("abc")), 120);
+        assert_eq!(parse_prompt_timeout(Some("")), 120);
+        assert_eq!(parse_prompt_timeout(Some(" 300 ")), 300);
+        assert_eq!(parse_prompt_timeout(Some("5")), 30);
+        assert_eq!(parse_prompt_timeout(Some("99999")), 900);
+    }
+
+    #[test]
     fn resolve_model_prefers_override_then_default() {
         let mut cfg = openai_cfg();
         assert!(matches!(

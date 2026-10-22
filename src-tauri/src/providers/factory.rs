@@ -15,7 +15,23 @@ use crate::tools::{
 /// Límite para una llamada al LLM: sin esto, una red colgada o un proveedor
 /// lento deja el comando Tauri pendiente para siempre y la ventana parece
 /// "no responder" (el composer queda deshabilitado en `sending` sin salida).
-const PROMPT_TIMEOUT_SECS: u64 = 120;
+const DEFAULT_PROMPT_TIMEOUT_SECS: u64 = 120;
+const MIN_PROMPT_TIMEOUT_SECS: u64 = 30;
+const MAX_PROMPT_TIMEOUT_SECS: u64 = 900;
+
+/// Pure parse/clamp of the `LEARNKIT_PROMPT_TIMEOUT_SECS` override: invalid or
+/// missing values fall back to the app default, valid ones are clamped.
+fn parse_prompt_timeout(raw: Option<&str>) -> u64 {
+    raw.and_then(|v| v.trim().parse::<u64>().ok())
+        .map(|v| v.clamp(MIN_PROMPT_TIMEOUT_SECS, MAX_PROMPT_TIMEOUT_SECS))
+        .unwrap_or(DEFAULT_PROMPT_TIMEOUT_SECS)
+}
+
+/// Effective per-call timeout; `LEARNKIT_PROMPT_TIMEOUT_SECS` lets slow
+/// providers (e.g. live e2e runs) raise it without changing app defaults.
+fn prompt_timeout_secs() -> u64 {
+    parse_prompt_timeout(std::env::var("LEARNKIT_PROMPT_TIMEOUT_SECS").ok().as_deref())
+}
 /// Límite para los chequeos HTTP ligeros (verificar conexión, listar modelos).
 const HTTP_TIMEOUT_SECS: u64 = 30;
 /// Presupuesto de salida por defecto: cubre texto + args de herramientas de
@@ -167,10 +183,10 @@ impl ProviderFactory {
         } else {
             builder.build()
         };
-        let text = tokio::time::timeout(std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS), agent.prompt(input))
+        let text = tokio::time::timeout(std::time::Duration::from_secs(prompt_timeout_secs()), agent.prompt(input))
             .await
             .map_err(|_| {
-                AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s"))
+                AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs()))
             })?
             .map_err(|e| agent_error(&e))?;
         Ok(PromptOutput {
@@ -305,11 +321,11 @@ impl ProviderFactory {
         // last call ever happens.
         const DIAGNOSTIC_MAX_TURNS: usize = 6;
         let text = tokio::time::timeout(
-            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
+            std::time::Duration::from_secs(prompt_timeout_secs()),
             agent.prompt(input).max_turns(DIAGNOSTIC_MAX_TURNS),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?
         .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput {
             text,
@@ -408,11 +424,11 @@ impl ProviderFactory {
         // dependent) — same generous budget as the roadmap execution turn.
         const NOTEBOOK_BLOCK_MAX_TURNS: usize = 6;
         let text = tokio::time::timeout(
-            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
+            std::time::Duration::from_secs(prompt_timeout_secs()),
             agent.prompt(input).max_turns(NOTEBOOK_BLOCK_MAX_TURNS),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?
         .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["publish_notebook_block".to_string()] })
     }
@@ -506,11 +522,11 @@ impl ProviderFactory {
             AgentBuilder::new(model).preamble(system_prompt).max_tokens(PLAIN_MAX_TOKENS).tool(GradeGateSubmissionTool(capture)).build();
         const GATE_GRADING_MAX_TURNS: usize = 4;
         let text = tokio::time::timeout(
-            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
+            std::time::Duration::from_secs(prompt_timeout_secs()),
             agent.prompt(input).max_turns(GATE_GRADING_MAX_TURNS),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?
         .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["grade_gate_submission".to_string()] })
     }
@@ -606,11 +622,11 @@ impl ProviderFactory {
             .build();
         const CLOSURE_GRADING_MAX_TURNS: usize = 4;
         let text = tokio::time::timeout(
-            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
+            std::time::Duration::from_secs(prompt_timeout_secs()),
             agent.prompt(input).max_turns(CLOSURE_GRADING_MAX_TURNS),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?
         .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["grade_closure_submission".to_string()] })
     }
@@ -698,11 +714,11 @@ impl ProviderFactory {
         let agent = AgentBuilder::new(model).preamble(system_prompt).max_tokens(PLAIN_MAX_TOKENS).tool(SubmitBlockAuditTool(capture)).build();
         const BLOCK_AUDIT_MAX_TURNS: usize = 4;
         let text = tokio::time::timeout(
-            std::time::Duration::from_secs(PROMPT_TIMEOUT_SECS),
+            std::time::Duration::from_secs(prompt_timeout_secs()),
             agent.prompt(input).max_turns(BLOCK_AUDIT_MAX_TURNS),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {PROMPT_TIMEOUT_SECS}s")))?
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?
         .map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["submit_block_audit".to_string()] })
     }
