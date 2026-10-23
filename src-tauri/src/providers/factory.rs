@@ -27,6 +27,18 @@ fn parse_prompt_timeout(raw: Option<&str>) -> u64 {
         .unwrap_or(DEFAULT_PROMPT_TIMEOUT_SECS)
 }
 
+/// Per-call ceiling for one notebook block. A reasoning model spends ~5k
+/// tokens thinking and then writes a multi-thousand-token tool payload, which
+/// does not fit the 200 s default; `LEARNKIT_PROMPT_TIMEOUT_SECS` still wins.
+const NOTEBOOK_BLOCK_TIMEOUT_SECS: u64 = 420;
+
+fn notebook_block_timeout_secs() -> u64 {
+    match std::env::var("LEARNKIT_PROMPT_TIMEOUT_SECS") {
+        Ok(v) => parse_prompt_timeout(Some(&v)),
+        Err(_) => NOTEBOOK_BLOCK_TIMEOUT_SECS,
+    }
+}
+
 /// Effective per-call timeout; `LEARNKIT_PROMPT_TIMEOUT_SECS` lets slow
 /// providers (e.g. live e2e runs) raise it without changing app defaults.
 fn prompt_timeout_secs() -> u64 {
@@ -444,15 +456,18 @@ impl ProviderFactory {
         // retired whole-notebook call, just spent on one block instead of 3-5.
         let hook = stop_when_some(capture.clone());
         let agent = AgentBuilder::new(model).preamble(system_prompt).max_tokens(max_tokens).tool(PublishNotebookBlockTool(capture)).build();
-        // A single tool call still sometimes needs a follow-up turn (provider
-        // dependent) — same generous budget as the roadmap execution turn.
-        const NOTEBOOK_BLOCK_MAX_TURNS: usize = 6;
+        // One valid call ends the loop (stop hook), so extra turns only exist to
+        // correct a malformed call (1-2 retries). Every extra turn re-sends the
+        // whole context to a reasoning model: 6 turns ran into the 200 s
+        // timeout. Fail fast instead and let the outer loop's corrective note
+        // drive the retry.
+        const NOTEBOOK_BLOCK_MAX_TURNS: usize = 3;
         let text = tokio::time::timeout(
-            std::time::Duration::from_secs(prompt_timeout_secs()),
+            std::time::Duration::from_secs(notebook_block_timeout_secs()),
             agent.prompt(input).max_turns(NOTEBOOK_BLOCK_MAX_TURNS).add_hook(hook),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?;
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", notebook_block_timeout_secs())))?;
         let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["publish_notebook_block".to_string()] })
     }

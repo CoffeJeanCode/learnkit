@@ -209,6 +209,11 @@ pub(super) fn render_next_block_input(
             "canClose": mastery.has_passed_conceptual && mastery.has_passed_practice,
         },
     });
+    // The deterministic review rejects two adjacent blocks of one type, and a
+    // rejection costs a whole extra generation — say it up front.
+    if let Some(last) = existing_blocks.last() {
+        context["cannotRepeatBlockType"] = serde_json::json!(last.block_type.as_str());
+    }
     if let Some(profile) = diagnostic_profile {
         context["diagnosticProfile"] = profile.clone();
     }

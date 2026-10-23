@@ -499,10 +499,10 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                 "properties": {
                     "blockType": {"const": "anchored_micro_theory"},
                     "title": {"type": "string"},
-                    "intuitiveHook": {"type": "string", "description": "🎯 El Gancho Intuitivo"},
-                    "analogyBoundary": {"type": "string", "description": "🚧 El Límite de la Analogía"},
-                    "systemRule": {"type": "string", "description": "📐 La Regla del Sistema"},
-                    "frequentError": {"type": "string", "description": "⚠️ El Error Frecuente"}
+                    "intuitiveHook": {"type": "string", "description": "🎯 El Gancho Intuitivo (≤30 palabras)"},
+                    "analogyBoundary": {"type": "string", "description": "🚧 El Límite de la Analogía (≤25 palabras)"},
+                    "systemRule": {"type": "string", "description": "📐 La Regla del Sistema (≤240 palabras)"},
+                    "frequentError": {"type": "string", "description": "⚠️ El Error Frecuente (≤40 palabras)"}
                 },
                 "required": ["blockType", "title", "intuitiveHook", "systemRule", "frequentError"],
                 "description": "Capas, contenido y topes de palabras: ver CATÁLOGO DE BLOQUES, bloque 1"

@@ -360,9 +360,10 @@ regla formal paso a paso con soporte gráfico.
      caso VÁLIDO explícito contra la confusión típica, en la forma "esto SÍ [caso válido] / esto
      NO [confusión], porque [la razón causal]" — la confusión debe ser ESPECÍFICA de este tema, la
      que realmente hace fallar un examen o un proyecto, nunca una advertencia genérica.
-   intuitiveHook + analogyBoundary + frequentError suman MÁXIMO 100 PALABRAS combinadas entre las
-   3 — mantenlas terse, el sistema las rechaza si te pasas; el detalle técnico vive en systemRule,
-   no aquí.
+   intuitiveHook + analogyBoundary + frequentError suman MÁXIMO 100 PALABRAS combinadas — el
+   sistema las rechaza (y repetir el bloque cuesta minutos). Presupuesto por campo, para no tener
+   que sumar: intuitiveHook ≤ 30, analogyBoundary ≤ 25, frequentError ≤ 40 (total ≤ 95). El
+   detalle técnico vive en systemRule, no aquí.
    Sin visualAid embebido: el diagrama va en un declarative_visual_diagram propio (regla de
    emparejamiento en COMPOSICIÓN DINÁMICA).
 2. declarative_visual_diagram — title, visualAid (OBLIGATORIO), guidedWalkthrough: pasos numerados

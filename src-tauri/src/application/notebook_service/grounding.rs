@@ -299,14 +299,15 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
                     "bloque {i} (anchored_micro_theory): systemRule tiene {system_rule_words} palabras, máximo {MAX_SYSTEM_RULE_WORDS}"
                 ));
             }
-            let other_layers_words = [intuitive_hook.as_str(), analogy_boundary.as_deref().unwrap_or(""), frequent_error.as_str()]
-                .iter()
-                .map(|s| s.split_whitespace().count())
-                .sum::<usize>();
+            let counts = [intuitive_hook.as_str(), analogy_boundary.as_deref().unwrap_or(""), frequent_error.as_str()]
+                .map(|s| s.split_whitespace().count());
+            let other_layers_words: usize = counts.iter().sum();
             if other_layers_words > MAX_OTHER_LAYERS_WORDS {
+                let [hook, boundary, error] = counts;
                 v.push(format!(
-                    "bloque {i} (anchored_micro_theory): intuitiveHook + analogyBoundary + frequentError suman {other_layers_words} palabras, \
-                     máximo {MAX_OTHER_LAYERS_WORDS} combinadas — deben quedarse terse, el detalle técnico vive en systemRule"
+                    "bloque {i} (anchored_micro_theory): intuitiveHook ({hook}) + analogyBoundary ({boundary}) + frequentError ({error}) \
+                     suman {other_layers_words} palabras, máximo {MAX_OTHER_LAYERS_WORDS} combinadas (≤30/≤25/≤40 por campo) — recorta \
+                     el campo más largo; el detalle técnico vive en systemRule"
                 ));
             }
         }
