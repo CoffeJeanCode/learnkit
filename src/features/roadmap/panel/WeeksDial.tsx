@@ -87,10 +87,6 @@ export function WeeksDial({ value, onChange, disabled }: { value: string; onChan
             {n}
           </button>
         ))}
-        <label className="dial-type">
-          <span className="sr-only">Escribe las semanas</span>
-          <input inputMode="numeric" value={value} onChange={(e) => onChange(e.target.value)} placeholder="otra" disabled={disabled} />
-        </label>
       </div>
     </div>
   );

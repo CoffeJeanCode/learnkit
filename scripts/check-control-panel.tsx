@@ -27,7 +27,8 @@ import {
   toggleDay,
   weeksToAngle,
 } from "../src/features/roadmap/panel/panelModel";
-import { emptyBasics } from "../src/features/roadmap/profileFormModel";
+import { STARTING_DRAFT } from "../src/features/roadmap/panel/ControlPanel";
+import { basicsErrors, emptyBasics } from "../src/features/roadmap/profileFormModel";
 import { ContextQuestionSetSchema, UNKNOWN_ANSWER } from "../src/lib/schemas";
 
 // ---- Dial ----------------------------------------------------------------------------
@@ -93,12 +94,15 @@ assert.deepEqual(loadOrder(throwing), [...DEFAULT_ORDER], "a store that throws f
 saveOrder(throwing, DEFAULT_ORDER);
 assert.deepEqual(loadOrder(null), [...DEFAULT_ORDER], "no storage at all");
 
+// ---- Starting point: only two things left to type
+assert.deepEqual(Object.keys(basicsErrors(STARTING_DRAFT)).sort(), ["targetGoal", "topic"], "weeks and time start filled");
+
 // ---- Rendering -----------------------------------------------------------------------
 const noop = () => {};
 const board = renderToStaticMarkup(
   <ControlPanel initialBasics={null} questions={null} busy={false} serverError={null} onPropose={noop} onSubmit={noop} />,
 );
-for (const text of ["Qué aprender", "Qué lograr", "Semanas", "Tu ritmo", "Continuar", "Misión 1"]) assert.ok(board.includes(text), `board shows ${text}`);
+for (const text of ["¿Qué quieres aprender?", "¿Qué quieres lograr", "Semanas", "Tu ritmo", "8 semanas", "Continuar", "Personalizar"]) assert.ok(board.includes(text), `board shows ${text}`);
 
 const dial = renderToStaticMarkup(<WeeksDial value="8" onChange={noop} />);
 assert.ok(dial.includes('role="slider"') && dial.includes('aria-valuenow="8"') && dial.includes('aria-valuetext="8 semanas"'));
@@ -119,6 +123,6 @@ assert.ok(cards.includes('aria-pressed="true"'), "the chosen card is pressed");
 const mission2 = renderToStaticMarkup(
   <ControlPanel initialBasics={{ topic: "Linux", targetGoal: "g", timeframeWeeks: 8, weeklyCommitmentHours: 4 }} questions={set} busy={false} serverError={null} onPropose={noop} onSubmit={noop} />,
 );
-assert.ok(mission2.includes("Armar mi plan") && mission2.includes("Misión 2"), "questions switch to mission 2");
+assert.ok(mission2.includes("Armar mi plan") && !mission2.includes("Continuar"), "questions switch to step 2");
 
 console.log("control panel: ok");
