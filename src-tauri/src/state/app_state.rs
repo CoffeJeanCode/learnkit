@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::agents::roadmap_agent::ROADMAP_AGENT_ID;
 use crate::agents::{AgentRegistry, basic_agent};
-use crate::application::{AgentService, LexicalAssistantService, NotebookService, ProviderService, RoadmapService, WorkflowService};
+use crate::application::{AgentService, LexicalAssistantService, NotebookService, ProviderService, ResearchService, RoadmapService, WorkflowService};
 use crate::domain::model::ModelRef;
 use crate::error::AppResult;
 use crate::notebook_store::NotebookStore;
@@ -23,6 +23,7 @@ pub struct AppState {
     pub agent_service: AgentService,
     pub workflow_service: WorkflowService,
     pub roadmap_service: RoadmapService,
+    pub research_service: Arc<ResearchService>,
     pub notebook_service: NotebookService,
     pub lexical_assistant_service: LexicalAssistantService,
     pub data_dir: PathBuf,
@@ -93,6 +94,21 @@ impl AppState {
         if agents.register(crate::agents::lexical_assistant_agent::definition()).is_ok() {
             let _ = store.save_agents(&agents.list());
         }
+        if agents.register(crate::agents::context_questions_agent::definition()).is_ok() {
+            let _ = store.save_agents(&agents.list());
+        }
+        if agents.register(crate::agents::research_planner_agent::definition()).is_ok() {
+            let _ = store.save_agents(&agents.list());
+        }
+        if agents.register(crate::agents::research_curator_agent::definition()).is_ok() {
+            let _ = store.save_agents(&agents.list());
+        }
+        if agents.register(crate::agents::plan_outline_agent::definition()).is_ok() {
+            let _ = store.save_agents(&agents.list());
+        }
+        if agents.register(crate::agents::plan_week_agent::definition()).is_ok() {
+            let _ = store.save_agents(&agents.list());
+        }
 
         let notebook_store = NotebookStore::open(data_dir.join("learnkit").join("notebook.sqlite3"))?;
 
@@ -108,7 +124,7 @@ impl AppState {
             AgentService::new(Arc::clone(&agents), Arc::clone(&orchestrator), store.clone());
         let workflow_service = WorkflowService::new(Arc::clone(&orchestrator));
         let roadmap_service =
-            RoadmapService::new(Arc::clone(&orchestrator), store.clone(), notebook_store.clone());
+            RoadmapService::new(Arc::clone(&orchestrator), store.clone(), notebook_store.clone()).with_plan_in_parts();
         // Cleanup for the "borré la sesión y las clases seguían ahí" bug:
         // courses whose owning session is already gone (deleted before
         // delete_session cascaded) are removed on every launch, so the
@@ -118,6 +134,14 @@ impl AppState {
             Ok(n) => tracing::info!(removed_courses = n, "swept courses orphaned by deleted sessions"),
             Err(e) => tracing::warn!(error = %e, "orphan course sweep failed (non-fatal)"),
         }
+        // A research that was `running` when the app last closed never finished;
+        // it must not block a new attempt forever.
+        match notebook_store.fail_interrupted_research() {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(reset = n, "reset resource research interrupted by the last shutdown"),
+            Err(e) => tracing::warn!(error = %e, "interrupted-research sweep failed (non-fatal)"),
+        }
+        let research_service = Arc::new(ResearchService::new(Arc::clone(&orchestrator), notebook_store.clone(), Arc::clone(&vault)));
         let notebook_service = NotebookService::new(notebook_store, Arc::clone(&orchestrator));
         let lexical_assistant_service = LexicalAssistantService::new(Arc::clone(&orchestrator));
 
@@ -133,6 +157,7 @@ impl AppState {
             agent_service,
             workflow_service,
             roadmap_service,
+            research_service,
             notebook_service,
             lexical_assistant_service,
             data_dir,
@@ -147,7 +172,7 @@ impl AppState {
 
     /// Built-in agents that follow the active provider (the user-authored
     /// demo agents keep their own pinned model).
-    fn pinned_agent_ids() -> [&'static str; 7] {
+    fn pinned_agent_ids() -> [&'static str; 12] {
         [
             ROADMAP_AGENT_ID,
             crate::agents::notebook_agent::NOTEBOOK_AGENT_ID,
@@ -156,8 +181,29 @@ impl AppState {
             crate::agents::analyst_agent::ANALYST_AGENT_ID,
             crate::agents::pedagogical_critic_agent::PEDAGOGICAL_CRITIC_AGENT_ID,
             crate::agents::lexical_assistant_agent::LEXICAL_ASSISTANT_AGENT_ID,
+            crate::agents::research_planner_agent::RESEARCH_PLANNER_AGENT_ID,
+            crate::agents::research_curator_agent::RESEARCH_CURATOR_AGENT_ID,
+            crate::agents::context_questions_agent::CONTEXT_QUESTIONS_AGENT_ID,
+            // The syllabus written in parts: its content decides the learner's
+            // plan, so both steps stay on the main model.
+            crate::agents::plan_outline_agent::PLAN_OUTLINE_AGENT_ID,
+            crate::agents::plan_week_agent::PLAN_WEEK_AGENT_ID,
         ]
     }
+
+    /// Pinned agents whose output is short and never grades the student: they
+    /// run on the provider's fast model (see `ProviderKind::light_agent_model`).
+    /// The generator, the graders and the roadmap agents stay on the main one.
+    const LIGHT_AGENT_IDS: [&'static str; 5] = [
+        crate::agents::pedagogical_critic_agent::PEDAGOGICAL_CRITIC_AGENT_ID,
+        crate::agents::lexical_assistant_agent::LEXICAL_ASSISTANT_AGENT_ID,
+        // Both research steps are bounded by code: the planner's queries are
+        // capped and the curator can only choose among real hits.
+        crate::agents::research_planner_agent::RESEARCH_PLANNER_AGENT_ID,
+        crate::agents::research_curator_agent::RESEARCH_CURATOR_AGENT_ID,
+        // The intake questions are validated in code and fall back to a generic set.
+        crate::agents::context_questions_agent::CONTEXT_QUESTIONS_AGENT_ID,
+    ];
 
     pub fn active_provider_id(&self) -> Option<String> {
         self.active_provider.read().ok().and_then(|g| g.clone())
@@ -201,10 +247,13 @@ impl AppState {
             .filter(|m| !m.trim().is_empty())
             .or_else(|| config.provider.suggested_models().first().map(|m| m.to_string()));
         let Some(model) = model else { return };
-        let target = ModelRef::new(id, model);
+        let light_model = config.provider.light_agent_model(&model);
+        let main_target = ModelRef::new(id.clone(), model);
+        let light_target = ModelRef::new(id, light_model);
         let mut changed = false;
         for agent_id in Self::pinned_agent_ids() {
             let Ok(mut def) = self.agents.get(agent_id) else { continue };
+            let target = if Self::LIGHT_AGENT_IDS.contains(&agent_id) { &light_target } else { &main_target };
             if def.model.provider_id == target.provider_id && def.model.model == target.model {
                 continue;
             }

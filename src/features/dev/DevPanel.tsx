@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { buildTimeline, filterTimeline, isProblem, type DevTraceEntry, type TimelineItem } from "../../lib/devTrace";
 import { useDev } from "../../stores/dev";
 
@@ -11,6 +11,15 @@ function pretty(v: unknown): string {
   }
 }
 
+/** A drag across a `<summary>` to select log text also fires a click on
+ *  mouseup — which would toggle the `<details>` and destroy the selection the
+ *  user just made. When a selection is non-empty we swallow that click so the
+ *  logs stay selectable/copyable (clicking without dragging still toggles). */
+function keepSelectionOnClick(ev: ReactMouseEvent<HTMLElement>) {
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed) ev.preventDefault();
+}
+
 function time(ms: number): string {
   return new Date(ms).toLocaleTimeString();
 }
@@ -18,7 +27,7 @@ function time(ms: number): string {
 function Section({ title, text }: { title: string; text: string }) {
   return (
     <details className="dev-section">
-      <summary>
+      <summary onClick={keepSelectionOnClick}>
         {title} <span className="muted">({text.length.toLocaleString()} car.)</span>
       </summary>
       <pre className="dev-pre">{text}</pre>
@@ -40,7 +49,7 @@ function Row({ item }: { item: TimelineItem }) {
   const bad = isProblem(e) || tools.some(isProblem);
   return (
     <details className={"dev-row" + (bad ? " bad" : "")}>
-      <summary>
+      <summary onClick={keepSelectionOnClick}>
         <span className="muted">{time(e.tsMs)}</span> <Title e={e} />
         {e.model && (
           <span className="badge">
@@ -116,33 +125,40 @@ export function DevPanel() {
   return (
     <aside className="dev-panel" aria-label="Panel de desarrollador">
       <div className="dev-bar">
-        <strong>🛠 Desarrollador</strong>
+        <div className="dev-bar-head">
+          <strong>🛠 Desarrollador</strong>
+          <button onClick={() => setPanelOpen(false)} aria-label="Cerrar panel">
+            ✕
+          </button>
+        </div>
         <span className="muted">
           {entries.length} eventos · {problems} con incidencias
         </span>
-        <label className="hint">
-          <input type="checkbox" checked={onlyProblems} onChange={(e) => setOnlyProblems(e.target.checked)} /> solo
-          incidencias
-        </label>
-        {scopes.length > 1 && (
-          <select value={scope} onChange={(e) => setScope(e.target.value)} aria-label="Filtrar por clase o sesión">
-            <option value="">todas las clases/sesiones</option>
-            {scopes.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
-        )}
-        <button onClick={() => void copy()}>{copied ? "Copiado" : "Copiar JSON"}</button>
-        <button onClick={() => void clear()}>Limpiar</button>
-        <button onClick={() => setPanelOpen(false)} aria-label="Cerrar panel">
-          ✕
-        </button>
+        <div className="dev-bar-filters">
+          <label className="hint">
+            <input type="checkbox" checked={onlyProblems} onChange={(e) => setOnlyProblems(e.target.checked)} /> solo
+            incidencias
+          </label>
+          {scopes.length > 1 && (
+            <select value={scope} onChange={(e) => setScope(e.target.value)} aria-label="Filtrar por clase o sesión">
+              <option value="">todas las clases/sesiones</option>
+              {scopes.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+        <div className="dev-bar-actions">
+          <button onClick={() => void copy()}>{copied ? "Copiado" : "Copiar JSON"}</button>
+          <button onClick={() => void clear()}>Limpiar</button>
+        </div>
       </div>
       <p className="hint dev-note">
         Se ve el prompt inicial, cada llamada a tool y la salida final; los turnos intermedios internos del modelo no
-        son interceptables. Las tools se asocian a su ejecución por ventana de tiempo.
+        son interceptables. Las tools se asocian a su ejecución por ventana de tiempo. Selecciona cualquier texto del
+        log para copiarlo (Ctrl+C).
       </p>
       <div className="dev-list">
         {shown.length === 0 ? (

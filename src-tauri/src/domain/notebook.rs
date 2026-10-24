@@ -146,6 +146,20 @@ pub struct DiagnosticBattery {
     pub questions: Vec<DiagnosticQuestion>,
 }
 
+impl DiagnosticBattery {
+    /// Reorders every question's options in code. The model tends to write the
+    /// correct option first, so the answer key's position is never left to it.
+    /// Seeded from the question content: stable across runs, varied across
+    /// questions. `correct_option` is matched by text, so it stays valid.
+    pub fn shuffle_options(&mut self) {
+        use crate::domain::block_templates::{fnv, shuffle};
+        for q in &mut self.questions {
+            let seed = fnv(&format!("{}|{}", q.prompt, q.correct_option));
+            shuffle(&mut q.options, seed);
+        }
+    }
+}
+
 /// The persisted, course-scoped shape: the generated battery plus whatever
 /// the student has answered so far (`answers`, keyed by question index as a
 /// string) — mutated in place by `save_diagnostic_battery_answers`,

@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::domain::message::NotebookBlockEvent;
 use crate::domain::notebook::NotebookBlock;
+use crate::tools::block_stream::BlockStreamUpdate;
 
 pub(super) fn emit_block_generating(app: Option<&AppHandle>, document_id: &str) {
     emit(app, "notebook_block://generating", NotebookBlockEvent::generating(document_id));
@@ -19,6 +20,16 @@ pub(super) fn emit_block_ready(app: Option<&AppHandle>, document_id: &str, block
 
 pub(super) fn emit_block_error(app: Option<&AppHandle>, document_id: &str, message: &str) {
     emit(app, "notebook_block://error", NotebookBlockEvent::error(document_id, message));
+}
+
+/// Live progress of the block being written (`tools::block_stream`): either a
+/// sanitized preview or the amount of reasoning so far.
+pub(super) fn emit_block_delta(app: Option<&AppHandle>, document_id: &str, attempt: u8, update: BlockStreamUpdate) {
+    let event = match update {
+        BlockStreamUpdate::Preview(preview) => NotebookBlockEvent::delta(document_id, attempt, Some(preview), None),
+        BlockStreamUpdate::Reasoning { chars } => NotebookBlockEvent::delta(document_id, attempt, None, Some(chars)),
+    };
+    emit(app, "notebook_block://delta", event);
 }
 
 fn emit(app: Option<&AppHandle>, channel: &str, event: NotebookBlockEvent) {

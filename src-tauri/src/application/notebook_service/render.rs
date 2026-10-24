@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::lesson_composition::{infer_profile, suggest_next_block, suggested_sequence};
+use crate::domain::resources::ClassResource;
 use crate::domain::notebook::{BlockStatus, DynamicBlockType, GateAttempt, GeneratedSectionBlock, NotebookBlock};
 use crate::domain::scaffolding;
 use crate::notebook_store::ClassGenerationContext;
@@ -37,6 +38,19 @@ fn prior_blocks_content(existing_blocks: &[NotebookBlock]) -> Vec<serde_json::Va
             serde_json::json!({ "blockType": b.block_type.as_str(), "content": content })
         })
         .collect()
+}
+
+/// The curated web resources of this class as the generator should read them:
+/// title, kind and what to do first — DELIBERATELY without the URL. The app
+/// shows the links in its own panel, so the generator names a resource by its
+/// title and has no link it could mistype or invent in a block.
+fn class_resources_json(resources: &[ClassResource]) -> serde_json::Value {
+    serde_json::Value::Array(
+        resources
+            .iter()
+            .map(|r| serde_json::json!({ "title": r.title, "kind": r.kind, "why": r.why, "whatToDo": r.what_to_do }))
+            .collect(),
+    )
 }
 
 /// Reduces `LearnerCognitiveMemory` down to exactly what ONE block-generation
@@ -182,6 +196,7 @@ pub(super) fn render_next_block_input(
     learner_memory: &LearnerCognitiveMemory,
     now_ms: i64,
     gate_attempts: &[GateAttempt],
+    resources: &[ClassResource],
 ) -> String {
     let mut context = serde_json::json!({
         "course": {
@@ -218,6 +233,22 @@ pub(super) fn render_next_block_input(
         context["diagnosticProfile"] = profile.clone();
     }
     context["learnerMemory"] = render_learner_memory_context(learner_memory, ctx, now_ms);
+    // "Extra theory first" can't be honored right after a theory/diagram block
+    // (adjacent repeats are rejected), and it fights `nextShouldCheck`. Once
+    // the scaffolding theory is down, the directive becomes "check, guided".
+    if matches!(
+        existing_blocks.last().map(|b| b.block_type),
+        Some(DynamicBlockType::AnchoredMicroTheory | DynamicBlockType::DeclarativeVisualDiagram)
+    ) && context["learnerMemory"].get("scaffoldingDirective").is_some()
+    {
+        context["learnerMemory"]["scaffoldingDirective"] = serde_json::Value::String(
+            "andamiaje_fuerte: la teoría guiada de apoyo ya está; el SIGUIENTE bloque es una compuerta chica o una práctica              guiada/faded que la compruebe, no más teoría."
+                .to_string(),
+        );
+    }
+    if !resources.is_empty() {
+        context["resources"] = class_resources_json(resources);
+    }
     if let Some(hint) = composition_hint(ctx, existing_blocks, mastery, block_type_usage) {
         context["compositionHint"] = hint;
     }

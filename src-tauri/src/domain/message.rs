@@ -94,24 +94,50 @@ pub struct NotebookBlockEvent {
     /// Present only for `event == "error"`.
     pub message: Option<String>,
     pub retriable: Option<bool>,
+    /// Only for `event == "delta"`: which generator attempt this progress
+    /// belongs to (1-based). A higher number than the one on screen means the
+    /// previous draft was rejected and a new one started: the UI resets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u8>,
+    /// Only for `event == "delta"`: the SANITIZED partial block
+    /// (`tools::block_stream::preview_from_partial`) — block type plus a
+    /// whitelist of reading-only prose, never raw tool arguments or answer keys.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<serde_json::Value>,
+    /// Only for `event == "delta"`: characters the model has reasoned so far
+    /// (an amount, never the text).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_chars: Option<usize>,
 }
 
 impl NotebookBlockEvent {
+    fn bare(event: &str, document_id: &str) -> Self {
+        Self {
+            event: event.to_string(),
+            document_id: document_id.to_string(),
+            block: None,
+            message: None,
+            retriable: None,
+            attempt: None,
+            preview: None,
+            reasoning_chars: None,
+        }
+    }
+
     pub fn generating(document_id: &str) -> Self {
-        Self { event: "generating".to_string(), document_id: document_id.to_string(), block: None, message: None, retriable: None }
+        Self::bare("generating", document_id)
     }
 
     pub fn ready(document_id: &str, block: crate::domain::notebook::NotebookBlock) -> Self {
-        Self { event: "ready".to_string(), document_id: document_id.to_string(), block: Some(block), message: None, retriable: None }
+        Self { block: Some(block), ..Self::bare("ready", document_id) }
     }
 
     pub fn error(document_id: &str, message: &str) -> Self {
-        Self {
-            event: "error".to_string(),
-            document_id: document_id.to_string(),
-            block: None,
-            message: Some(message.to_string()),
-            retriable: Some(true),
-        }
+        Self { message: Some(message.to_string()), retriable: Some(true), ..Self::bare("error", document_id) }
+    }
+
+    /// Live progress while a block is still being written.
+    pub fn delta(document_id: &str, attempt: u8, preview: Option<serde_json::Value>, reasoning_chars: Option<usize>) -> Self {
+        Self { attempt: Some(attempt), preview, reasoning_chars, ..Self::bare("delta", document_id) }
     }
 }

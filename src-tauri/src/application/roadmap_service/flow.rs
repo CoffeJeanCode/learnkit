@@ -7,6 +7,7 @@ use std::sync::Mutex;
 
 use crate::agents::analyst_agent::ANALYST_AGENT_ID;
 use crate::agents::roadmap_agent::ROADMAP_AGENT_ID;
+use crate::domain::calibration::calibrate;
 use crate::tools::{DiagnosticToolScope, RoadmapCapture, SharedRoadmapCapture};
 
 use super::*;
@@ -22,20 +23,10 @@ impl RoadmapService {
     /// normal chat turn would. Logs the proposal text into the chat history
     /// like any other assistant turn.
     pub(super) async fn finish_diagnostic_stage(&self, app: Option<&tauri::AppHandle>, mut session: RoadmapSession) -> AppResult<RoadmapTurnResult> {
-        let profile = session
-            .learner_profile_card
-            .clone()
-            .ok_or_else(|| AppError::InvalidInput("session has no diagnostic assessment yet".to_string()))?;
-        let pending = session.pending_diagnostic_battery.clone().expect("checked by both callers");
-        let (text, had_violation) = self
-            .run_diagnostic_turn_with_grounding_retry(
-                app,
-                &mut session,
-                ROADMAP_AGENT_ID,
-                DiagnosticToolScope::Propose,
-                |s| render_propose_syllabus_input(&profile, Some(&pending), &s.last_rejection_reasons),
-            )
-            .await?;
+        if session.learner_profile_card.is_none() {
+            return Err(AppError::InvalidInput("session has no diagnostic assessment yet".to_string()));
+        }
+        let (text, had_violation) = self.run_propose_turn(app, &mut session, None).await?;
         session.consecutive_grounding_failures = if had_violation { session.consecutive_grounding_failures + 1 } else { 0 };
         Self::record_gather_turn_if_unstable(&mut session);
         let text = text.trim().to_string();
@@ -176,6 +167,8 @@ impl RoadmapService {
                 None => {
                     let violations = diagnostic_battery_violations(&battery);
                     if violations.is_empty() {
+                        let mut battery = battery;
+                        battery.shuffle_options();
                         session.pending_diagnostic_battery = Some(DiagnosticBatteryState { battery, answers: Default::default() });
                         session.last_rejection_reasons.clear();
                     } else {
@@ -350,6 +343,46 @@ impl RoadmapService {
             && session.proposed_plan.is_none()
     }
 
+    /// Runs whichever hand-off the saved profile is waiting on — Gate 2's
+    /// battery, or Gate 3a's proposal — and returns its `(text, had_violation)`,
+    /// or `None` when neither applies. Only ONE can apply per call (they are
+    /// sequential stages). Shared by the chat path (`advance`, right behind a
+    /// clean main turn), the profile FORM and the retry path, so all three stay
+    /// identical.
+    pub(super) async fn run_followup_hand_off(
+        &self,
+        app: Option<&tauri::AppHandle>,
+        session: &mut RoadmapSession,
+    ) -> AppResult<Option<(String, bool)>> {
+        if Self::battery_followup_needed(session) {
+            let outcome = self
+                .run_diagnostic_turn_with_grounding_retry(
+                    app,
+                    session,
+                    ROADMAP_AGENT_ID,
+                    DiagnosticToolScope::Battery,
+                    render_battery_followup_input,
+                )
+                .await?;
+            return Ok(Some(outcome));
+        }
+        if Self::propose_followup_needed(session) {
+            // Durable checkpoint before the Gate 3a hand-off: the profile card
+            // was set purely in memory (the only save so far predates it). The
+            // call below is its own separate, potentially slow LLM turn (the
+            // full milestone/syllabus tree); if it fails hard or the process
+            // crashes mid-flight, an unsaved profile would be lost and have to
+            // be regathered from scratch. Only fires right before this
+            // specific hand-off, so a turn that never reaches it pays for no
+            // extra write.
+            session.updated_at_ms = now_ms();
+            self.store.save_roadmap_session(session)?;
+            let outcome = self.run_propose_turn(app, session, None).await?;
+            return Ok(Some(outcome));
+        }
+        Ok(None)
+    }
+
     /// True when a Gate 2 / Gate 3a hand-off turn ended without producing the
     /// state its tool is responsible for. Other scopes allow plain chat.
     fn hand_off_unfulfilled(session: &RoadmapSession, scope: DiagnosticToolScope) -> bool {
@@ -466,6 +499,14 @@ impl RoadmapService {
                 self.notebook_store.save_diagnostic_battery_answers(&course_id, &battery.answers)?;
             }
         }
+        // Contrast the declared level with what the battery showed and keep it
+        // on the course: this is what finally carries the diagnostic (and the
+        // declared level/hours, which used to die in the session JSON) into
+        // block generation. Written for EVERY seal path — confirm, force-close
+        // and force-progress all land here.
+        let mut calibration = calibrate(profile.entry_level, profile.weekly_commitment_hours, diagnostic_battery.as_ref());
+        calibration.learner_context = session.learning_context.clone();
+        self.notebook_store.set_course_calibration(&course_id, &calibration)?;
 
         session.imported_course_id = Some(course_id);
         session.first_class_id = first_class_id;
@@ -516,6 +557,11 @@ impl RoadmapService {
 
         let (course_id, first_class_id, _) =
             self.import_syllabus_skeleton(&package.syllabus, &package.learner_profile.target_goal)?;
+        // Recovery path: the battery's answers aren't in the sealed package, so
+        // this can only calibrate from the declaration (`NoEvidence`).
+        let mut calibration = calibrate(package.learner_profile.entry_level, package.learner_profile.weekly_commitment_hours, None);
+        calibration.learner_context = session.learning_context.clone();
+        self.notebook_store.set_course_calibration(&course_id, &calibration)?;
         session.imported_course_id = Some(course_id);
         session.first_class_id = first_class_id;
         self.store.save_roadmap_session(&session)?;

@@ -7,6 +7,7 @@
 //! block at a time instead of one whole payload at a time.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -28,7 +29,8 @@ use crate::dev_trace::{self, TraceEntry};
 use crate::error::{AppError, AppResult};
 use crate::notebook_store::{ClassGenerationContext, NotebookStore};
 use crate::orchestration::Orchestrator;
-use crate::orchestration::loop_runner::{Cause, CriticVerdict, GeneratorCriticLoop, run_generator_critic_loop};
+use crate::orchestration::loop_runner::{Cause, CriticVerdict, GeneratorCriticLoop, LoopSource, run_generator_critic_loop};
+use crate::tools::block_stream::{BLOCK_STREAM_SINK, BlockStreamSink};
 use crate::tools::{BlockAuditCapture, NotebookBlockCapture};
 
 use super::grading;
@@ -87,7 +89,7 @@ impl NotebookService {
             }
         }
 
-        let Some(block) = generate_and_persist_block(&self.store, &self.orchestrator, app, class_id, &doc.id, None).await? else {
+        let Some(block) = generate_and_persist_block(&self.store, &self.orchestrator, app, class_id, &doc.id, None, self.defer_critic).await? else {
             // Another concurrent starter (StrictMode's double-mount fires
             // two invokes; the loser's candidate was discarded by the
             // count-guarded insert) — hand back the WINNER's progress.
@@ -302,6 +304,7 @@ impl NotebookService {
             &document.class_id,
             &document.id,
             Some(EscalationInput { failed_block: escalated.clone(), recent_wrong_submission: submission_text, voluntary: false }),
+            self.defer_critic,
         )
         .await?
         .ok_or_else(|| {
@@ -370,6 +373,7 @@ impl NotebookService {
                 recent_wrong_submission: draft.unwrap_or_else(|| "(el estudiante pidió ayuda antes de enviar una solución)".to_string()),
                 voluntary: true,
             }),
+            self.defer_critic,
         )
         .await;
         let escalation_block = match escalation_block {
@@ -558,6 +562,12 @@ impl NotebookService {
     /// had already passed/escalated keeps that grade. The whole class is
     /// returned so the caller can re-render every block from fresh state.
     pub async fn regenerate_block(&self, app: Option<&AppHandle>, block_id: &str) -> AppResult<NotebookPayload> {
+        self.regenerate_block_with_feedback(app, block_id, None).await
+    }
+
+    /// [`Self::regenerate_block`] plus optional critic feedback appended to
+    /// the prompt, used when the deferred LLM critic rejects a shown block.
+    async fn regenerate_block_with_feedback(&self, app: Option<&AppHandle>, block_id: &str, feedback: Option<Vec<String>>) -> AppResult<NotebookPayload> {
         let broken = self
             .store
             .get_block(block_id)?
@@ -578,9 +588,10 @@ impl NotebookService {
         let mut existing_blocks = self.store.load_notebook_by_class(&class_id)?.map(|p| p.blocks).unwrap_or_default();
         existing_blocks.retain(|b| b.id != broken.id);
 
-        let diagnostic_profile = self.store.get_course_diagnostic_battery(&ctx.course.id)?.map(|s| s.profile_summary());
+        let diagnostic_profile = self.store.get_course_diagnostic_profile(&ctx.course.id)?;
         let block_type_usage = self.store.block_type_usage_for_course(&ctx.course.id, &class_id)?;
-        let learner_memory = self.store.get_learner_memory(LOCAL_LEARNER_ID)?;
+        let learner_memory = self.store.get_learner_memory_for_course(LOCAL_LEARNER_ID, &ctx.course.id)?;
+        let resources = self.store.get_class_resources(&class_id)?;
         let mastery = mastery_progress(&existing_blocks);
         let required = broken.block_type;
         let is_closing_block = required == DynamicBlockType::MetacognitiveClosure;
@@ -605,6 +616,7 @@ impl NotebookService {
                 &learner_memory,
                 now_ms(),
                 &gate_attempts,
+                &resources,
             )
         };
         base_input.push_str(&format!(
@@ -613,6 +625,12 @@ impl NotebookService {
              ningún otro bloque.",
             required.as_str()
         ));
+        if let Some(feedback) = feedback.filter(|f| !f.is_empty()) {
+            base_input.push_str(&format!(
+                "\n\nNOTA_DEL_SISTEMA: la versión anterior de este bloque fue rechazada por estos problemas: {}. Corrígelos.",
+                feedback.join("; ")
+            ));
+        }
 
         let job = BlockGenerationJob {
             orchestrator: &self.orchestrator,
@@ -634,6 +652,13 @@ impl NotebookService {
             is_regeneration: true,
             last_grounded: Mutex::new(None),
             mechanical_template: Mutex::new(false),
+            document_id: document.id.clone(),
+            attempts_started: AtomicU8::new(0),
+            // A repair already runs in the background or on an explicit user
+            // action; it keeps the critic blocking so it never loops.
+            defer_critic: false,
+            semantic_pending: Mutex::new(false),
+        last_candidate_json: Mutex::new(None),
         };
         let report = run_generator_critic_loop(&job, MAX_ATTEMPTS, RETRY_BACKOFF_BASE).await?;
         let content_json = serde_json::to_value(&report.value).map_err(|e| AppError::Persistence(e.to_string()))?;
@@ -657,7 +682,7 @@ impl NotebookService {
         let store = self.store.clone();
         let orchestrator = Arc::clone(&self.orchestrator);
         let app_owned = app.cloned();
-        tokio::spawn(run_background_chain(store, orchestrator, app_owned, class_id, document_id));
+        tokio::spawn(run_background_chain(store, orchestrator, app_owned, class_id, document_id, self.defer_critic));
     }
 }
 
@@ -713,6 +738,7 @@ async fn run_background_chain(
     app: Option<AppHandle>,
     class_id: String,
     document_id: String,
+    defer_critic: bool,
 ) {
     if !try_acquire_chain(&document_id) {
         tracing::info!(document_id = %document_id, "generation chain already in flight for this document; skipping duplicate invoke");
@@ -722,7 +748,7 @@ async fn run_background_chain(
     let _guard = ChainGuard(document_id.clone());
     loop {
         super::events::emit_block_generating(app.as_ref(), &document_id);
-        match generate_and_persist_block(&store, &orchestrator, app.as_ref(), &class_id, &document_id, None).await {
+        match generate_and_persist_block(&store, &orchestrator, app.as_ref(), &class_id, &document_id, None, defer_critic).await {
             Ok(None) => {
                 // Another writer produced this block first (the count-guard
                 // discarded our candidate) — it owns the chain now; stop.
@@ -870,19 +896,21 @@ fn misconception_pattern_from_submission(block: &NotebookBlock, submission: &Gat
 /// treat that as "lost the race": no cursor advance, no chain spawn.
 async fn generate_and_persist_block(
     store: &NotebookStore,
-    orchestrator: &Orchestrator,
+    orchestrator: &Arc<Orchestrator>,
     app: Option<&AppHandle>,
     class_id: &str,
     document_id: &str,
     escalation: Option<EscalationInput>,
+    defer_critic: bool,
 ) -> AppResult<Option<NotebookBlock>> {
     let ctx = store
         .class_generation_context(class_id)?
         .ok_or_else(|| AppError::InvalidInput(format!("class not found: {class_id}")))?;
     let existing_blocks = store.load_notebook_by_class(class_id)?.map(|p| p.blocks).unwrap_or_default();
-    let diagnostic_profile = store.get_course_diagnostic_battery(&ctx.course.id)?.map(|s| s.profile_summary());
+    let diagnostic_profile = store.get_course_diagnostic_profile(&ctx.course.id)?;
     let block_type_usage = store.block_type_usage_for_course(&ctx.course.id, class_id)?;
-    let learner_memory = store.get_learner_memory(LOCAL_LEARNER_ID)?;
+    let learner_memory = store.get_learner_memory_for_course(LOCAL_LEARNER_ID, &ctx.course.id)?;
+    let resources = store.get_class_resources(class_id)?;
     let now = now_ms();
     // The exact concept ids shown to the model as `learnerMemory.dueRetrieval`
     // — captured now so a successful `spaced_interleaved_retrieval` block can
@@ -921,6 +949,7 @@ async fn generate_and_persist_block(
                     &learner_memory,
                     now,
                     &gate_attempts,
+                    &resources,
                 )
             }
         }
@@ -933,7 +962,7 @@ async fn generate_and_persist_block(
     let expected_block_count = existing_blocks.len() as u32;
 
     let job = BlockGenerationJob {
-        orchestrator,
+        orchestrator: &**orchestrator,
         app,
         class_id: class_id.to_string(),
         base_input,
@@ -951,11 +980,35 @@ async fn generate_and_persist_block(
         is_regeneration: false,
         last_grounded: Mutex::new(None),
         mechanical_template: Mutex::new(false),
+        document_id: document_id.to_string(),
+        attempts_started: AtomicU8::new(0),
+        defer_critic,
+        semantic_pending: Mutex::new(false),
+        last_candidate_json: Mutex::new(None),
     };
+    let started = std::time::Instant::now();
     let report = run_generator_critic_loop(&job, MAX_ATTEMPTS, RETRY_BACKOFF_BASE).await?;
     let block_type = report.value.block_type();
     let content_json = serde_json::to_value(&report.value).map_err(|e| AppError::Persistence(e.to_string()))?;
     let inserted = store.insert_block_if_count(document_id, block_type, &content_json, BlockStatus::Ready, Some(expected_block_count))?;
+    log_block_timing(class_id, expected_block_count, block_type, &report, started.elapsed(), defer_critic);
+
+    // The block is already visible to the caller; the LLM critic (skipped on
+    // the blocking path) now reviews it off the critical path. Only a
+    // model-sourced candidate owes a review — a backstop one already burned
+    // its whole budget.
+    let owes_review = *job.semantic_pending.lock().unwrap_or_else(|e| e.into_inner()) && report.source == LoopSource::Model;
+    if let (true, Some(block)) = (owes_review, inserted.as_ref()) {
+        tokio::spawn(review_block_in_background(
+            store.clone(),
+            Arc::clone(orchestrator),
+            app.cloned(),
+            job.ctx.clone(),
+            job.existing_blocks.clone(),
+            report.value.clone(),
+            block.clone(),
+        ));
+    }
 
     // Showing a `spaced_interleaved_retrieval` block is exposure, not
     // evidence: mastery only moves once the student reports an outcome
@@ -1009,6 +1062,19 @@ struct BlockGenerationJob<'a> {
     /// guardrails. Reset on every generate so a retry never inherits a stale
     /// verdict from the previous attempt.
     mechanical_template: Mutex<bool>,
+    /// Document the block belongs to: the key the UI matches live progress on.
+    document_id: String,
+    /// How many generator attempts this job has started (the 1-based `attempt`
+    /// stamped on each progress event, so the UI can tell a retry from growth).
+    attempts_started: AtomicU8,
+    /// Skip the blocking LLM critic; see `NotebookService::defer_critic`.
+    defer_critic: bool,
+    /// Set by `critique` when the accepted candidate still owes an LLM-critic
+    /// review (deferred). Reset at the start of every critique.
+    semantic_pending: Mutex<bool>,
+    /// Checkpoint: the candidate under review, serialized. A rejection quotes it
+    /// back so the retry EDITS it instead of regenerating the block from zero.
+    last_candidate_json: Mutex<Option<String>>,
 }
 
 #[async_trait::async_trait]
@@ -1018,12 +1084,16 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
     async fn generate(&self, note: &str) -> AppResult<Option<GeneratedSectionBlock>> {
         let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
         let turn_input = format!("{}{note}", self.base_input);
+        let attempt = self.attempts_started.fetch_add(1, Ordering::Relaxed).saturating_add(1);
         // The orchestrator salvages a populated capture on error, so an Err
         // reaching here means the turn cap fired with NOTHING published.
-        let run_result = self
-            .orchestrator
-            .run_notebook_block_agent(self.app, NOTEBOOK_AGENT_ID, &turn_input, capture.clone())
-            .await;
+        let run = self.orchestrator.run_notebook_block_agent(self.app, NOTEBOOK_AGENT_ID, &turn_input, capture.clone());
+        // Live progress is only scoped when there is a UI to show it on; the
+        // provider factory reads the sink and streams, otherwise it blocks.
+        let run_result = match self.progress_sink(attempt) {
+            Some(sink) => BLOCK_STREAM_SINK.scope(sink, run).await,
+            None => run.await,
+        };
         let published = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
         // Stash the mechanical-template provenance for the critique that
         // follows this attempt (never a stale value from a prior one).
@@ -1051,6 +1121,8 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
     }
 
     async fn critique(&self, candidate: &GeneratedSectionBlock) -> CriticVerdict {
+        *self.semantic_pending.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        *self.last_candidate_json.lock().unwrap_or_else(|e| e.into_inner()) = serde_json::to_string(candidate).ok();
         if let Some(required) = self.required_block_type {
             if candidate.block_type() != required {
                 return CriticVerdict::Reject {
@@ -1101,42 +1173,36 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
             self.trace_critique(candidate, verdict, Vec::new());
             return CriticVerdict::Accept;
         }
-        let input = render::render_block_audit_input(&self.ctx, &self.existing_blocks, candidate);
-        let capture: BlockAuditCapture = Arc::new(Mutex::new(None));
-        let run = self.orchestrator.run_pedagogical_critic_agent(self.app, PEDAGOGICAL_CRITIC_AGENT_ID, &input, capture.clone()).await;
-        // A verdict the critic already submitted wins over the run's outcome: a
-        // turn-cap or transport error AFTER `submit_block_audit` ran must not
-        // turn a real rejection into a fail-open accept.
-        let audit = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
-        match (run, audit) {
-            (_, Some(audit)) if audit.accepted => {
-                self.trace_critique(candidate, "llm_accepted", Vec::new());
-                CriticVerdict::Accept
-            }
-            (_, Some(audit)) => {
-                self.trace_critique(candidate, "llm_rejected", audit.feedback.clone());
-                CriticVerdict::Reject { feedback: audit.feedback }
-            }
-            (Ok(_), None) => {
-                self.trace_critique(candidate, "llm_no_verdict_fail_open", vec!["el crítico no devolvió veredicto; se aceptó el bloque".to_string()]);
-                tracing::warn!(class_id = %self.class_id, "pedagogical critic returned no verdict, failing open");
-                CriticVerdict::Accept
-            }
-            (Err(e), None) => {
-                self.trace_critique(candidate, "llm_unavailable_fail_open", vec![format!("crítico no disponible ({}); se aceptó el bloque", e.code())]);
-                tracing::warn!(class_id = %self.class_id, error = %e, "pedagogical critic unavailable, failing open");
-                CriticVerdict::Accept
-            }
+        if self.defer_critic {
+            // Latency: the block already passed every deterministic check, so
+            // show it now; `generate_and_persist_block` runs the LLM critic
+            // after the insert and repairs the block in place if it rejects.
+            *self.semantic_pending.lock().unwrap_or_else(|e| e.into_inner()) = true;
+            self.trace_critique(candidate, "accepted_semantic_critic_deferred", Vec::new());
+            return CriticVerdict::Accept;
         }
+        let audit = semantic_audit(self.orchestrator, self.app, &self.class_id, &self.ctx, &self.existing_blocks, candidate).await;
+        self.trace_critique(candidate, audit.label, audit.notes);
+        audit.verdict
     }
 
     fn corrective_note(&self, cause: &Cause) -> String {
         match cause {
-            Cause::Rejected { feedback } => format!(
-                "\n\nNOTA_DEL_SISTEMA: tu bloque anterior tuvo estos problemas: {}. Corrígelo y \
-                 vuelve a llamar a publish_notebook_block en este turno.",
-                feedback.join("; ")
-            ),
+            Cause::Rejected { feedback } => {
+                let checkpoint = self
+                    .last_candidate_json
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_deref()
+                    .map(checkpoint_excerpt)
+                    .map(|json| format!(" Este es tu bloque anterior: corrígelo con cambios mínimos, no lo reescribas desde cero: {json}"))
+                    .unwrap_or_default();
+                format!(
+                    "\n\nNOTA_DEL_SISTEMA: tu bloque anterior tuvo estos problemas: {}.{checkpoint} Vuelve a llamar a \
+                     publish_notebook_block en este turno.",
+                    feedback.join("; ")
+                )
+            }
             Cause::EmptyAttempt => "\n\nNOTA_DEL_SISTEMA: no llamaste a publish_notebook_block. Debes llamarla en \
                                      este turno."
                 .to_string(),
@@ -1162,7 +1228,147 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
     }
 }
 
+/// Longest rejected-candidate JSON quoted back to the model; a huge diagram
+/// would cost more input than regenerating saves, so it is not quoted.
+const MAX_CHECKPOINT_CHARS: usize = 6000;
+
+/// The checkpoint to quote on retry, or a stub when it is too large to be worth it.
+fn checkpoint_excerpt(json: &str) -> &str {
+    if json.chars().count() <= MAX_CHECKPOINT_CHARS { json } else { "(omitido por tamaño: regenéralo breve)" }
+}
+
+/// Stable event name for the per-block wall-clock record.
+const BLOCK_TIMING_EVENT: &str = "block_generation_timing";
+
+/// Dev-trace/log notes for one block's wall-clock cost: the number that says
+/// how long the student waited for it, split by how many generator attempts
+/// it took and whether a backstop shipped it. Pure so the format is testable.
+fn block_timing_notes(position: u32, block_type: DynamicBlockType, source: LoopSource, attempts: u8, elapsed: Duration, critic_deferred: bool) -> Vec<String> {
+    vec![
+        format!("position={position}"),
+        format!("block_type={}", block_type.as_str()),
+        format!("source={}", if source == LoopSource::Model { "model" } else { "backstop" }),
+        format!("attempts={attempts}"),
+        format!("elapsed_ms={}", elapsed.as_millis()),
+        format!("critic_deferred={critic_deferred}"),
+    ]
+}
+
+fn log_block_timing(
+    class_id: &str,
+    position: u32,
+    block_type: DynamicBlockType,
+    report: &crate::orchestration::loop_runner::LoopReport<GeneratedSectionBlock>,
+    elapsed: Duration,
+    critic_deferred: bool,
+) {
+    tracing::info!(
+        event = BLOCK_TIMING_EVENT,
+        class_id = %class_id,
+        position,
+        block_type = block_type.as_str(),
+        attempts = report.attempts,
+        elapsed_ms = elapsed.as_millis() as u64,
+        critic_deferred,
+        "block generated"
+    );
+    dev_trace::trace_note("timing", "block_generation", class_id, BLOCK_TIMING_EVENT, &block_timing_notes(position, block_type, report.source, report.attempts, elapsed, critic_deferred));
+}
+
+/// Outcome of one LLM pedagogical-critic round-trip: the verdict plus the
+/// dev-trace label/notes that explain it.
+struct SemanticAudit {
+    verdict: CriticVerdict,
+    label: &'static str,
+    notes: Vec<String>,
+}
+
+/// Runs the LLM pedagogical critic over a candidate that already passed the
+/// deterministic review. Fails open (accepts) when the critic is unavailable
+/// or returns nothing — a flaky critic must never block or lose a block.
+async fn semantic_audit(
+    orchestrator: &Orchestrator,
+    app: Option<&AppHandle>,
+    class_id: &str,
+    ctx: &ClassGenerationContext,
+    existing_blocks: &[NotebookBlock],
+    candidate: &GeneratedSectionBlock,
+) -> SemanticAudit {
+    let input = render::render_block_audit_input(ctx, existing_blocks, candidate);
+    let capture: BlockAuditCapture = Arc::new(Mutex::new(None));
+    let run = orchestrator.run_pedagogical_critic_agent(app, PEDAGOGICAL_CRITIC_AGENT_ID, &input, capture.clone()).await;
+    // A verdict the critic already submitted wins over the run's outcome: a
+    // turn-cap or transport error AFTER `submit_block_audit` ran must not
+    // turn a real rejection into a fail-open accept.
+    let audit = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
+    match (run, audit) {
+        (_, Some(audit)) if audit.accepted => SemanticAudit { verdict: CriticVerdict::Accept, label: "llm_accepted", notes: Vec::new() },
+        (_, Some(audit)) => {
+            SemanticAudit { verdict: CriticVerdict::Reject { feedback: audit.feedback.clone() }, label: "llm_rejected", notes: audit.feedback }
+        }
+        (Ok(_), None) => {
+            tracing::warn!(class_id = %class_id, "pedagogical critic returned no verdict, failing open");
+            SemanticAudit {
+                verdict: CriticVerdict::Accept,
+                label: "llm_no_verdict_fail_open",
+                notes: vec!["el crítico no devolvió veredicto; se aceptó el bloque".to_string()],
+            }
+        }
+        (Err(e), None) => {
+            tracing::warn!(class_id = %class_id, error = %e, "pedagogical critic unavailable, failing open");
+            SemanticAudit {
+                verdict: CriticVerdict::Accept,
+                label: "llm_unavailable_fail_open",
+                notes: vec![format!("crítico no disponible ({}); se aceptó el bloque", e.code())],
+            }
+        }
+    }
+}
+
+/// Post-insert review of a block that was shown before the LLM critic ran:
+/// if the critic rejects it, the block is regenerated in place (same id,
+/// order and type) with the critic's feedback — unless the student has
+/// already started working on it, in which case it is left untouched.
+async fn review_block_in_background(
+    store: NotebookStore,
+    orchestrator: Arc<Orchestrator>,
+    app: Option<AppHandle>,
+    ctx: ClassGenerationContext,
+    existing_blocks: Vec<NotebookBlock>,
+    candidate: GeneratedSectionBlock,
+    block: NotebookBlock,
+) {
+    let class_id = ctx.class.id.clone();
+    let audit = semantic_audit(&orchestrator, app.as_ref(), &class_id, &ctx, &existing_blocks, &candidate).await;
+    let CriticVerdict::Reject { feedback } = audit.verdict else {
+        return;
+    };
+    let untouched = matches!(store.get_block(&block.id), Ok(Some(b)) if b.status == BlockStatus::Ready && b.attempt_count == 0);
+    if !untouched {
+        tracing::info!(block_id = %block.id, "deferred critic rejected a block the student already touched; leaving it");
+        return;
+    }
+    tracing::info!(block_id = %block.id, ?feedback, "deferred critic rejected a shown block; regenerating in place");
+    let service = NotebookService::new(store, orchestrator).with_blocking_critic();
+    if let Err(e) = service.regenerate_block_with_feedback(app.as_ref(), &block.id, Some(feedback)).await {
+        tracing::warn!(block_id = %block.id, error = %e, "in-place repair after deferred critic failed; keeping the original block");
+    }
+}
+
 impl BlockGenerationJob<'_> {
+    /// Where this attempt's live progress goes: a `notebook_block://delta`
+    /// event per update. `None` without an app handle (tests, headless).
+    fn progress_sink(&self, attempt: u8) -> Option<BlockStreamSink> {
+        // A repair replaces an already-visible block in place: streaming it
+        // would show up as a phantom "next block" draft.
+        if self.is_regeneration {
+            return None;
+        }
+        let app = self.app?.clone();
+        let document_id = self.document_id.clone();
+        Some(Arc::new(move |update| super::events::emit_block_delta(Some(&app), &document_id, attempt, update)))
+    }
+
     /// Dev-mode record of a critique outcome: which stage decided and why.
     /// The candidate JSON is attached so a rejected block can be inspected.
     fn trace_critique(&self, candidate: &GeneratedSectionBlock, verdict: &str, notes: Vec<String>) {
@@ -1184,6 +1390,13 @@ impl BlockGenerationJob<'_> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn checkpoint_is_quoted_unless_too_large() {
+        assert_eq!(checkpoint_excerpt("{\"a\":1}"), "{\"a\":1}");
+        let big = "x".repeat(MAX_CHECKPOINT_CHARS + 1);
+        assert!(checkpoint_excerpt(&big).starts_with("(omitido"));
+    }
+
     fn block(order_index: u32, block_type: DynamicBlockType, status: BlockStatus) -> NotebookBlock {
         NotebookBlock {
             id: format!("b{order_index}"),
@@ -1195,6 +1408,17 @@ mod tests {
             attempt_count: 0,
             last_feedback: None,
         }
+    }
+
+    #[test]
+    fn block_timing_notes_carry_every_field_the_baseline_needs() {
+        assert_eq!(
+            block_timing_notes(0, DynamicBlockType::AnchoredMicroTheory, LoopSource::Model, 2, Duration::from_millis(12_345), true),
+            ["position=0", "block_type=anchored_micro_theory", "source=model", "attempts=2", "elapsed_ms=12345", "critic_deferred=true"]
+        );
+        let backstop = block_timing_notes(3, DynamicBlockType::InteractivePredictionGate, LoopSource::Backstop, 3, Duration::ZERO, false);
+        assert_eq!(backstop[2], "source=backstop");
+        assert_eq!(backstop[5], "critic_deferred=false");
     }
 
     #[test]

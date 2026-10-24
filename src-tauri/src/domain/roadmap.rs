@@ -293,6 +293,87 @@ pub struct DiagnosticAssessmentArgs {
     pub weekly_commitment_hours: f32,
 }
 
+/// Step 1 of the profile form: the four facts the learner types themselves.
+/// Everything that depends on the TOPIC (what they know, what they practice
+/// with) is asked in step 2, from questions generated for this topic. The
+/// starting level is never typed: it is deduced from the step-2 answers.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileBasics {
+    pub topic: String,
+    pub target_goal: String,
+    pub timeframe_weeks: u16,
+    pub weekly_commitment_hours: f32,
+}
+
+impl ProfileBasics {
+    /// Trimmed copy: what is stored and sent to the model.
+    pub fn cleaned(&self) -> Self {
+        Self {
+            topic: self.topic.trim().to_string(),
+            target_goal: self.target_goal.trim().to_string(),
+            timeframe_weeks: self.timeframe_weeks,
+            weekly_commitment_hours: self.weekly_commitment_hours,
+        }
+    }
+}
+
+/// Where the learner wants the revised plan to lean — a closed choice instead
+/// of "dime qué cambiar" in free chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanEmphasis {
+    MorePractice,
+    MoreTheory,
+    MoreProjects,
+}
+
+impl PlanEmphasis {
+    /// The instruction handed to the model, in the prompt's own language.
+    pub fn directive_es(self) -> &'static str {
+        match self {
+            Self::MorePractice => "más práctica: prioriza misiones y ejercicios hands-on sobre la explicación teórica",
+            Self::MoreTheory => "más teoría: dedica más sesiones a fundamentos y explicación antes de practicar",
+            Self::MoreProjects => "más proyecto: orienta las sesiones a avanzar el proyecto terminal de forma incremental",
+        }
+    }
+}
+
+/// Structured request to revise a PROPOSED plan: every field is optional, but
+/// at least one must be set. Weeks/hours change the learner's profile card (and
+/// so the arithmetic the new proposal is grounded against); the note is a short,
+/// optional free-text addition, not the main channel.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlanAdjustment {
+    #[serde(default)]
+    pub timeframe_weeks: Option<u16>,
+    #[serde(default)]
+    pub weekly_commitment_hours: Option<f32>,
+    #[serde(default)]
+    pub emphasis: Option<PlanEmphasis>,
+    #[serde(default)]
+    pub note: Option<String>,
+}
+
+impl PlanAdjustment {
+    /// Longest note forwarded to the model: a hint, not a second chat.
+    pub const MAX_NOTE_CHARS: usize = 300;
+
+    /// The note, trimmed, emptied-to-`None` and cut to [`Self::MAX_NOTE_CHARS`].
+    pub fn clean_note(&self) -> Option<String> {
+        self.note
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(|n| n.chars().take(Self::MAX_NOTE_CHARS).collect())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.timeframe_weeks.is_none() && self.weekly_commitment_hours.is_none() && self.emphasis.is_none() && self.clean_note().is_none()
+    }
+}
+
 /// Args for the `propose_syllabus_plan` tool call (Gate 3a) — a PROPOSAL,
 /// not a commit: no course is created and no first-class notebook is
 /// generated yet. `core_focus`/`identified_needs`/`learning_strategy` are
@@ -424,6 +505,21 @@ pub struct RoadmapSession {
     /// the session; nothing is persisted into SQLite until then.
     #[serde(default)]
     pub proposed_plan: Option<ProposedPlan>,
+    /// What the learner knows and has to practice with, from the step-2 answers
+    /// (validated against the questions stored below). Rides along into the
+    /// proposal and — via the course — into every generated block. An older
+    /// shape that no longer parses reads as `None` instead of failing the session.
+    #[serde(default, deserialize_with = "crate::domain::learning_context::deserialize_lenient")]
+    pub learning_context: Option<crate::domain::learning_context::LearningContext>,
+    /// Step 1 of the profile form, kept until step 2 completes (so reopening the
+    /// session resumes at step 2).
+    #[serde(default)]
+    pub profile_basics: Option<ProfileBasics>,
+    /// The intake questions generated for this topic and validated in code: the
+    /// server's own copy, against which step-2 answers are checked. Cleared once
+    /// the profile is saved.
+    #[serde(default)]
+    pub pending_context_questions: Option<crate::domain::learning_context::ContextQuestionSet>,
     /// Set once `confirm_syllabus_plan` seals the session — the
     /// SQLite-backed course this plan was imported into, so the frontend
     /// can list its classes without a separate import step.
@@ -489,6 +585,9 @@ impl RoadmapSession {
             custom_title: None,
             pending_diagnostic_battery: None,
             proposed_plan: None,
+            learning_context: None,
+            profile_basics: None,
+            pending_context_questions: None,
             imported_course_id: None,
             first_class_id: None,
             last_rejection_reasons: Vec::new(),

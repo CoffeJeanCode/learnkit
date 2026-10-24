@@ -9,9 +9,11 @@ use crate::domain::notebook::DiagnosticQuestion;
 use crate::domain::roadmap::{CapstoneProjectArgs, ConfirmSyllabusPlanArgs, ProposeSyllabusPlanArgs};
 use crate::orchestration::PromptRunner;
 use crate::providers::factory::PromptOutput;
-use crate::tools::{DiagnosticToolScope, SharedRoadmapCapture};
+use crate::domain::learning_context::ContextQuestionsArgs;
+use crate::tools::{DiagnosticToolScope, ResearchStep, SharedResearchCapture, SharedRoadmapCapture};
 
 mod followups;
+mod form;
 mod gates;
 mod harness;
 mod rejections;

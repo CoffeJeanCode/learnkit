@@ -76,16 +76,21 @@ mod tests {
     #[test]
     fn every_toon_consuming_agent_states_the_hint_once_and_no_input_repeats_it() {
         use crate::agents::{
-            analyst_agent, block_generator_agent, closure_feedback_grader_agent, lexical_assistant_agent, notebook_gate_grader_agent,
-            pedagogical_critic_agent, roadmap_agent,
+            analyst_agent, block_generator_agent, closure_feedback_grader_agent, context_questions_agent, lexical_assistant_agent, notebook_gate_grader_agent,
+            pedagogical_critic_agent, plan_outline_agent, plan_week_agent, research_curator_agent, research_planner_agent, roadmap_agent,
         };
         for def in [
             analyst_agent::definition(),
             block_generator_agent::definition(),
             closure_feedback_grader_agent::definition(),
+            context_questions_agent::definition(),
             lexical_assistant_agent::definition(),
             notebook_gate_grader_agent::definition(),
             pedagogical_critic_agent::definition(),
+            plan_outline_agent::definition(),
+            plan_week_agent::definition(),
+            research_curator_agent::definition(),
+            research_planner_agent::definition(),
             roadmap_agent::definition(),
         ] {
             assert_eq!(def.system_prompt.matches(TOON_HINT).count(), 1, "{} must carry the TOON hint exactly once", def.id);

@@ -20,9 +20,16 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use super::notebook::{GeneratedSectionBlock, InteractionMode, RetrievalPrompt, ScenarioBranch};
+use super::notebook::{BoundaryCase, GeneratedSectionBlock, InteractionMode, RetrievalPrompt, ScenarioBranch};
 
 pub const TEMPLATE_PREFIX: &str = "tpl_";
+
+/// Word ceilings for `anchored_micro_theory`. Shared with the post-generation
+/// review (`notebook_service::grounding`) so the template rejects, inside the
+/// same tool call, exactly what that review would reject a whole generation later.
+pub const THEORY_MAX_SYSTEM_RULE_WORDS: usize = 240;
+/// Combined ceiling for `intuitiveHook` + `analogyBoundary` + `frequentError`.
+pub const THEORY_MAX_OTHER_LAYERS_WORDS: usize = 100;
 
 /// One answer option with its feedback — shown to the student right after they
 /// pick it (the feedback for the correct option confirms WHY it is right).
@@ -59,6 +66,13 @@ pub enum BlockTemplate {
     /// → `spaced_interleaved_retrieval`.
     #[serde(rename = "tpl_quick_recall", rename_all = "camelCase")]
     QuickRecall { items: Vec<RetrievalPrompt> },
+    /// → `anchored_micro_theory`. Flat params with the word caps checked at
+    /// call time, so an over-long layer is corrected in the same turn.
+    #[serde(rename = "tpl_theory", rename_all = "camelCase")]
+    Theory { title: String, intuitive_hook: String, analogy_boundary: String, system_rule: String, frequent_error: String },
+    /// → `interactive_prediction_gate` (`boundary_case_audit`).
+    #[serde(rename = "tpl_boundary_cases", rename_all = "camelCase")]
+    BoundaryCases { question: String, cases: Vec<BoundaryCase> },
 }
 
 fn blank(s: &str) -> bool {
@@ -151,6 +165,45 @@ impl BlockTemplate {
                 }
                 Ok(())
             }
+            Self::Theory { title, intuitive_hook, analogy_boundary, system_rule, frequent_error } => {
+                let t = "tpl_theory";
+                if [title, intuitive_hook, analogy_boundary, system_rule, frequent_error].iter().any(|f| blank(f)) {
+                    return err(t, "title, intuitiveHook, analogyBoundary, systemRule y frequentError no pueden estar vacíos");
+                }
+                let words = |s: &str| s.split_whitespace().count();
+                let (hook, boundary, error) = (words(intuitive_hook), words(analogy_boundary), words(frequent_error));
+                if hook + boundary + error > THEORY_MAX_OTHER_LAYERS_WORDS {
+                    return err(
+                        t,
+                        &format!(
+                            "intuitiveHook ({hook}) + analogyBoundary ({boundary}) + frequentError ({error}) suman {} palabras, máximo \
+                             {THEORY_MAX_OTHER_LAYERS_WORDS} (≤30/≤25/≤40 por campo): recorta el campo más largo",
+                            hook + boundary + error
+                        ),
+                    );
+                }
+                let rule = words(system_rule);
+                if rule > THEORY_MAX_SYSTEM_RULE_WORDS {
+                    return err(t, &format!("systemRule tiene {rule} palabras, máximo {THEORY_MAX_SYSTEM_RULE_WORDS}"));
+                }
+                Ok(())
+            }
+            Self::BoundaryCases { question, cases } => {
+                let t = "tpl_boundary_cases";
+                if blank(question) {
+                    return err(t, "question no puede estar vacío");
+                }
+                if !(2..=3).contains(&cases.len()) {
+                    return err(t, &format!("cases tiene {} elementos, debe tener 2-3", cases.len()));
+                }
+                if cases.iter().any(|c| blank(&c.statement)) || !all_unique(cases.iter().map(|c| c.statement.as_str())) {
+                    return err(t, "cada caso necesita un statement distinto");
+                }
+                if !cases.iter().any(|c| c.follows_rule) || cases.iter().all(|c| c.follows_rule) {
+                    return err(t, "debe haber al menos un caso que cumple la regla y uno que la rompe (followsRule)");
+                }
+                Ok(())
+            }
             Self::QuickRecall { items } => {
                 if !(1..=2).contains(&items.len()) {
                     return err("tpl_quick_recall", &format!("items tiene {} elementos, debe tener 1-2", items.len()));
@@ -213,6 +266,24 @@ impl BlockTemplate {
                 GeneratedSectionBlock::BranchingScenarioChallenge { scenario, decision_point, branches, visual_aid: None }
             }
             Self::QuickRecall { items } => GeneratedSectionBlock::SpacedInterleavedRetrieval { items },
+            Self::Theory { title, intuitive_hook, analogy_boundary, system_rule, frequent_error } => {
+                GeneratedSectionBlock::AnchoredMicroTheory { title, intuitive_hook, analogy_boundary: Some(analogy_boundary), system_rule, frequent_error }
+            }
+            Self::BoundaryCases { question, mut cases } => {
+                let seed = fnv(&format!("{question}|{}", cases.iter().map(|c| c.statement.as_str()).collect::<Vec<_>>().join("|")));
+                shuffle(&mut cases, seed);
+                GeneratedSectionBlock::InteractivePredictionGate {
+                    question,
+                    options: Vec::new(),
+                    conceptual_feedback_map: HashMap::new(),
+                    correct_option: String::new(),
+                    interaction_mode: Some(InteractionMode::BoundaryCaseAudit),
+                    shuffled_steps: None,
+                    correct_order: None,
+                    boundary_cases: Some(cases),
+                    visual_aid: None,
+                }
+            }
         }
     }
 }
@@ -233,12 +304,12 @@ fn multiple_choice(question: String, options: Vec<String>, correct_option: Strin
 
 /// FNV-1a: stable across runs and platforms (unlike `DefaultHasher`), so the
 /// same template always expands to the same block.
-fn fnv(s: &str) -> u64 {
+pub(crate) fn fnv(s: &str) -> u64 {
     s.bytes().fold(0xcbf29ce484222325, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3))
 }
 
 /// Deterministic Fisher–Yates driven by an LCG seeded from the content.
-fn shuffle<T>(items: &mut [T], seed: u64) {
+pub(crate) fn shuffle<T>(items: &mut [T], seed: u64) {
     let mut state = seed | 1;
     for i in (1..items.len()).rev() {
         state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -290,6 +361,69 @@ mod tests {
             })
             .collect();
         assert!(positions.len() >= 3, "the right answer lands in varied positions, got {positions:?}");
+    }
+
+    #[test]
+    fn theory_template_checks_word_caps_at_call_time_and_expands_to_the_free_form_block() {
+        let ok = |hook: &str, rule: &str| BlockTemplate::Theory {
+            title: "t".to_string(),
+            intuitive_hook: hook.to_string(),
+            analogy_boundary: "no cubre X".to_string(),
+            system_rule: rule.to_string(),
+            frequent_error: "esto SÍ a / esto NO b, porque c".to_string(),
+        };
+        assert!(ok("gancho corto", "1 ➔ 2 ➔ 3").validate().is_ok());
+        let long_hook = "palabra ".repeat(101);
+        let e = ok(&long_hook, "r").validate().unwrap_err();
+        assert!(e.contains("tpl_theory") && e.contains("suman"), "{e}");
+        let long_rule = "palabra ".repeat(THEORY_MAX_SYSTEM_RULE_WORDS + 1);
+        assert!(ok("h", &long_rule).validate().unwrap_err().contains("systemRule"));
+        assert!(matches!(
+            ok("h", "r").expand(),
+            GeneratedSectionBlock::AnchoredMicroTheory { analogy_boundary: Some(_), .. }
+        ));
+    }
+
+    #[test]
+    fn boundary_cases_template_needs_a_contrast_and_keeps_the_key_on_each_case() {
+        let case = |s: &str, f: bool| BoundaryCase { statement: s.to_string(), follows_rule: f };
+        let tpl = |cases| BlockTemplate::BoundaryCases { question: "q".to_string(), cases };
+        assert!(tpl(vec![case("a", true), case("b", false)]).validate().is_ok());
+        assert!(tpl(vec![case("a", true), case("b", true)]).validate().is_err());
+        assert!(tpl(vec![case("a", false)]).validate().is_err());
+        let GeneratedSectionBlock::InteractivePredictionGate { interaction_mode, boundary_cases, options, .. } =
+            tpl(vec![case("a", true), case("b", false), case("c", true)]).expand()
+        else {
+            panic!("expands to a prediction gate");
+        };
+        assert_eq!(interaction_mode, Some(InteractionMode::BoundaryCaseAudit));
+        assert!(options.is_empty());
+        let by_text: HashMap<_, _> = boundary_cases.unwrap().into_iter().map(|c| (c.statement, c.follows_rule)).collect();
+        assert_eq!((by_text["a"], by_text["b"], by_text["c"]), (true, false, true));
+    }
+
+    #[test]
+    fn diagnostic_battery_shuffle_keeps_the_key_valid_and_moves_the_answer() {
+        use super::super::notebook::{DiagnosticBattery, DiagnosticDimension, DiagnosticQuestion};
+        let question = |n: usize| DiagnosticQuestion {
+            dimension: DiagnosticDimension::Intuition,
+            prompt: format!("pregunta {n}"),
+            options: vec!["Correcta".to_string(), "Mala 1".to_string(), "Mala 2".to_string(), "Mala 3".to_string()],
+            correct_option: "Correcta".to_string(),
+            diagnostic_insight: "i".to_string(),
+        };
+        let mut battery = DiagnosticBattery { goal_alignment: "g".to_string(), questions: (0..40).map(question).collect() };
+        battery.shuffle_options();
+        let mut positions = HashSet::new();
+        for q in &battery.questions {
+            assert_eq!(q.options.len(), 4);
+            let pos = q.options.iter().position(|o| *o == q.correct_option).expect("key still one of the options");
+            positions.insert(pos);
+        }
+        assert!(positions.len() >= 3, "the correct option lands in varied positions, got {positions:?}");
+        let mut again = DiagnosticBattery { goal_alignment: "g".to_string(), questions: (0..40).map(question).collect() };
+        again.shuffle_options();
+        assert_eq!(again.questions[7].options, battery.questions[7].options, "deterministic");
     }
 
     #[test]

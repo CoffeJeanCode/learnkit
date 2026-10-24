@@ -33,11 +33,22 @@ pub struct RetrievalAnswerResult {
 pub struct NotebookService {
     store: NotebookStore,
     orchestrator: Arc<Orchestrator>,
+    /// When `true` (the default) a block that passed every deterministic check
+    /// is shown immediately and the LLM pedagogical critic runs afterwards in
+    /// the background, replacing the block in place if it rejects it. `false`
+    /// keeps the critic on the blocking path (tests that pin that behavior).
+    defer_critic: bool,
 }
 
 impl NotebookService {
     pub fn new(store: NotebookStore, orchestrator: Arc<Orchestrator>) -> Self {
-        Self { store, orchestrator }
+        Self { store, orchestrator, defer_critic: true }
+    }
+
+    /// Keeps the LLM critic on the blocking generate→critique→retry path.
+    pub fn with_blocking_critic(mut self) -> Self {
+        self.defer_critic = false;
+        self
     }
 
     /// Seeds `courses` / `syllabus_milestones` / `classes` from an
@@ -187,6 +198,12 @@ impl NotebookService {
     /// The course's diagnostic battery (goalAlignment + questions) plus
     /// whatever the student has answered so far — what the roadmap plan
     /// screen renders, `None` if this course has no battery on record.
+    /// The curated web resources of one class (none until its course's research
+    /// has run, or when nothing was found).
+    pub fn get_class_resources(&self, class_id: &str) -> AppResult<Vec<crate::domain::resources::ClassResource>> {
+        self.store.get_class_resources(class_id)
+    }
+
     pub fn get_course_diagnostic_battery(&self, course_id: &str) -> AppResult<Option<DiagnosticBatteryState>> {
         self.store.get_course_diagnostic_battery(course_id)
     }

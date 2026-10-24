@@ -7,11 +7,14 @@ import { DiagnosticBatteryStage } from "../../components/DiagnosticBatteryStage"
 import { MicromoduleItem } from "../../components/MicromoduleItem";
 import { ENTRY_LEVEL_LABEL } from "../../lib/schemas";
 import type { ClassRecord, RoadmapPhase } from "../../lib/schemas";
-import { ensureCourseImported, listCourseClasses, onAgentEvent, tauriError } from "../../lib/tauri";
+import { ensureCourseImported, listCourseClasses, onAgentEvent, onPlanPart, tauriError } from "../../lib/tauri";
 import { useNotebookNav } from "../../stores/notebook";
 import { useProviders } from "../../stores/providers";
 import { useRoadmap } from "../../stores/roadmap";
 import { useUi } from "../../stores/ui";
+import { PlanAdjustPanel } from "./PlanAdjustPanel";
+import { PlanDraftView } from "./PlanDraftView";
+import { ProfileForm } from "./ProfileForm";
 
 // User-facing labels for the phase tracker — deliberately about the
 // milestone the student reaches, not the agent's internal vocabulary.
@@ -22,18 +25,6 @@ const PHASES: { id: RoadmapPhase; label: string }[] = [
   { id: "onboarding", label: "1. Tu meta" },
   { id: "diagnostic", label: "2. Diagnóstico" },
   { id: "roadmap", label: "3. Tu plan" },
-];
-
-// Example goals shown only on the empty "nueva sesión" state — realistic
-// asks a learner might type, covering the shape the mentor needs (topic +
-// timeframe + weekly time budget) without prescribing one exact phrasing.
-// `tone` just picks a distinct chalk color per chip (see `.example-chip-*`)
-// so the row doesn't read as one flat gray block.
-const EXAMPLE_PROMPTS: { text: string; tone: "red" | "green" | "blue" | "gold" }[] = [
-  { text: "Quiero aprender a tocar guitarra desde cero en 3 meses, con 4 horas semanales.", tone: "red" },
-  { text: "Necesito mejorar mi inglés conversacional para un viaje en 6 semanas, 5 horas por semana.", tone: "green" },
-  { text: "Quiero preparar una media maratón en 10 semanas, entrenando 4 horas semanales.", tone: "blue" },
-  { text: "Me gustaría aprender fotografía y edición básica en 2 meses, con 3 horas a la semana.", tone: "gold" },
 ];
 
 // Roles rendered as handwritten margin annotations, not system labels.
@@ -48,6 +39,9 @@ const TOOL_LABEL: Record<string, string> = {
   submit_diagnostic_assessment: "Guardando tu diagnóstico…",
   present_diagnostic_battery: "Diseñando tu batería…",
   propose_syllabus_plan: "Armando tu plan…",
+  submit_plan_outline: "Esbozando tus semanas…",
+  submit_week_sessions: "Detallando las sesiones de cada semana…",
+  propose_capstone_project: "Pensando tu proyecto final…",
   confirm_syllabus_plan: "Escribiendo tu primera clase…",
   publish_class_notebook: "Escribiendo el notebook…",
 };
@@ -130,6 +124,11 @@ export function RoadmapView() {
     retryable,
     retryPhase,
     sendOrStart,
+    proposeQuestions,
+    submitProfile,
+    confirmPlan,
+    adjustPlan,
+    resumeHandOff,
     retry,
     setSession,
     answerDiagnostic,
@@ -137,6 +136,8 @@ export function RoadmapView() {
     setRestoreHistory,
   } = useRoadmap();
   const { providers, loading: providersLoading, refresh: refreshProviders } = useProviders();
+  const planDraft = useRoadmap((s) => s.planDraft);
+  const receivePlanPart = useRoadmap((s) => s.receivePlanPart);
   const [input, setInput] = useState("");
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const openNotebooks = useNotebookNav((s) => s.open);
@@ -243,19 +244,28 @@ export function RoadmapView() {
     setInput("");
   };
 
-  // Fills the composer without sending — the student can still edit the
-  // example before submitting it as their own request.
-  const pickExample = (text: string) => {
-    setInput(text);
-    composerRef.current?.focus();
-  };
-
   // Auto-scroll: new turns (user echo, mentor reply, or the "Pensando…"
   // placeholder appearing) should always bring the latest line into view.
   // Exception: while the diagnostic battery is on screen there is no scroll
   // at all — the student is reading/answering a fixed card and jumping to
   // the bottom yanks the questions out from under them (hold position).
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Scroll the real scroller (`.workspace`) to its ABSOLUTE bottom instead
+  // of aligning a sentinel with `scrollIntoView({ block: "end" })`: the
+  // composer is a sticky dock floating over the bottom ~60px of the
+  // viewport, so any alignment that stops short of max scroll leaves the
+  // "Pensando…" row (and the tail of the last message) hidden underneath
+  // the floating input.
+  const scrollChatToEnd = () => {
+    const end = messagesEndRef.current;
+    if (!end) return;
+    const scroller = end.closest(".workspace");
+    if (scroller instanceof HTMLElement) {
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+    } else {
+      end.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  };
   // Truthy only while the student still has unanswered questions — once the
   // last one is answered (or the model proposes a plan straight away for
   // `absolute_zero`), the battery stays on the session but is DONE: it must
@@ -265,21 +275,22 @@ export function RoadmapView() {
   const diagnosticOpen = !!pb && Object.keys(pb.answers).length < pb.questions.length;
   useEffect(() => {
     if (diagnosticOpen) return;
-    const end = messagesEndRef.current;
-    if (!end) return;
-    // Scroll the real scroller (`.workspace`) to its ABSOLUTE bottom instead
-    // of aligning a sentinel with `scrollIntoView({ block: "end" })`: the
-    // composer is a sticky dock floating over the bottom ~60px of the
-    // viewport, so any alignment that stops short of max scroll leaves the
-    // "Pensando…" row (and the tail of the last message) hidden underneath
-    // the floating input.
-    const scroller = end.closest(".workspace");
-    if (scroller instanceof HTMLElement) {
-      scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
-    } else {
-      end.scrollIntoView({ behavior: "smooth", block: "end" });
-    }
+    scrollChatToEnd();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messages.length, sending, opening, diagnosticOpen, error]);
+  // The battery now lives INSIDE `.messages` (it's the mentor's next turn, not
+  // a card parked below the chat), so it needs one scroll of its own: the
+  // effect above deliberately holds position while it's open, which would
+  // otherwise leave the freshly mounted questions below the fold. Only on the
+  // closed→open transition — every later message is the other effect's job.
+  const wasDiagOpen = useRef(diagnosticOpen);
+  useEffect(() => {
+    if (wasDiagOpen.current !== diagnosticOpen) {
+      wasDiagOpen.current = diagnosticOpen;
+      if (diagnosticOpen) scrollChatToEnd();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diagnosticOpen]);
 
   // Real activity, not a timer: while a turn runs, every tool call the
   // model makes emits `agent://tool` — so the status row can show the gear
@@ -313,6 +324,21 @@ export function RoadmapView() {
     };
   }, []);
 
+  // The plan arrives in parts while the proposal is written (outline, then each
+  // week): the store folds them into `planDraft`, rendered below with a fade-in.
+  useEffect(() => {
+    let alive = true;
+    let unlisten: UnlistenFn | null = null;
+    onPlanPart(receivePlanPart).then((u) => {
+      if (alive) unlisten = u;
+      else u();
+    });
+    return () => {
+      alive = false;
+      unlisten?.();
+    };
+  }, [receivePlanPart]);
+
   if (providersLoading) {
     return (
       <div className="view roadmap">
@@ -332,6 +358,16 @@ export function RoadmapView() {
   const diagnosticCard = session?.diagnostic_summary_card ?? null;
   const pendingBattery = session?.pending_diagnostic_battery ?? null;
   const proposedPlan = session?.proposed_plan ?? null;
+  // The form is Gate 1 for a session that has no profile AND no saved student
+  // turn yet (server truth: `session.messages`, not the optimistic bubble, so
+  // the form stays mounted — busy — while the first submit is in flight).
+  // A chat-era session already mid-conversation keeps its composer instead.
+  const hasSavedUserTurn = session?.messages.some((m) => m.role === "user") ?? false;
+  const showForm = !profileCard && (!session || !hasSavedUserTurn);
+  // The profile is saved but nothing was produced behind it (battery, or the
+  // proposal for `absolute_zero`) and there is no transient error to retry on:
+  // offer the step explicitly instead of leaving the student at a dead end.
+  const handOffStalled = !!profileCard && !sealed && !pendingBattery && !proposedPlan && !sending && !opening && !error;
 
   // Opens `targetClassId` (any class in the path), defaulting to the first
   // class when called from the plain "Ver tu primera clase" button.
@@ -364,59 +400,24 @@ export function RoadmapView() {
 
   return (
     <div className="view roadmap">
-      {session ? (
-        <>
-          <h2>Tu ruta de aprendizaje</h2>
-          <p className="muted">
-            Cuéntale a tu mentor sobre tu proyecto. En cuanto tenga lo esencial, arma tu plan y tu
-            primera clase de inmediato — sin pasos de más.
-          </p>
-        </>
-      ) : (
-        <div className="empty-hero">
-          <h2>Tu ruta de aprendizaje</h2>
-          <p className="muted">
-            Cuéntale a tu mentor sobre tu proyecto. En cuanto tenga lo esencial, arma tu plan y tu
-            primera clase de inmediato — sin pasos de más.
-          </p>
-          <div className="row composer empty-composer">
-            <textarea
-              ref={composerRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                // Enter sends; Shift+Enter keeps its default (a newline) so
-                // longer answers to the mentor can span multiple lines.
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  submit();
-                }
-              }}
-              placeholder="Cuéntale a tu mentor qué quieres lograr…"
-              rows={3}
-              disabled={sending}
-              autoFocus
-            />
-            <button className="btn-primary" onClick={submit} disabled={sending || !input.trim()}>
-              Empezar
-            </button>
-          </div>
-          <p className="hint">O prueba con uno de estos y edítalo antes de enviarlo:</p>
-          <div className="example-prompts">
-            {EXAMPLE_PROMPTS.map((ex) => (
-              <button
-                key={ex.text}
-                type="button"
-                className={`example-chip example-chip-${ex.tone}`}
-                onClick={() => pickExample(ex.text)}
-                disabled={sending || opening}
-              >
-                {ex.text}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      <div className={showForm ? "empty-hero" : undefined}>
+        <h2>Tu ruta de aprendizaje</h2>
+        <p className="muted">
+          {showForm
+            ? "Cuéntame qué quieres aprender y cuánto tiempo tienes. Te haré unas preguntas sobre tu tema y armo tu plan y tu primera clase."
+            : "Tu plan se arma con lo que me contaste. Revísalo, ajústalo si hace falta y confírmalo."}
+        </p>
+        {showForm && (
+          <ProfileForm
+            initialBasics={session?.profile_basics ?? null}
+            questions={session?.pending_context_questions ?? null}
+            busy={sending || opening}
+            serverError={error}
+            onPropose={(basics) => void proposeQuestions(basics)}
+            onSubmit={(answers) => void submitProfile(answers)}
+          />
+        )}
+      </div>
 
       {session && (
         <>
@@ -477,39 +478,51 @@ export function RoadmapView() {
             {restoreHistory ? "" : " (mensajes ocultos por el filtro)"}. ¡Sigue donde quedaste!
           </p>
         )}
+
+        {/* El diagnóstico y la batería SON parte de la conversación, no un
+            apéndice: van DENTRO de `.messages`, en su orden cronológico, para
+            que las preguntas se lean como el siguiente turno del mentor y no
+            como un formulario suelto colgado debajo del chat. */}
+        {session && (
+          <>
+            {diagnosticCard && (
+              <div className="card diagnostic-card">
+                <div className="card-head">
+                  <h3>Cómo vamos a abordarlo</h3>
+                  <span className="badge ok">diagnóstico listo</span>
+                </div>
+                <p className="hint">{diagnosticCard.coreFocus}</p>
+                <ul className="dod-list">
+                  {diagnosticCard.identifiedNeeds.map((need) => (
+                    <li key={need}>{need}</li>
+                  ))}
+                </ul>
+                <p>{diagnosticCard.learningStrategy}</p>
+              </div>
+            )}
+
+            {diagnosticOpen && pendingBattery && (
+              <DiagnosticBatteryStage
+                battery={pendingBattery}
+                onAnswer={(index, answer) => answerDiagnostic(index, answer)}
+                busy={sending}
+              />
+            )}
+          </>
+        )}
       </div>
 
-      {/* El diagnóstico y la propuesta son mensajes del sistema — resultado
-          YA resuelto del último turno — así que van justo después del chat,
-          y el indicador de "pensando" (para el turno SIGUIENTE, todavía en
-          curso) va debajo de ellos, no encima. */}
+      {/* La propuesta de plan es un estado RESUELTO del último turno, así que
+          va justo después del chat, y el indicador de "pensando" (para el
+          turno SIGUIENTE, todavía en curso) va debajo de ellos, no encima. */}
       {session && (
         <>
-          {diagnosticCard && (
-            <div className="card diagnostic-card">
-              <div className="card-head">
-                <h3>Cómo vamos a abordarlo</h3>
-                <span className="badge ok">diagnóstico listo</span>
-              </div>
-              <p className="hint">{diagnosticCard.coreFocus}</p>
-              <ul className="dod-list">
-                {diagnosticCard.identifiedNeeds.map((need) => (
-                  <li key={need}>{need}</li>
-                ))}
-              </ul>
-              <p>{diagnosticCard.learningStrategy}</p>
-            </div>
-          )}
+          {sending && planDraft && !sealed && <PlanDraftView draft={planDraft} />}
 
-          {diagnosticOpen && pendingBattery && (
-            <DiagnosticBatteryStage
-              battery={pendingBattery}
-              onAnswer={(index, answer) => answerDiagnostic(index, answer)}
-              busy={sending}
-            />
-          )}
-
-          {proposedPlan && !sealed && (
+          {/* While a revised plan is being written, the draft stands in for the
+              old proposal (two plans on screen would be confusing); if the
+              revision fails the old one comes back untouched. */}
+          {proposedPlan && !sealed && !(sending && planDraft) && (
             <div className="card final-package proposed-plan-card">
               <div className="card-head">
                 <h3>{proposedPlan.syllabus.courseTitle}</h3>
@@ -540,16 +553,17 @@ export function RoadmapView() {
               </ul>
               <p>{proposedPlan.closingQuestion}</p>
               <div className="row">
-                <button
-                  className="btn-primary"
-                  onClick={() => sendOrStart("Sí, me parece bien.")}
-                  disabled={sending}
-                >
+                <button className="btn-primary" onClick={() => void confirmPlan()} disabled={sending}>
                   Confirmar
                 </button>
-                {sending && <span className="hint">Guardando…</span>}
+                {sending && <span className="hint">Un momento…</span>}
               </div>
-              <p className="hint">O escribe abajo si prefieres ajustar el ritmo antes de confirmar.</p>
+              <PlanAdjustPanel
+                key={`${proposedPlan.syllabus.courseTitle}-${proposedPlan.syllabus.totalWeeks}-${proposedPlan.syllabus.paceHoursPerWeek}`}
+                current={{ weeks: proposedPlan.syllabus.totalWeeks, hours: proposedPlan.syllabus.paceHoursPerWeek }}
+                busy={sending}
+                onAdjust={(adjustment) => void adjustPlan(adjustment)}
+              />
             </div>
           )}
 
@@ -626,7 +640,16 @@ export function RoadmapView() {
         </div>
       )}
 
-      {error && (
+      {handOffStalled && (
+        <div className="alert error">
+          <span className="alert-text">No pude armar el siguiente paso todavía. Tu perfil ya está guardado.</span>
+          <button className="btn-quiet btn-retry" onClick={() => void resumeHandOff()}>
+            Reintentar
+          </button>
+        </div>
+      )}
+
+      {error && !showForm && (
         <div className="alert error">
           <span className="alert-text">{error}</span>
           {retryable && (
@@ -637,7 +660,9 @@ export function RoadmapView() {
         </div>
       )}
 
-      {session && !sealed && !diagnosticOpen && (
+      {session && !sealed && !diagnosticOpen && !profileCard && !showForm && (
+        // Solo para sesiones de la era del chat que ya estaban a medias (con
+        // mensajes pero sin perfil): las nuevas usan el formulario de arriba.
         // Dock siempre visible durante la conversación. Oculto SOLO mientras
         // quedan preguntas sin responder (`diagnosticOpen`): esa espera se
         // resuelve con clics (DiagnosticBatteryStage). Una vez respondida la

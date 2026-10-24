@@ -123,7 +123,7 @@ pub(super) fn has_leaked_jargon(text: &str) -> bool {
     LEAKED_JARGON_PHRASES.iter().any(|p| lower.contains(p))
 }
 
-fn check_student_facing_text(v: &mut Vec<String>, field_name: &str, text: &str) {
+pub(super) fn check_student_facing_text(v: &mut Vec<String>, field_name: &str, text: &str) {
     if has_leaked_jargon(text) {
         v.push(format!("\"{text}\" ({field_name}) expone jerga metodológica interna — el estudiante nunca debe verla"));
     }

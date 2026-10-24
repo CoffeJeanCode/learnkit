@@ -69,7 +69,9 @@ export function GraphCanvas({
               onKeyDown={(ev) => ev.key === "Enter" && onSelect({ kind: "node", id: n.id })}
             >
               <title>{n.label}</title>
-              <rect x={n.x} y={n.y} width={n.w} height={n.h} rx={8} />
+              {/* Squircle-ish node: generous radius (SVG has no corner-shape,
+                  so a fat rx is the closest analog to the CSS squircles). */}
+              <rect x={n.x} y={n.y} width={n.w} height={n.h} rx={16} />
               <text x={n.x + 12} y={n.y + n.h / 2 + 5}>
                 {truncate(n.label, n.kind === "class" ? 28 : 24)}
               </text>

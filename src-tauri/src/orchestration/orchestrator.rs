@@ -12,7 +12,10 @@ use crate::domain::message::AgentEvent;
 use crate::error::{AppError, AppResult};
 use crate::providers::{ProviderFactory, ProviderRegistry};
 use crate::secrets::SecretVault;
-use crate::tools::{BlockAuditCapture, ClosureFeedbackCapture, DiagnosticToolScope, GateGradingCapture, NotebookBlockCapture, SharedRoadmapCapture};
+use crate::tools::{
+    BlockAuditCapture, ClosureFeedbackCapture, DiagnosticToolScope, GateGradingCapture, NotebookBlockCapture, ResearchStep, SharedResearchCapture,
+    SharedRoadmapCapture,
+};
 
 /// Sealed prompt execution behind a trait so the orchestrator can be tested
 /// without API keys or network access.
@@ -111,6 +114,23 @@ pub trait PromptRunner: Send + Sync {
         _capture: BlockAuditCapture,
     ) -> AppResult<crate::providers::factory::PromptOutput> {
         Err(AppError::ToolNotFound("block audit tool-calling not supported by this runner".to_string()))
+    }
+
+    /// One step of the resource-research pipeline: the planner proposes search
+    /// queries (`ResearchStep::Plan`, tool `submit_research_plan`) or the
+    /// curator picks among the hits found (`ResearchStep::Select`, tool
+    /// `submit_resource_selection`). Same narrow, typed shape as the other
+    /// single-tool flows.
+    async fn run_research_execution(
+        &self,
+        _provider_id: &str,
+        _model: &str,
+        _system_prompt: &str,
+        _input: &str,
+        _capture: SharedResearchCapture,
+        _step: ResearchStep,
+    ) -> AppResult<crate::providers::factory::PromptOutput> {
+        Err(AppError::ToolNotFound("research tool-calling not supported by this runner".to_string()))
     }
 }
 
@@ -231,6 +251,24 @@ impl PromptRunner for RigPromptRunner {
             .get_provider_key(provider_id)?
             .ok_or_else(|| AppError::ProviderKeyMissing(provider_id.to_string()))?;
         ProviderFactory::run_block_audit_prompt(&config, &api_key, system_prompt, input, capture).await
+    }
+
+    async fn run_research_execution(
+        &self,
+        provider_id: &str,
+        model: &str,
+        system_prompt: &str,
+        input: &str,
+        capture: SharedResearchCapture,
+        step: ResearchStep,
+    ) -> AppResult<crate::providers::factory::PromptOutput> {
+        let mut config = self.providers.get(provider_id)?;
+        config.default_model = Some(model.to_string());
+        let api_key = self
+            .vault
+            .get_provider_key(provider_id)?
+            .ok_or_else(|| AppError::ProviderKeyMissing(provider_id.to_string()))?;
+        ProviderFactory::run_research_prompt(&config, &api_key, system_prompt, input, capture, step).await
     }
 }
 
@@ -737,6 +775,55 @@ impl Orchestrator {
                     "pedagogical critic agent run failed"
                 );
                 trace_agent_run("pedagogical_critic", &ctx, &def, input, started, Err(&e));
+                emit(app, AgentEvent::failed(&ctx.run_id, &ctx.agent_id, &e.to_string()));
+                Err(e)
+            }
+        }
+    }
+
+    /// Executes one research agent (planner or curator) for `step`. Same shape
+    /// as [`run_pedagogical_critic_agent`](Self::run_pedagogical_critic_agent):
+    /// an error AFTER the tool already stored its output is salvaged, since the
+    /// deliverable is in the capture.
+    pub async fn run_research_agent(
+        &self,
+        app: Option<&tauri::AppHandle>,
+        agent_id: &str,
+        input: &str,
+        capture: SharedResearchCapture,
+        step: ResearchStep,
+    ) -> AppResult<AgentOutput> {
+        let def = self.agents.get(agent_id)?;
+        let ctx = AgentContext { run_id: Uuid::new_v4().to_string(), agent_id: def.id.clone(), parent_run_id: None };
+        emit(app, AgentEvent::started(&ctx.run_id, &ctx.agent_id, None));
+        let started = Instant::now();
+        tracing::info!(run_id = %ctx.run_id, agent_id = %ctx.agent_id, provider = %def.model.provider_id, model = %def.model.model, "research agent run started");
+
+        let outcome = self.runner.run_research_execution(&def.model.provider_id, &def.model.model, &def.system_prompt, input, capture.clone(), step).await;
+        let output = |text: String, tool_calls: Vec<String>| AgentOutput {
+            run_id: ctx.run_id.clone(),
+            agent_id: ctx.agent_id.clone(),
+            parent_run_id: None,
+            text,
+            tool_calls,
+            duration_ms: started.elapsed().as_millis() as u64,
+        };
+        match outcome {
+            Ok(out) => {
+                let output = output(out.text.clone(), out.tool_calls.clone());
+                trace_agent_run(agent_id, &ctx, &def, input, started, Ok(&output));
+                emit(app, AgentEvent::completed(&ctx.run_id, &ctx.agent_id, &output.text));
+                Ok(output)
+            }
+            Err(e) => {
+                if capture.lock().unwrap_or_else(|err| err.into_inner()).is_complete(step) {
+                    tracing::warn!(run_id = %ctx.run_id, error = %e, "research agent failed after its tool already stored output; salvaging");
+                    dev_trace::trace_note("salvage", "agent_capture_salvaged", &ctx.run_id, "salvaged_after_error", &[e.to_string()]);
+                    emit(app, AgentEvent::completed(&ctx.run_id, &ctx.agent_id, ""));
+                    return Ok(output(String::new(), vec![]));
+                }
+                tracing::warn!(run_id = %ctx.run_id, agent_id = %ctx.agent_id, error = %e, "research agent run failed");
+                trace_agent_run(agent_id, &ctx, &def, input, started, Err(&e));
                 emit(app, AgentEvent::failed(&ctx.run_id, &ctx.agent_id, &e.to_string()));
                 Err(e)
             }

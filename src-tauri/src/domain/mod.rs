@@ -1,13 +1,17 @@
 pub mod agent;
 pub mod block_templates;
+pub mod calibration;
 pub mod capability_map;
 pub mod learner_memory;
+pub mod learning_context;
 pub mod lesson_composition;
 pub mod message;
 pub mod model;
 pub mod notebook;
 pub mod pedagogy_guardrails;
+pub mod plan_parts;
 pub mod provider;
+pub mod resources;
 pub mod scaffolding;
 pub mod skill_evidence;
 pub mod study;

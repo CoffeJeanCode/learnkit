@@ -28,13 +28,13 @@ const PRACTICE_BLOCK_FAMILY: [&str; 3] = ["heuristic_error_audit", "hands_on_mis
 /// the mechanism as a numbered micro-steps sequence with a concrete
 /// input/output example (see the prompt in `agents::block_generator_agent`),
 /// independent of how terse the other 3 layers stay.
-const MAX_SYSTEM_RULE_WORDS: usize = 240;
+const MAX_SYSTEM_RULE_WORDS: usize = crate::domain::block_templates::THEORY_MAX_SYSTEM_RULE_WORDS;
 
 /// Combined word ceiling for `anchored_micro_theory`'s other 3 layers —
 /// `intuitiveHook`, `analogyBoundary`, `frequentError` — kept terse even
 /// though `systemRule` now has real room, so the block never degrades into
 /// flat encyclopedic text.
-const MAX_OTHER_LAYERS_WORDS: usize = 100;
+const MAX_OTHER_LAYERS_WORDS: usize = crate::domain::block_templates::THEORY_MAX_OTHER_LAYERS_WORDS;
 
 /// Course-scoped variety check — judges the new block against the OTHER
 /// classes already generated for the same course, not against this
@@ -1023,12 +1023,29 @@ mod tests {
             BlockTemplate::TrueFalse { statement: "s".into(), is_true: true, explanation: "e".into() },
             BlockTemplate::Ordering { question: "q".into(), steps_in_order: vec!["uno".into(), "dos".into(), "tres".into()] },
             BlockTemplate::ScenarioChoice { scenario: "s".into(), decision_point: "d".into(), optimal: br("x"), alternatives: vec![br("y")] },
+            BlockTemplate::BoundaryCases {
+                question: "q".into(),
+                cases: vec![
+                    crate::domain::notebook::BoundaryCase { statement: "cumple".into(), follows_rule: true },
+                    crate::domain::notebook::BoundaryCase { statement: "rompe".into(), follows_rule: false },
+                ],
+            },
         ];
         for t in templates {
             let block = t.expand();
             let v = single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &block, 2, false, no_mastery(), false, false);
             assert!(v.is_empty(), "{:?} -> {v:?}", block.block_type());
         }
+        let theory = BlockTemplate::Theory {
+            title: "t".into(),
+            intuitive_hook: "gancho".into(),
+            analogy_boundary: "límite".into(),
+            system_rule: "1 ➔ 2".into(),
+            frequent_error: "esto SÍ a / esto NO b, porque c".into(),
+        }
+        .expand();
+        let v = single_block_violations(&[DynamicBlockType::InteractivePredictionGate], &theory, 2, false, no_mastery(), false, false);
+        assert!(v.is_empty(), "{v:?}");
         let recall = BlockTemplate::QuickRecall { items: vec![RetrievalPrompt { concept_label: "c".into(), prompt: "p".into(), expected_answer: "e".into() }] }.expand();
         // Retrieval is only legal as the first block, so it is checked as such.
         let v = single_block_violations(&[], &recall, 1, false, no_mastery(), false, true);

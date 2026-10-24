@@ -1,7 +1,11 @@
+pub mod block_stream;
 pub mod echo;
 pub mod hooks;
 pub mod notebook_tools;
+pub mod partial_json;
+pub mod plan_part_tools;
 pub mod registry;
+pub mod research_tools;
 pub mod roadmap_tools;
 #[cfg(test)]
 mod size_report;
@@ -18,7 +22,11 @@ pub use notebook_tools::{
     ScaffoldType, SubmitBlockAuditTool,
 };
 pub use hooks::{STOP_REASON, StopWhenCaptured, accept_terminal_stop, roadmap_capture_complete, stop_when_roadmap_captured, stop_when_some};
+pub use plan_part_tools::{SubmitPlanOutlineTool, SubmitWeekSessionsTool};
 pub use registry::{ToolInfo, is_known_tool, list_tools};
+pub use research_tools::{
+    ResearchCapture, ResearchStep, SharedResearchCapture, SubmitContextQuestionsTool, SubmitResearchPlanTool, SubmitResourceSelectionTool,
+};
 pub use roadmap_tools::{
     ConfirmSyllabusPlanTool, DiagnosticToolScope, PresentDiagnosticBatteryTool, ProposeCapstoneProjectTool, ProposeSyllabusPlanTool,
     RoadmapCapture, SharedRoadmapCapture, SubmitDiagnosticAssessmentTool,

@@ -36,6 +36,64 @@ export const LearnerProfileCardSchema = z.object({
   entryLevel: EntryLevelSchema,
 });
 
+// The intake questions of the profile form. They are NOT a fixed catalog: a model
+// proposes them for the learner's topic, the backend validates them and keeps its
+// own copy (`domain::learning_context`), and the answers are checked against it.
+export const QuestionKindSchema = z.enum(["choice", "text"]);
+export const QuestionPurposeSchema = z.enum(["prior_knowledge", "equipment", "constraint"]);
+
+export const ContextOptionSchema = z.object({
+  label: z.string(),
+  // 0..2 on prior-knowledge options (how the level is deduced); absent elsewhere.
+  signal: z.number().nullable().optional(),
+});
+
+// What every choice question also accepts: the form adds it as the last option.
+export const UNKNOWN_ANSWER = "No lo sé";
+
+export interface ContextQuestion {
+  id: string;
+  label: string;
+  kind: "choice" | "text";
+  purpose: "prior_knowledge" | "equipment" | "constraint";
+  options: { label: string; signal?: number | null }[];
+  /** Simpler questions asked ONLY after "No lo sé" to this one. */
+  followUps: ContextQuestion[];
+}
+
+export const ContextQuestionSchema: z.ZodType<ContextQuestion> =z.lazy(() =>
+  z.object({
+    id: z.string(),
+    label: z.string(),
+    kind: QuestionKindSchema,
+    purpose: QuestionPurposeSchema,
+    options: z.array(ContextOptionSchema).default([]),
+    followUps: z.array(ContextQuestionSchema).default([]),
+  }),
+);
+
+export const ContextQuestionSetSchema = z.object({ questions: z.array(ContextQuestionSchema) });
+
+export const ContextAnswerSchema = z.object({ questionId: z.string(), answer: z.string() });
+
+/** One answered question with the question text frozen next to the answer. */
+export const AnsweredQuestionSchema = z.object({
+  questionId: z.string(),
+  label: z.string(),
+  purpose: QuestionPurposeSchema,
+  answer: z.string(),
+});
+
+export const LearningContextSchema = z.object({ answers: z.array(AnsweredQuestionSchema) });
+
+/** Step 1 of the form: what the learner types themselves (mirrors `ProfileBasics`). */
+export const ProfileBasicsSchema = z.object({
+  topic: z.string(),
+  targetGoal: z.string(),
+  timeframeWeeks: z.number(),
+  weeklyCommitmentHours: z.number(),
+});
+
 export const DiagnosticSummaryCardSchema = z.object({
   coreFocus: z.string(),
   identifiedNeeds: z.array(z.string()),
@@ -246,6 +304,12 @@ export const RoadmapSessionSchema = z.object({
   // confirmation. `null` once `confirm_syllabus_plan` (Gate 3b) seals the
   // session; nothing is persisted into SQLite until then.
   proposed_plan: ProposedPlanSchema.nullable(),
+  // Equipment answers from the profile form (`null` for chat-era sessions).
+  learning_context: LearningContextSchema.nullable().default(null),
+  // Step 1 of the profile form, kept until step 2 completes (so a reopened session resumes at step 2).
+  profile_basics: ProfileBasicsSchema.nullable().default(null),
+  // The validated intake questions the server keeps for this topic.
+  pending_context_questions: ContextQuestionSetSchema.nullable().default(null),
   // Set once the session seals: the SQLite course this plan was imported
   // into, and its first class — no notebook content exists for it yet
   // (every class, including the first, is lazy now), the frontend triggers
@@ -740,12 +804,23 @@ export const ClosureFeedbackSchema = z.object({
 // Per-block progress events (`notebook_block://*`) — the buffering
 // counterpart to `AgentEventSchema`'s per-agent-run events. See
 // `NotebookBlockEvent` in Rust.
+// `delta` is live progress while a block is still being written: a sanitized
+// `preview` (block type + whitelisted reading-only prose, never answer keys)
+// and/or the amount of reasoning so far. Rust: `tools::block_stream`.
+export const BlockPreviewSchema = z.object({
+  blockType: z.string().nullable(),
+  fields: z.record(z.string(), z.string()),
+});
+
 export const NotebookBlockEventSchema = z.object({
-  event: z.enum(["generating", "ready", "error"]),
+  event: z.enum(["generating", "ready", "error", "delta"]),
   document_id: z.string(),
   block: NotebookBlockSchema.nullable().optional(),
   message: z.string().nullable().optional(),
   retriable: z.boolean().nullable().optional(),
+  attempt: z.number().int().nullable().optional(),
+  preview: BlockPreviewSchema.nullable().optional(),
+  reasoning_chars: z.number().int().nullable().optional(),
 });
 
 export type DynamicBlockType = z.infer<typeof DynamicBlockTypeSchema>;
@@ -775,4 +850,79 @@ export type GateSubmission = z.infer<typeof GateSubmissionSchema>;
 export type GateResult = z.infer<typeof GateResultSchema>;
 export type ClosureFeedback = z.infer<typeof ClosureFeedbackSchema>;
 export type NotebookBlockEvent = z.infer<typeof NotebookBlockEventSchema>;
+export type ClassResource = z.infer<typeof ClassResourceSchema>;
+export type CourseResearch = z.infer<typeof CourseResearchSchema>;
+export type SearchKeyStatus = z.infer<typeof SearchKeyStatusSchema>;
+export type ResearchStatusEvent = z.infer<typeof ResearchStatusEventSchema>;
+export type ContextQuestionSet = z.infer<typeof ContextQuestionSetSchema>;
+export type ContextAnswer = z.infer<typeof ContextAnswerSchema>;
+export type LearningContext = z.infer<typeof LearningContextSchema>;
+export type ProfileBasics = z.infer<typeof ProfileBasicsSchema>;
+export type BlockPreview = z.infer<typeof BlockPreviewSchema>;
 export type PredictionComparison = z.infer<typeof PredictionComparisonSchema>;
+
+// --- Roadmap form requests (mirror `ProfileForm` / `PlanAdjustment` in Rust) ---
+
+export type PlanEmphasis = "more_practice" | "more_theory" | "more_projects";
+
+/** Every field optional on the backend, but at least one must be set. */
+export interface PlanAdjustmentPayload {
+  timeframeWeeks: number | null;
+  weeklyCommitmentHours: number | null;
+  emphasis: PlanEmphasis | null;
+  note: string | null;
+}
+
+// --- Resource research (real tutorials/docs found per class) ------------------
+// Mirrors `domain::resources` and `commands::research` in Rust.
+
+export const ResourceKindSchema = z.enum(["tutorial", "documentation", "video", "exercise", "reference"]);
+
+export const ClassResourceSchema = z.object({
+  title: z.string(),
+  url: z.string(),
+  kind: ResourceKindSchema,
+  why: z.string(),
+  whatToDo: z.string(),
+});
+
+export const ResearchStatusSchema = z.enum(["pending", "running", "done", "skipped_no_key", "failed"]);
+
+/** `status: null` = research never attempted for this course. */
+export const CourseResearchSchema = z.object({
+  status: ResearchStatusSchema.nullable(),
+  detail: z.string().nullable(),
+});
+
+/** The key itself is never sent to the UI. */
+export const SearchKeyStatusSchema = z.object({
+  configured: z.boolean(),
+  source: z.enum(["vault", "env", "none"]),
+});
+
+// Progress of the syllabus being written IN PARTS (`roadmap://plan_part`): the
+// outline arrives first, then each week's sessions. Student-facing text only.
+export const PlanPartEventSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("started"), sessionId: z.string() }),
+  z.object({
+    kind: z.literal("outline"),
+    sessionId: z.string(),
+    courseTitle: z.string(),
+    coreFocus: z.string(),
+    weeks: z.array(z.object({ week: z.number(), title: z.string(), weeklyGoal: z.string().nullable().optional() })),
+    capstoneTitle: z.string(),
+  }),
+  z.object({
+    kind: z.literal("week"),
+    sessionId: z.string(),
+    week: z.number(),
+    sessions: z.array(z.object({ label: z.string(), hours: z.number(), objective: z.string().nullable().optional() })),
+  }),
+]);
+export type PlanPartEvent = z.infer<typeof PlanPartEventSchema>;
+
+export const ResearchStatusEventSchema = z.object({
+  course_id: z.string(),
+  status: ResearchStatusSchema,
+  detail: z.string().nullable(),
+});

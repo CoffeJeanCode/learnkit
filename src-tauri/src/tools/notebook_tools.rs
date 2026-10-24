@@ -772,6 +772,39 @@ fn block_template_schemas() -> Vec<serde_json::Value> {
             "required": ["blockType", "items"],
             "description": "PLANTILLA de repaso rápido; mismas reglas que spaced_interleaved_retrieval (solo como primer bloque y solo con dueRetrieval)."
         }),
+        serde_json::json!({
+            "properties": {
+                "blockType": {"const": "tpl_theory"},
+                "title": {"type": "string"},
+                "intuitiveHook": {"type": "string", "description": "🎯 El Gancho Intuitivo (≤30 palabras)"},
+                "analogyBoundary": {"type": "string", "description": "🚧 El Límite de la Analogía (≤25 palabras)"},
+                "systemRule": {"type": "string", "description": "📐 La Regla del Sistema: micro-pasos numerados con un ejemplo entrada/salida (≤240 palabras)"},
+                "frequentError": {"type": "string", "description": "⚠️ esto SÍ [válido] / esto NO [confusión], porque [razón] (≤40 palabras)"}
+            },
+            "required": ["blockType", "title", "intuitiveHook", "analogyBoundary", "systemRule", "frequentError"],
+            "description": "PLANTILLA de microteoría en capas (sin visualAid). Los topes de palabras se validan en esta misma llamada. Equivale a anchored_micro_theory."
+        }),
+        serde_json::json!({
+            "properties": {
+                "blockType": {"const": "tpl_boundary_cases"},
+                "question": {"type": "string"},
+                "cases": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 3,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "statement": {"type": "string", "description": "Micro-caso concreto al borde de la regla"},
+                            "followsRule": {"type": "boolean"}
+                        },
+                        "required": ["statement", "followsRule"]
+                    }
+                }
+            },
+            "required": ["blockType", "question", "cases"],
+            "description": "PLANTILLA de casos límite (compuerta conceptual): al menos un caso que cumple la regla y uno que la rompe; el sistema mezcla el orden. Equivale a interactive_prediction_gate boundary_case_audit."
+        }),
     ]
 }
 
@@ -1033,7 +1066,7 @@ mod tests {
             .iter()
             .filter_map(|v| v["properties"]["blockType"]["const"].as_str())
             .collect();
-        for tpl in ["tpl_multiple_choice", "tpl_true_false", "tpl_ordering", "tpl_scenario_choice", "tpl_quick_recall", "interactive_prediction_gate"] {
+        for tpl in ["tpl_multiple_choice", "tpl_true_false", "tpl_ordering", "tpl_scenario_choice", "tpl_quick_recall", "tpl_theory", "tpl_boundary_cases", "interactive_prediction_gate"] {
             assert!(tags.contains(&tpl), "missing {tpl}");
         }
     }

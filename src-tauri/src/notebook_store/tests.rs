@@ -589,3 +589,205 @@
         assert_eq!(variant, None, "rows from before the experiment belong to no arm");
     }
 
+
+    // --- Level calibration -------------------------------------------------------
+
+    fn battery_with_answers(answers: &[(&str, &str)]) -> DiagnosticBatteryState {
+        use crate::domain::notebook::{DiagnosticDimension, DiagnosticQuestion};
+        let q = |dimension| DiagnosticQuestion {
+            dimension,
+            prompt: "p".to_string(),
+            options: vec!["A".to_string(), "B".to_string()],
+            correct_option: "A".to_string(),
+            diagnostic_insight: "insight".to_string(),
+        };
+        DiagnosticBatteryState {
+            battery: DiagnosticBattery {
+                goal_alignment: "g".to_string(),
+                questions: vec![q(DiagnosticDimension::Intuition), q(DiagnosticDimension::Mechanics), q(DiagnosticDimension::CriticalCase)],
+            },
+            answers: answers.iter().map(|(i, a)| (i.to_string(), a.to_string())).collect(),
+        }
+    }
+
+    #[test]
+    fn opening_a_courses_table_without_calibration_adds_the_column_and_old_courses_read_none() {
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE courses (id TEXT PRIMARY KEY, title TEXT NOT NULL, target_goal TEXT NOT NULL, total_weeks INTEGER NOT NULL,
+                 created_at_ms INTEGER NOT NULL, diagnostic_battery_json TEXT);
+             INSERT INTO courses (id, title, target_goal, total_weeks, created_at_ms) VALUES ('old', 'Viejo', 'Meta', 2, 0);",
+        )
+        .expect("old shape");
+        let store = NotebookStore::init(conn).expect("init migrates");
+        assert_eq!(store.get_course_calibration("old").expect("read"), None, "a course sealed before calibration keeps its old behaviour");
+        assert!(store.get_course_diagnostic_profile("old").expect("profile").is_none());
+        migrate_add_calibration_column(&store.lock()).expect("idempotent");
+    }
+
+    #[test]
+    fn a_calibration_round_trips_and_feeds_the_generators_diagnostic_profile() {
+        use crate::domain::calibration::calibrate;
+        use crate::domain::roadmap::EntryLevel;
+        let store = NotebookStore::open_in_memory().expect("store");
+        let course = store.create_course("Tema", "Meta", 4).expect("course");
+        let state = battery_with_answers(&[("0", "A"), ("1", "A"), ("2", "B")]);
+        store.set_course_diagnostic_battery(&course.id, &state.battery).expect("battery");
+        store.save_diagnostic_battery_answers(&course.id, &state.answers).expect("answers");
+        let calibration = calibrate(EntryLevel::TheoreticalFoundations, 5.0, Some(&state));
+        store.set_course_calibration(&course.id, &calibration).expect("set");
+
+        assert_eq!(store.get_course_calibration(&course.id).expect("get"), Some(calibration));
+        let profile = store.get_course_diagnostic_profile(&course.id).expect("profile").expect("some");
+        assert_eq!(profile["declaredLevel"], "theoretical_foundations");
+        assert_eq!(profile["calibratedLevel"], "novice_intuitive");
+        assert_eq!(profile["weeklyCommitmentHours"], 5.0);
+        assert_eq!(profile["weakPoints"].as_array().map(Vec::len), Some(1), "the original weakPoints summary is still there");
+    }
+
+    #[test]
+    fn answering_the_battery_after_sealing_recalibrates_the_course() {
+        use crate::domain::calibration::{CalibrationFit, calibrate};
+        use crate::domain::learner_memory::CalibratedBaseline;
+        use crate::domain::roadmap::EntryLevel;
+        let store = NotebookStore::open_in_memory().expect("store");
+        let course = store.create_course("Tema", "Meta", 4).expect("course");
+        let unanswered = battery_with_answers(&[]);
+        store.set_course_diagnostic_battery(&course.id, &unanswered.battery).expect("battery");
+        let sealed = calibrate(EntryLevel::AppliedIntermediate, 4.0, Some(&unanswered));
+        assert_eq!(sealed.fit, CalibrationFit::NoEvidence);
+        store.set_course_calibration(&course.id, &sealed).expect("set");
+
+        // The student later answers everything wrong on the plan screen.
+        let late: std::collections::HashMap<String, String> = ["0", "1", "2"].iter().map(|i| (i.to_string(), "B".to_string())).collect();
+        store.save_diagnostic_battery_answers(&course.id, &late).expect("late answers");
+
+        let after = store.get_course_calibration(&course.id).expect("get").expect("some");
+        assert_eq!(after.fit, CalibrationFit::BelowDeclared);
+        assert_eq!(after.calibrated_baseline, CalibratedBaseline::NoviceZero);
+        assert_eq!(after.declared_level, EntryLevel::AppliedIntermediate, "what the learner declared never changes");
+    }
+
+    #[test]
+    fn the_course_calibration_overrides_the_baseline_only_in_the_copy_generation_reads() {
+        use crate::domain::calibration::calibrate;
+        use crate::domain::learner_memory::{CalibratedBaseline, LOCAL_LEARNER_ID};
+        use crate::domain::roadmap::EntryLevel;
+        let store = NotebookStore::open_in_memory().expect("store");
+        let course = store.create_course("Tema", "Meta", 4).expect("course");
+        let other = store.create_course("Otro", "Meta", 4).expect("other course");
+        store.set_course_calibration(&course.id, &calibrate(EntryLevel::AbsoluteZero, 3.0, None)).expect("set");
+
+        let for_course = store.get_learner_memory_for_course(LOCAL_LEARNER_ID, &course.id).expect("memory");
+        assert_eq!(for_course.calibrated_baseline, CalibratedBaseline::NoviceZero);
+        assert!(for_course.needs_heavy_scaffolding(), "an absolute-zero course now actually triggers heavy scaffolding");
+
+        let untouched = store.get_learner_memory(LOCAL_LEARNER_ID).expect("global memory");
+        assert_eq!(untouched.calibrated_baseline, CalibratedBaseline::NoviceIntuitive, "the cross-course memory is never overwritten");
+        let elsewhere = store.get_learner_memory_for_course(LOCAL_LEARNER_ID, &other.id).expect("memory");
+        assert_eq!(elsewhere.calibrated_baseline, CalibratedBaseline::NoviceIntuitive, "another topic keeps its own baseline");
+    }
+
+    // --- Class resources & research status ---------------------------------------
+
+    fn resource(title: &str, url: &str) -> crate::domain::resources::ClassResource {
+        crate::domain::resources::ClassResource {
+            title: title.to_string(),
+            url: url.to_string(),
+            kind: crate::domain::resources::ResourceKind::Tutorial,
+            why: "porque sí".to_string(),
+            what_to_do: "empieza por aquí".to_string(),
+        }
+    }
+
+    /// A course with one milestone and one class, inserted directly.
+    fn course_with_one_class(store: &NotebookStore) -> (String, String) {
+        let course = store.create_course("Tema", "Meta", 1).expect("course");
+        let conn = store.lock();
+        conn.execute(
+            "INSERT INTO syllabus_milestones (id, course_id, week_number, title, deliverable_goal) VALUES ('m1', ?1, 1, 'Semana 1', 'x')",
+            params![course.id],
+        )
+        .expect("milestone");
+        conn.execute("INSERT INTO classes (id, milestone_id, class_number, title, order_index, hours) VALUES ('cl1', 'm1', 1, 'Clase', 0, 2)", []).expect("class");
+        (course.id, "cl1".to_string())
+    }
+
+    #[test]
+    fn class_resources_round_trip_replace_and_clear() {
+        let store = NotebookStore::open_in_memory().expect("store");
+        let (_, class_id) = course_with_one_class(&store);
+        assert!(store.get_class_resources(&class_id).expect("read").is_empty(), "nothing researched yet");
+
+        store.set_class_resources(&class_id, &[resource("A", "https://a.dev"), resource("B", "https://b.dev")]).expect("set");
+        assert_eq!(store.get_class_resources(&class_id).expect("read").len(), 2);
+
+        store.set_class_resources(&class_id, &[resource("C", "https://c.dev")]).expect("replace");
+        let now = store.get_class_resources(&class_id).expect("read");
+        assert_eq!(now.iter().map(|r| r.title.as_str()).collect::<Vec<_>>(), ["C"], "replaced, not appended");
+
+        store.set_class_resources(&class_id, &[]).expect("clear");
+        assert!(store.get_class_resources(&class_id).expect("read").is_empty());
+    }
+
+    #[test]
+    fn deleting_a_course_takes_its_resources_and_research_status_along() {
+        let store = NotebookStore::open_in_memory().expect("store");
+        let (course_id, class_id) = course_with_one_class(&store);
+        store.set_class_resources(&class_id, &[resource("A", "https://a.dev")]).expect("set");
+        store.set_research_status(&course_id, ResearchStatus::Done, None).expect("status");
+
+        store.delete_course(&course_id).expect("delete");
+
+        assert!(store.get_class_resources(&class_id).expect("read").is_empty(), "cascade through the class");
+        assert_eq!(store.get_research_status(&course_id).expect("read"), None, "cascade through the course");
+    }
+
+    #[test]
+    fn research_can_only_be_claimed_once_while_running_or_done() {
+        let store = NotebookStore::open_in_memory().expect("store");
+        let (course_id, _) = course_with_one_class(&store);
+
+        assert!(store.try_begin_research(&course_id).expect("claim"), "the first caller wins");
+        assert!(!store.try_begin_research(&course_id).expect("claim"), "a second one is refused while it runs");
+        assert_eq!(store.get_research_status(&course_id).expect("read"), Some((ResearchStatus::Running, None)));
+
+        store.set_research_status(&course_id, ResearchStatus::Done, None).expect("done");
+        assert!(!store.try_begin_research(&course_id).expect("claim"), "a finished research is never repeated");
+    }
+
+    #[test]
+    fn a_failure_or_a_missing_key_can_be_tried_again() {
+        let store = NotebookStore::open_in_memory().expect("store");
+        let (course_id, _) = course_with_one_class(&store);
+        for retryable in [ResearchStatus::Failed, ResearchStatus::SkippedNoKey, ResearchStatus::Pending] {
+            store.set_research_status(&course_id, retryable, Some("motivo")).expect("set");
+            assert!(store.try_begin_research(&course_id).expect("claim"), "{retryable:?} may be retried");
+            assert_eq!(store.get_research_status(&course_id).expect("read"), Some((ResearchStatus::Running, None)), "the old reason is cleared");
+        }
+    }
+
+    #[test]
+    fn a_research_interrupted_by_closing_the_app_does_not_block_forever() {
+        let store = NotebookStore::open_in_memory().expect("store");
+        let (course_id, _) = course_with_one_class(&store);
+        assert!(store.try_begin_research(&course_id).expect("claim"));
+
+        assert_eq!(store.fail_interrupted_research().expect("sweep"), 1);
+
+        let (status, detail) = store.get_research_status(&course_id).expect("read").expect("row");
+        assert_eq!(status, ResearchStatus::Failed);
+        assert!(detail.is_some_and(|d| d.contains("interrumpida")));
+        assert!(store.try_begin_research(&course_id).expect("claim"), "and it can be started again");
+        assert_eq!(store.fail_interrupted_research().expect("sweep"), 1, "only `running` rows are touched");
+        store.set_research_status(&course_id, ResearchStatus::Done, None).expect("done");
+        assert_eq!(store.fail_interrupted_research().expect("sweep"), 0);
+    }
+
+    #[test]
+    fn a_stored_resource_list_that_no_longer_parses_reads_as_empty() {
+        let store = NotebookStore::open_in_memory().expect("store");
+        let (_, class_id) = course_with_one_class(&store);
+        store.lock().execute("INSERT INTO class_resources (class_id, resources_json, updated_at_ms) VALUES (?1, 'not json', 0)", params![class_id]).expect("insert");
+        assert!(store.get_class_resources(&class_id).expect("read").is_empty(), "degrades to no links instead of failing the class");
+    }

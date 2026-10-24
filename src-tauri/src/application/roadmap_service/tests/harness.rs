@@ -25,11 +25,44 @@ use super::*;
     pub(super) struct ScriptedRunner {
         steps: Mutex<VecDeque<ScriptedStep>>,
         calls: Mutex<usize>,
+        /// Scripted answers of the intake-questions agent, in order. `Ok(None)`
+        /// = the model answered without calling its tool.
+        questions: Mutex<VecDeque<AppResult<Option<ContextQuestionsArgs>>>>,
+        question_calls: Mutex<usize>,
+        /// Every input the intake-questions agent received.
+        question_inputs: Mutex<Vec<String>>,
     }
 
     impl ScriptedRunner {
         pub(super) fn new(steps: Vec<ScriptedStep>) -> Self {
-            Self { steps: Mutex::new(steps.into_iter().collect()), calls: Mutex::new(0) }
+            Self {
+                steps: Mutex::new(steps.into_iter().collect()),
+                calls: Mutex::new(0),
+                questions: Mutex::new(VecDeque::new()),
+                question_calls: Mutex::new(0),
+                question_inputs: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// The inputs the intake-questions agent was given, in order.
+        pub(super) fn question_inputs(&self) -> Vec<String> {
+            self.question_inputs.lock().unwrap().clone()
+        }
+
+        /// Queues what the intake-questions agent will do on its next call.
+        pub(super) fn push_questions(&self, outcome: AppResult<Option<ContextQuestionsArgs>>) {
+            self.questions.lock().unwrap().push_back(outcome);
+        }
+
+        /// Intake-questions model calls so far.
+        pub(super) fn question_calls(&self) -> usize {
+            *self.question_calls.lock().unwrap()
+        }
+
+        /// How many model turns have run so far — the number the form flow is
+        /// meant to shrink.
+        pub(super) fn calls(&self) -> usize {
+            *self.calls.lock().unwrap()
         }
     }
 
@@ -65,12 +98,31 @@ use super::*;
             c.confirm_syllabus_plan = step.confirm_syllabus_plan;
             Ok(PromptOutput { text: step.text, tool_calls: vec![] })
         }
+
+        async fn run_research_execution(
+            &self,
+            _provider_id: &str,
+            _model: &str,
+            _system_prompt: &str,
+            input: &str,
+            capture: SharedResearchCapture,
+            step: ResearchStep,
+        ) -> AppResult<PromptOutput> {
+            assert_eq!(step, ResearchStep::Questions, "the roadmap only drives the intake-questions step");
+            *self.question_calls.lock().unwrap() += 1;
+            self.question_inputs.lock().unwrap().push(input.to_string());
+            if let Some(args) = self.questions.lock().unwrap().pop_front().expect("scripted questions available")? {
+                capture.lock().unwrap().questions = Some(args);
+            }
+            Ok(PromptOutput { text: String::new(), tool_calls: vec![] })
+        }
     }
 
     pub(super) fn service_with_runner(runner: Arc<dyn PromptRunner>) -> RoadmapServiceHarness {
         let agents = Arc::new(AgentRegistry::new());
         agents.register(crate::agents::roadmap_agent::definition()).expect("register roadmap agent");
         agents.register(crate::agents::analyst_agent::definition()).expect("register analyst agent");
+        agents.register(crate::agents::context_questions_agent::definition()).expect("register context questions agent");
         let orchestrator = Arc::new(Orchestrator::new(agents, runner));
         let dir = std::env::temp_dir().join(format!("learnkit-roadmap-{}", Uuid::new_v4()));
         let store = FileStore::new(dir.clone());

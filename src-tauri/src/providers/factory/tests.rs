@@ -33,6 +33,107 @@
     }
 
     #[test]
+    fn only_the_scopes_that_write_the_whole_plan_get_the_longer_timeout() {
+        assert_eq!(proposal_timeout_secs(200), 600, "3x the default");
+        assert_eq!(proposal_timeout_secs(900), MAX_PROPOSAL_TIMEOUT_SECS, "capped, never unbounded");
+        assert_eq!(proposal_timeout_secs(u64::MAX), MAX_PROPOSAL_TIMEOUT_SECS, "no overflow");
+        let base = prompt_timeout_secs();
+        assert_eq!(diagnostic_timeout_secs(DiagnosticToolScope::Assessment), base);
+        assert_eq!(diagnostic_timeout_secs(DiagnosticToolScope::Battery), base);
+        assert_eq!(diagnostic_timeout_secs(DiagnosticToolScope::Propose), proposal_timeout_secs(base));
+        assert_eq!(diagnostic_timeout_secs(DiagnosticToolScope::All), proposal_timeout_secs(base));
+    }
+
+    #[test]
+    fn block_streaming_is_on_unless_explicitly_switched_off() {
+        assert!(parse_stream_blocks(None));
+        assert!(parse_stream_blocks(Some("1")));
+        assert!(parse_stream_blocks(Some("whatever")));
+        for off in ["0", "false", "OFF", " no "] {
+            assert!(!parse_stream_blocks(Some(off)), "{off:?} must switch streaming off");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_progress_sink_is_visible_only_inside_its_scope() {
+        use crate::tools::block_stream::{BLOCK_STREAM_SINK, BlockStreamUpdate};
+        let sink: BlockStreamSink = std::sync::Arc::new(|_: BlockStreamUpdate| {});
+        assert!(current_sink().is_none(), "no sink outside a scope: callers without a UI keep the blocking path");
+        BLOCK_STREAM_SINK.scope(sink, async { assert!(current_sink().is_some()) }).await;
+        assert!(current_sink().is_none(), "the scope ends with the attempt");
+    }
+
+    /// Drives the REAL rig streaming loop over a scripted model: the capture is
+    /// filled by the tool exactly as on the blocking path, the loop stops after
+    /// ONE model call, and the sink only ever sees sanitized progress.
+    mod streamed_block_turn {
+        use super::*;
+        use crate::tools::block_stream::BlockStreamUpdate;
+        use crate::tools::{NotebookBlockCapture, PublishNotebookBlockTool, stop_when_some};
+        use rig_agent::agent::AgentBuilder as Builder;
+        use rig_core::test_utils::{MockCompletionModel, MockStreamEvent};
+        use std::sync::{Arc, Mutex};
+
+        fn theory() -> serde_json::Value {
+            serde_json::json!({
+                "blockType": "anchored_micro_theory", "title": "Recursión", "intuitiveHook": "h", "systemRule": "r", "frequentError": "f"
+            })
+        }
+
+        fn collecting_sink() -> (BlockStreamSink, Arc<Mutex<Vec<BlockStreamUpdate>>>) {
+            let seen: Arc<Mutex<Vec<BlockStreamUpdate>>> = Arc::new(Mutex::new(Vec::new()));
+            let seen2 = seen.clone();
+            (Arc::new(move |u| seen2.lock().unwrap().push(u)), seen)
+        }
+
+        async fn run(model: MockCompletionModel, capture: NotebookBlockCapture, sink: BlockStreamSink) -> AppResult<PromptOutput> {
+            let agent = Builder::new(model).tool(PublishNotebookBlockTool(capture.clone())).build();
+            ProviderFactory::stream_notebook_block(&agent, "go", stop_when_some(capture), sink, BlockCallParams::resolve(None, Some("6"), None)).await
+        }
+
+        #[tokio::test]
+        async fn a_streamed_tool_call_fills_the_capture_stops_after_one_call_and_streams_only_safe_progress() {
+            let model = MockCompletionModel::from_stream_turns([[
+                MockStreamEvent::reasoning_delta("pensando en la explicación"),
+                MockStreamEvent::tool_call_name_delta("t1", "publish_notebook_block"),
+                MockStreamEvent::tool_call_arguments_delta("t1", r#"{"blockType":"anchored_micro_theory","title":"Recursión""#),
+                // A leak attempt in a later fragment: the sink must never carry it.
+                MockStreamEvent::tool_call_arguments_delta("t1", r#","correctOption":"B"}"#),
+                MockStreamEvent::tool_call("t1", "publish_notebook_block", theory()),
+                MockStreamEvent::final_response_with_default_usage(),
+            ]]);
+            let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
+            let (sink, seen) = collecting_sink();
+
+            let out = run(model.clone(), capture.clone(), sink).await.expect("our own terminal stop is success");
+            assert_eq!(out.tool_calls, vec!["publish_notebook_block".to_string()]);
+            assert_eq!(model.request_count(), 1, "the loop ends after the first tool result");
+            let published = capture.lock().unwrap().take().expect("the tool filled the capture, as on the blocking path");
+            assert_eq!(serde_json::to_value(&published.block).unwrap()["title"], "Recursión");
+
+            let seen = seen.lock().unwrap();
+            assert!(seen.iter().any(|u| matches!(u, BlockStreamUpdate::Reasoning { chars } if *chars > 0)), "reasoning progress is reported");
+            let previews: Vec<&serde_json::Value> = seen.iter().filter_map(|u| if let BlockStreamUpdate::Preview(p) = u { Some(p) } else { None }).collect();
+            assert!(!previews.is_empty(), "the block's text is streamed");
+            assert_eq!(previews[0]["blockType"], "anchored_micro_theory");
+            assert_eq!(previews[0]["fields"]["title"], "Recursión");
+            let everything = format!("{seen:?}");
+            assert!(!everything.contains("correctOption"), "an answer key must never reach the sink: {everything}");
+            assert!(!everything.contains("pensando"), "reasoning text must never reach the sink");
+        }
+
+        #[tokio::test]
+        async fn a_stream_error_surfaces_as_an_agent_failure_not_a_success() {
+            let model = MockCompletionModel::from_stream_turns([[MockStreamEvent::error("conexión cortada")]]);
+            let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
+            let (sink, _) = collecting_sink();
+            let err = run(model, capture.clone(), sink).await.expect_err("must fail");
+            assert!(matches!(err, AppError::AgentExecutionFailed(_)), "got {err:?}");
+            assert!(capture.lock().unwrap().is_none(), "nothing was published");
+        }
+    }
+
+    #[test]
     fn resolve_model_prefers_override_then_default() {
         let mut cfg = openai_cfg();
         assert!(matches!(
@@ -101,4 +202,14 @@
         let message = shown["message"].as_str().unwrap();
         assert!(message.contains("agent execution failed"), "keeps the typed prefix");
         assert!(!message.contains("sk-secret"));
+    }
+
+    #[test]
+    fn block_call_params_default_and_clamp() {
+        let d = BlockCallParams::resolve(None, None, None);
+        assert_eq!((d.max_turns, d.timeout_secs, d.require_tool), (3, 420, true));
+        let o = BlockCallParams::resolve(Some("600"), Some("50"), Some(" auto "));
+        assert_eq!((o.max_turns, o.timeout_secs, o.require_tool), (10, 600, false));
+        let bad = BlockCallParams::resolve(Some("x"), Some("0"), Some("required"));
+        assert_eq!((bad.max_turns, bad.timeout_secs, bad.require_tool), (1, 420, true));
     }

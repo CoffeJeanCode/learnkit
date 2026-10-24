@@ -12,7 +12,10 @@ import {
 import { useNotebookNav } from "../../stores/notebook";
 import { useRoadmap } from "../../stores/roadmap";
 import { useUi } from "../../stores/ui";
-import { ClassGenerationLoader, ThinkingSketch } from "../../components/AgentLoader";
+import { ClassGenerationLoader } from "../../components/AgentLoader";
+import { BlockDraftPreview } from "./BlockDraftPreview";
+import { BlockGeneratingCard } from "./BlockGeneratingCard";
+import { ResourcesPanel } from "./ResourcesPanel";
 import { ClassPath } from "../../components/ClassPath";
 import { DynamicNotebookBlock } from "./blocks";
 import { useClassNotebookSession } from "./useClassNotebookSession";
@@ -109,6 +112,7 @@ export function ClassNotebookView() {
     loading,
     error,
     stage,
+    draft,
     submitGate,
     requestEasierStep,
     annotateBlock,
@@ -320,7 +324,12 @@ export function ClassNotebookView() {
               for classes imported before the field existed. */}
           {activeClass?.objective && <p className="hint class-objective">Objetivo: {activeClass.objective}</p>}
 
-          {loading && <ClassGenerationLoader stage={stage} />}
+          {loading && (
+            <>
+              <ClassGenerationLoader stage={stage} />
+              <BlockDraftPreview draft={draft} />
+            </>
+          )}
           {error && (
             <div className="alert error">
               <span className="alert-text">{error}</span>
@@ -361,18 +370,9 @@ export function ClassNotebookView() {
                     </button>
                   </div>
                 ) : lastVisible && lastVisible.block_type !== "metacognitive_closure" ? (
-                  <div className="buffer-loader">
-                    <ThinkingSketch label="Preparando el siguiente paso…" />
-                    <button
-                      type="button"
-                      className="buffer-cancel"
-                      title="Cancelar y reintentar"
-                      aria-label="Cancelar y reintentar"
-                      onClick={() => cancelBuffer()}
-                    >
-                      ×
-                    </button>
-                  </div>
+                  // Keyed by how many blocks exist so the stopwatch (and the
+                  // skeleton's shimmer) restart for every new block.
+                  <BlockGeneratingCard key={blocks.length} stage={stage} draft={draft} onCancel={() => cancelBuffer()} />
                 ) : null)}
             </div>
           )}
@@ -396,6 +396,8 @@ export function ClassNotebookView() {
                 </div>
               </div>
             )}
+
+            {classId && courseId && <ResourcesPanel key={classId} classId={classId} courseId={courseId} />}
 
             {classes.length > 0 && (
               <div className="card class-path-card">

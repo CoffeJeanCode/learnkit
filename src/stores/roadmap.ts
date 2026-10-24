@@ -1,16 +1,22 @@
 import { create } from "zustand";
-import type { ChatTurn, RoadmapSession, RoadmapSessionSummary } from "../lib/schemas";
+import type { ChatTurn, ContextAnswer, PlanAdjustmentPayload, PlanPartEvent, ProfileBasics, RoadmapSession, RoadmapSessionSummary } from "../lib/schemas";
+import { type PlanDraft, applyPlanPart } from "../features/roadmap/planDraft";
+import { profileSummaryText } from "../features/roadmap/profileFormModel";
 import {
+  adjustRoadmapPlan,
   answerDiagnosticQuestion,
+  confirmRoadmapPlan,
   deleteRoadmapSession,
   ensureCourseImported,
   getRoadmapSession,
   listRoadmapSessions,
+  proposeContextQuestions,
   renameRoadmapSession,
   retryRoadmapTurn,
   sendRoadmapMessage,
   skipDiagnosticBattery,
   startRoadmapSession,
+  submitRoadmapProfile,
   tauriError,
 } from "../lib/tauri";
 import type { ChatMessage } from "../types";
@@ -138,12 +144,36 @@ interface RoadmapState {
   savedLoading: boolean;
   /** True while a saved session is being opened. */
   opening: boolean;
+  /** The syllabus as far as it has been written while a proposal is in flight
+   *  (outline first, then each week) — `null` the rest of the time. Purely
+   *  visual: the real plan only exists once the turn resolves. */
+  planDraft: PlanDraft | null;
+  /** Folds one `roadmap://plan_part` event into the draft (ignored unless a
+   *  turn is running on that session). */
+  receivePlanPart: (event: PlanPartEvent) => void;
   /** First interaction creates AND uses the session in one go —
    *  no "Iniciar sesión" gate in the UI. */
   start: () => Promise<void>;
   send: (input: string) => Promise<void>;
   /** Sends the message, starting a session first if there isn't one yet. */
   sendOrStart: (input: string) => Promise<void>;
+  /** Step 1 of the profile form: sends topic, goal, weeks and hours (starting a
+   *  session if there is none) and stores the intake questions the server
+   *  generated for THIS topic on the session. A server refusal (InvalidInput)
+   *  lands in `error` and leaves no trace in the conversation. */
+  proposeQuestions: (basics: ProfileBasics) => Promise<void>;
+  /** Step 2: the answers to those questions. The server validates them against
+   *  its own copy of the questions, deduces the level and runs what follows
+   *  (the battery, or the proposal for an absolute beginner). */
+  submitProfile: (answers: ContextAnswer[]) => Promise<void>;
+  /** Seals the proposed plan with the Confirmar button — no model call. */
+  confirmPlan: () => Promise<void>;
+  /** Revises the proposed plan from the adjustment controls (one proposal turn;
+   *  the previous plan stays if it cannot be produced). */
+  adjustPlan: (adjustment: PlanAdjustmentPayload) => Promise<void>;
+  /** Re-runs the step behind a saved profile that never landed (the battery or
+   *  the proposal) — for when the hand-off ended without an error to retry on. */
+  resumeHandOff: () => Promise<void>;
   /** Re-runs the turn that just failed WITHOUT duplicating it: the battery
    *  answer if that's what failed, otherwise `retry_roadmap_turn` (which
    *  resumes from the already-persisted user turn). Backs the alert's manual
@@ -191,6 +221,7 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
       retryPhase: null,
       retryable: false,
       pendingAnswer: null,
+      planDraft: null,
       session: result.session,
       ...(sealedJustNow ? { justSealed: true } : {}),
       ...(result.message ? { messages: [...s.messages, { role: "assistant" as const, content: result.message }] } : {}),
@@ -224,6 +255,7 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
       sending: false,
       retryPhase: null,
       retryable,
+      planDraft: null,
       error: text,
       messages: [...s.messages, { role: "error", content: text }],
     }));
@@ -252,6 +284,7 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
       retryable: false,
       retryPhase: null,
       autoRetriesLeft: MAX_AUTO_RETRIES,
+      planDraft: null,
       messages: dropTrailingErrors(s.messages),
       ...extra,
     }));
@@ -272,7 +305,14 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
     saved: [],
     savedLoading: false,
     opening: false,
+    planDraft: null,
     restoreHistory: readHistoryFilter(),
+
+    receivePlanPart: (event) => {
+      const { session, sending } = get();
+      if (!session || !sending) return;
+      set((s) => ({ planDraft: applyPlanPart(s.planDraft, event, session.session_id) }));
+    },
 
     start: async () => {
       // Guard against double-invocation (React StrictMode mounts effects
@@ -310,6 +350,82 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
       );
     },
 
+    proposeQuestions: async (basics) => {
+      if (get().sending || get().opening) return;
+      if (!get().session) {
+        await get().start();
+        // Start failed (config, persistence) — the error is already shown.
+        if (!get().session) return;
+      }
+      const { session } = get();
+      if (!session || session.status === "sealed") return;
+      const epoch = beginTurn({ pendingAnswer: null });
+      const sessionId = session.session_id;
+      const submit = () => proposeContextQuestions(sessionId, basics);
+      try {
+        applySuccess(epoch, await submit());
+      } catch (e) {
+        const err = tauriError(e);
+        if (err.code === "InvalidInput") {
+          // Refused before any model call: show the reason next to the form.
+          if (get().epoch !== epoch) return;
+          set({ sending: false, retryPhase: null, retryable: false, error: err.message });
+          return;
+        }
+        await failTurn(e, epoch, submit);
+      }
+    },
+
+    submitProfile: async (answers) => {
+      const { session, sending, opening } = get();
+      const basics = session?.profile_basics;
+      if (sending || opening || !session || !basics || session.status === "sealed") return;
+      const bubble: ChatMessage = { role: "user", content: profileSummaryText(basics) };
+      const epoch = beginTurn({ pendingAnswer: null, messages: [...get().messages, bubble] });
+      const sessionId = session.session_id;
+      try {
+        applySuccess(epoch, await submitRoadmapProfile(sessionId, answers));
+      } catch (e) {
+        const err = tauriError(e);
+        if (err.code === "InvalidInput") {
+          // Refused before anything was saved or asked of the model: show the
+          // reason next to the form and take the "you said" bubble back.
+          if (get().epoch !== epoch) return;
+          set((s) => ({ sending: false, retryPhase: null, retryable: false, error: err.message, messages: s.messages.filter((m) => m !== bubble) }));
+          return;
+        }
+        // The profile is saved before the model runs, so a retry resumes from it.
+        await failTurn(e, epoch, () => retryRoadmapTurn(sessionId));
+      }
+    },
+
+    confirmPlan: async () => {
+      const { session, sending } = get();
+      if (sending || !session || !session.proposed_plan || session.status === "sealed") return;
+      const epoch = beginTurn({ pendingAnswer: null });
+      const sessionId = session.session_id;
+      const submit = () => confirmRoadmapPlan(sessionId);
+      await runTurn(epoch, submit, submit);
+    },
+
+    adjustPlan: async (adjustment) => {
+      const { session, sending } = get();
+      if (sending || !session || !session.proposed_plan || session.status === "sealed") return;
+      const epoch = beginTurn({ pendingAnswer: null });
+      const sessionId = session.session_id;
+      const submit = () => adjustRoadmapPlan(sessionId, adjustment);
+      await runTurn(epoch, submit, submit);
+    },
+
+    resumeHandOff: async () => {
+      const { session, sending } = get();
+      if (sending || !session || !session.learner_profile_card || session.status === "sealed") return;
+      const epoch = beginTurn({ retryPhase: "manual" });
+      const sessionId = session.session_id;
+      const submit = () => retryRoadmapTurn(sessionId);
+      await runTurn(epoch, submit, submit);
+    },
+
     refreshSession: async () => {
       const { session } = get();
       if (!session) return;
@@ -336,6 +452,7 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
         autoRetriesLeft: 0,
         pendingAnswer: null,
         justSealed: false,
+        planDraft: null,
         epoch: s.epoch + 1,
       }));
     },
@@ -406,6 +523,7 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
         autoRetriesLeft: 0,
         pendingAnswer: null,
         justSealed: false,
+        planDraft: null,
         opening: true,
         epoch,
       });

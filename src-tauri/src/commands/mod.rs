@@ -4,4 +4,5 @@ pub mod dev;
 pub mod lexical_assistant;
 pub mod notebook;
 pub mod providers;
+pub mod research;
 pub mod roadmap;

@@ -1,14 +1,18 @@
 /* LearnKit — Conceptual Sketch, dark (chalk on dark paper).
- * Balanced sketchiness: subtitle /* keep the hand-drawn traces on the header,
- * badges and gate-card tape; dense reading surfaces (cards, messages, code)
- * stay still so night reading doesn't get noisy. Strokes are dashed (pencil),
- * not solid lines; no gradients, no shadows, no light blocks inside dark. */
+ * Borderless squircles: NO outlines anywhere in the UI — surfaces separate by
+ * tone alone (paper / card / input / washes) and every rectangle or container
+ * wears iOS-style superellipse corners via `corner-shape: squircle` (Chromium
+ * 139+, which WebView2 evergreen ships; engines without it fall back to the
+ * same value as a plain border-radius). Status colors live in text and wash
+ * backgrounds, never in a stroke. */
 
 :root {
   color-scheme: dark;
   --paper: #191c20;
   --paper-deep: #121417;
-  --card: #20242a;
+  /* Card tone lifted a couple of steps above `--paper`: with no borders left,
+     the card/page split rides ENTIRELY on this contrast. */
+  --card: #242a33;
   --input: #14171b;
   --chalk: #e8e2d4;
   --chalk-soft: #b6b0a1;
@@ -37,6 +41,19 @@
   --read-size: 17px;
   --read-leading: 1.7;
   --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.03 0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  /* Squircle radii — always paired with `corner-shape: squircle` on the rule.
+     `--squircle` for cards/panels, `-sm` for chips/rows, `-xs` for inline code. */
+  --squircle: 18px;
+  --squircle-sm: 10px;
+  --squircle-xs: 6px;
+  /* Lifted card tone for hover states (the role border-color used to play). */
+  --card-hi: #2d343f;
+  /* Warm dark bubble for the student's own messages — distinguishable from
+     both the page and the mentor's --card bubble without any outline. */
+  --bubble-user: #2b251b;
+  /* Dev sidebar width, shared by the panel and the workspace's reserved
+     gutter so the page never hides content behind it. */
+  --dev-sidebar-w: min(520px, 88vw);
 }
 
 * { box-sizing: border-box; }
@@ -56,7 +73,7 @@ body {
 
 .app { display: flex; flex-direction: column; height: 100vh; }
 
-/* --- Top bar: chalk header with a hand-drawn (dashed) underline --- */
+/* --- Top bar: chalk header, flat (no underline stroke) --- */
 .topbar {
   display: flex;
   align-items: center;
@@ -65,7 +82,6 @@ body {
   padding: 12px 24px;
   background: var(--paper-deep);
   background-image: var(--grain);
-  border-bottom: 2px dashed var(--chalk-soft);
 }
 .brand {
   font-family: var(--font-hand);
@@ -84,7 +100,7 @@ body {
  * checks, ready → installs); the banner is what the automatic check on entry
  * surfaces so the student doesn't have to go looking. */
 .topbar button.update-ready {
-  border-color: var(--green-chalk);
+  background: var(--green-wash);
   color: var(--green-chalk);
   font-weight: 700;
 }
@@ -96,7 +112,6 @@ body {
   flex-wrap: wrap;
   padding: 10px 24px;
   background: var(--blue-wash);
-  border-bottom: 2px dashed var(--chalk-soft);
 }
 .update-banner-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .update-banner-notes { font-size: 14px; color: var(--chalk-soft); }
@@ -114,9 +129,8 @@ body {
   padding: 1px 12px;
   font-family: var(--font-hand);
   font-size: 17px;
-  border: 2px dashed var(--chalk);
   border-radius: 999px;
-  background: var(--paper);
+  background: var(--card);
   transform: rotate(-0.8deg);
 }
 
@@ -135,7 +149,8 @@ body {
   width: min(340px, 85vw);
   background: var(--paper-deep);
   background-image: var(--grain);
-  border-right: 2px dashed var(--chalk-soft);
+  border-radius: 0 var(--squircle) var(--squircle) 0;
+  corner-shape: squircle;
   padding: 18px 16px;
   overflow-y: auto;
   animation: drawer-in 0.18s ease-out;
@@ -155,11 +170,12 @@ body {
   text-align: left;
   gap: 2px;
   background: var(--card);
-  border-color: var(--chalk-faint);
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
   transform: none;
 }
-.drawer-item:hover:not(:disabled) { background: var(--card); box-shadow: 3px 3px 0 var(--marker); }
-.drawer-item.current { border-color: var(--chalk); background: var(--marker); }
+.drawer-item:hover:not(:disabled) { background: var(--card-hi); box-shadow: 3px 3px 0 var(--marker); }
+.drawer-item.current { background: var(--marker); }
 .drawer-item-title {
   font-family: var(--font-hand);
   font-size: 21px;
@@ -180,8 +196,8 @@ body {
 }
 .drawer-item-open:hover:not(:disabled) { background: transparent; }
 .drawer-item-actions { display: flex; gap: 8px; margin-top: 6px; }
-.drawer-item-actions .drawer-danger { border-color: var(--red-chalk); color: var(--red-chalk); }
-.drawer-item-actions .drawer-danger:hover:not(:disabled) { background: var(--red-wash); border-color: var(--red-chalk); }
+.drawer-item-actions .drawer-danger { color: var(--red-chalk); }
+.drawer-item-actions .drawer-danger:hover:not(:disabled) { background: var(--red-wash); color: var(--red-chalk); }
 /* What a delete actually costs: the cascade removes the session AND its
  * classes, so the confirmation says so instead of implying a single row. */
 .drawer-danger-text { margin: 4px 0 0; font-size: 13px; color: var(--red-chalk); }
@@ -189,8 +205,8 @@ body {
  * palette as `.drawer-danger`/`.drawer-danger-text` above, reusable anywhere
  * a two-step confirm guards a destructive action (e.g. whole-class
  * regeneration in the notebook header). */
-.btn-danger { border-color: var(--red-chalk); color: var(--red-chalk); }
-.btn-danger:hover:not(:disabled) { background: var(--red-wash); border-color: var(--red-chalk); }
+.btn-danger { color: var(--red-chalk); }
+.btn-danger:hover:not(:disabled) { background: var(--red-wash); color: var(--red-chalk); }
 .danger-confirm-text { font-size: 13px; color: var(--red-chalk); }
 .drawer-edit { display: flex; gap: 6px; }
 .drawer-edit input { flex: 1; font-size: 14px; padding: 5px 10px; }
@@ -248,19 +264,21 @@ body {
   font-weight: 400;
   font-size: 15px;
   line-height: 1.5;
-  border-radius: 12px 4px 14px 5px / 5px 14px 4px 12px;
+  border-radius: var(--squircle);
+  corner-shape: squircle;
   padding: 8px 14px;
 }
-/* One chalk tone per chip (red/green/blue/gold) instead of a flat gray
-   row — same washed-background-on-hover pattern as `.btn-danger`/`.badge.ok`. */
-.example-chip-red { border-color: var(--red-chalk); color: var(--red-chalk); }
-.example-chip-red:hover:not(:disabled) { background: var(--red-wash); }
-.example-chip-green { border-color: var(--green-chalk); color: var(--green-chalk); }
-.example-chip-green:hover:not(:disabled) { background: var(--green-wash); }
-.example-chip-blue { border-color: var(--blue-chalk); color: var(--blue-chalk); }
-.example-chip-blue:hover:not(:disabled) { background: var(--blue-wash); }
-.example-chip-gold { border-color: var(--gold-chalk); color: var(--gold-chalk); }
-.example-chip-gold:hover:not(:disabled) { background: var(--gold-wash); }
+/* One chalk tone per chip (red/green/blue/gold) instead of a flat gray row —
+   the tone now lives in a wash BACKGROUND (no border to color) and hover
+   doubles that wash for depth. */
+.example-chip-red { background: var(--red-wash); color: var(--red-chalk); }
+.example-chip-red:hover:not(:disabled) { background: var(--red-wash), var(--red-wash); }
+.example-chip-green { background: var(--green-wash); color: var(--green-chalk); }
+.example-chip-green:hover:not(:disabled) { background: var(--green-wash), var(--green-wash); }
+.example-chip-blue { background: var(--blue-wash); color: var(--blue-chalk); }
+.example-chip-blue:hover:not(:disabled) { background: var(--blue-wash), var(--blue-wash); }
+.example-chip-gold { background: var(--gold-wash); color: var(--gold-chalk); }
+.example-chip-gold:hover:not(:disabled) { background: var(--gold-wash), var(--gold-wash); }
 
 /* Foco / Entregable / Objetivo: one line each under a session, kept visually
    distinct (see `MicromoduleItem`) so the plan reads as a scannable list of
@@ -275,20 +293,23 @@ body {
    build" — absent for syllabi sealed before `Milestone::weeklyGoal` existed. */
 .week-goal {
   margin: 4px 0 8px;
-  padding: 2px 0 2px 10px;
-  border-left: 2px solid var(--chalk-faint);
+  padding: 6px 12px;
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
+  background: var(--input);
   color: var(--chalk-soft);
   font-size: 15px;
   font-style: italic;
 }
 .milestone-list > li { margin-bottom: 10px; }
 
-/* --- Cards: dark notes, flat surface (texture lives on the page) --- */
+/* --- Cards: dark notes, borderless squircle surface (texture on the page) --- */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 18px; margin: 14px 0; }
 .card {
   background: var(--card);
-  border: 2px solid var(--chalk);
-  border-radius: 14px 4px 16px 5px / 5px 16px 4px 14px;
+  border: none;
+  border-radius: var(--squircle);
+  corner-shape: squircle;
   padding: 16px;
 }
 .card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
@@ -296,15 +317,14 @@ body {
 .badge {
   font-family: var(--font-hand);
   font-size: 17px;
-  background: transparent;
-  border: 2px solid var(--chalk-soft);
-  border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+  background: var(--input);
+  border-radius: 999px;
   padding: 1px 10px;
   color: var(--chalk-soft);
   white-space: nowrap;
   transform: rotate(-1deg);
 }
-.badge.ok { border-color: var(--green-chalk); color: var(--green-chalk); }
+.badge.ok { background: var(--green-wash); color: var(--green-chalk); }
 
 /* Gate cards look taped into the journal */
 .learner-profile-card,
@@ -325,17 +345,18 @@ body {
   height: 24px;
   transform: translateX(-50%) rotate(-1.5deg);
   background: var(--tape);
-  border-left: 1px dashed rgba(232, 226, 212, 0.3);
-  border-right: 1px dashed rgba(232, 226, 212, 0.3);
+  border-radius: 3px;
+  corner-shape: squircle;
 }
 
-/* --- Forms: chalk boxes --- */
+/* --- Forms: borderless squircle fields --- */
 label { display: block; font-size: 13px; color: var(--chalk-soft); margin: 8px 0 2px; }
 input, select, textarea {
   width: 100%;
   background: var(--input);
-  border: 2px solid var(--chalk);
-  border-radius: 12px 4px 14px 5px / 5px 14px 4px 12px;
+  border: none;
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
   color: var(--chalk);
   padding: 8px 12px;
   font-size: 15px;
@@ -343,15 +364,15 @@ input, select, textarea {
 }
 input:focus, select:focus, textarea:focus {
   outline: none;
-  border-color: var(--chalk);
   box-shadow: 3px 3px 0 var(--marker);
 }
 button {
-  background: transparent;
-  border: 2px solid var(--chalk);
-  border-radius: 255px 15px 225px 15px / 15px 225px 15px 255px;
+  background: var(--input);
+  border: none;
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
   color: var(--chalk);
-  padding: 5px 18px;
+  padding: 5px 16px;
   font-size: 20px;
   font-family: var(--font-hand);
   font-weight: 600;
@@ -364,32 +385,31 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   outline: 2px dashed var(--chalk);
   outline-offset: 3px;
 }
-.btn-primary { background: var(--chalk); border-color: var(--chalk); color: var(--paper-deep); }
+.btn-primary { background: var(--chalk); color: var(--paper-deep); }
 .btn-primary:hover:not(:disabled) { background: #fff; }
 /* One shared "quiet" look for secondary actions instead of ad-hoc overrides. */
 .btn-quiet {
   font-size: 17px;
   padding: 3px 14px;
-  border-color: var(--chalk-faint);
+  background: transparent;
   color: var(--chalk-soft);
 }
-.btn-quiet:hover:not(:disabled) { border-color: var(--chalk); color: var(--chalk); background: transparent; }
+.btn-quiet:hover:not(:disabled) { color: var(--chalk); background: var(--card-hi); }
 /* Skip action of the live diagnostic: light chip so it never reads as one
    of the dark option buttons of the battery. */
 .btn-skip {
   background: var(--chalk-soft);
-  border-color: var(--chalk-soft);
   color: var(--paper-deep);
   font-size: 17px;
   padding: 3px 16px;
 }
-.btn-skip:hover:not(:disabled) { background: var(--chalk); border-color: var(--chalk); }
-.btn-danger-quiet { border-color: var(--red-chalk); color: var(--red-chalk); }
-.btn-danger-quiet:hover:not(:disabled) { background: var(--red-wash); border-color: var(--red-chalk); color: var(--red-chalk); }
+.btn-skip:hover:not(:disabled) { background: var(--chalk); }
+.btn-danger-quiet { color: var(--red-chalk); }
+.btn-danger-quiet:hover:not(:disabled) { background: var(--red-wash); color: var(--red-chalk); }
 
 /* --- Section tabs (Conversación | Clases en el topbar, Clase | Plan en
-       la página de sesión): chips dibujados a mano que eco el phase
-       tracker — el activo va relleno con tiza, los inactivos punteados. --- */
+       la página de sesión): squircle chips que eco el phase tracker — el
+       activo va relleno con tiza, los inactivos en tono suave. --- */
 .topbar-tabs, .notebook-tabs { display: flex; gap: 8px; align-items: center; }
 .notebook-tabs { margin-bottom: 14px; }
 /* The in-view Conversación|Plan filter row (`SessionView`): it's a `.view`
@@ -401,15 +421,15 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   font-size: 19px;
   font-weight: 600;
   padding: 3px 16px;
-  border: 2px dashed var(--chalk-faint);
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
+  background: var(--card);
   color: var(--chalk-soft);
   transform: rotate(-0.6deg);
 }
 .tab:nth-child(even) { transform: rotate(0.6deg); }
-.tab:hover:not(:disabled) { border-color: var(--chalk); color: var(--chalk); background: transparent; }
+.tab:hover:not(:disabled) { color: var(--chalk); background: var(--card-hi); }
 .tab.active {
-  border-style: solid;
-  border-color: var(--chalk);
   background: var(--chalk);
   color: var(--paper-deep);
 }
@@ -422,13 +442,14 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 
 /* --- Alerts: margin notes --- */
 .alert {
-  border: 2px solid var(--chalk);
-  border-radius: 12px 4px 14px 5px / 5px 14px 4px 12px;
+  border: none;
+  border-radius: var(--squircle);
+  corner-shape: squircle;
   padding: 9px 14px;
   margin: 10px 0;
   font-size: 15px;
   cursor: pointer;
-  background: var(--card);
+  background: var(--input);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -436,11 +457,10 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   flex-wrap: wrap;
 }
 .alert .alert-text { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
-.alert.error { border-color: var(--red-chalk); background: var(--red-wash); color: var(--red-chalk); }
-.alert.ok { border-color: var(--green-chalk); background: var(--green-wash); color: var(--green-chalk); }
+.alert.error { background: var(--red-wash); color: var(--red-chalk); }
+.alert.ok { background: var(--green-wash); color: var(--green-chalk); }
 /* Manual retry offered next to a retryable failure (network/timeout). */
 .alert .btn-retry {
-  border-color: currentColor;
   color: inherit;
   background: transparent;
   font-size: 15px;
@@ -453,8 +473,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 /* --- Messages: gentle wobble, clear roles --- */
 .messages { display: flex; flex-direction: column; gap: 14px; margin: 16px 0; }
 .msg {
-  border: 2px solid var(--chalk);
-  border-radius: 14px 4px 16px 5px / 5px 16px 4px 14px;
+  border: none;
+  border-radius: var(--squircle);
+  corner-shape: squircle;
   padding: 10px 14px;
   background: var(--card);
 }
@@ -477,12 +498,12 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   align-self: flex-end;
   max-width: 85%;
   transform: rotate(0.2deg);
-  background: var(--input);
+  background: var(--bubble-user);
 }
 .msg.user .msg-role { color: #ffd664; text-decoration: underline wavy rgba(255, 214, 100, 0.5) 1px; }
-.msg.error { border-color: var(--red-chalk); background: var(--red-wash); }
+.msg.error { background: var(--red-wash); }
 .msg.error .msg-role, .msg.error .msg-body { color: var(--red-chalk); }
-.msg.status { border-style: dashed; background: transparent; font-size: 13px; padding: 6px 10px; }
+.msg.status { background: transparent; font-size: 13px; padding: 6px 10px; }
 .msg.status .msg-body { font-family: var(--font-hand); font-size: 20px; color: var(--chalk-soft); }
 
 .composer input { flex: 1; }
@@ -512,8 +533,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 pre.output, .quickrun pre {
   background: var(--note);
   color: var(--note-text);
-  border: 1.5px dashed var(--chalk-faint);
-  border-radius: 8px;
+  border: none;
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
   padding: 12px 14px;
   white-space: pre-wrap;
   font-size: 15px;
@@ -521,21 +543,21 @@ pre.output, .quickrun pre {
 .quickrun { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .form { display: flex; flex-direction: column; gap: 2px; max-width: 640px; }
 
-/* --- Phase tracker: circled steps --- */
+/* --- Phase tracker: pill steps, tone-only states --- */
 .phase-tracker { display: flex; gap: 10px; margin: 16px 0; flex-wrap: wrap; }
 .phase-step {
   font-family: var(--font-hand);
   font-size: 19px;
   font-weight: 600;
   padding: 3px 14px;
-  border-radius: 50% 46% 52% 48% / 48% 52% 46% 54%;
-  border: 2px solid var(--chalk-faint);
+  border-radius: 999px;
+  background: var(--input);
   color: var(--chalk-soft);
 }
 .phase-step:nth-child(odd) { transform: rotate(-1deg); }
 .phase-step:nth-child(even) { transform: rotate(0.75deg); }
-.phase-step.active { border-color: var(--chalk); background: var(--chalk); color: var(--paper-deep); }
-.phase-step.done { border-color: var(--green-chalk); color: var(--green-chalk); }
+.phase-step.active { background: var(--chalk); color: var(--paper-deep); }
+.phase-step.done { background: var(--green-wash); color: var(--green-chalk); }
 
 .dod-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .dod-list li { font-size: 15px; color: var(--chalk-soft); }
@@ -556,8 +578,9 @@ pre.output, .quickrun pre {
 
 .class-session-blocks { display: flex; flex-direction: column; gap: 12px; margin: 10px 0; }
 .interactive-block {
-  border: 2px solid var(--chalk-faint);
-  border-radius: 10px;
+  border: none;
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
   padding: 10px 12px;
   background: var(--paper-deep);
 }
@@ -570,7 +593,7 @@ pre.output, .quickrun pre {
 .interactive-block p { margin: 4px 0; font-size: 15px; }
 .interactive-block .block-question { color: var(--chalk); font-weight: 600; }
 .interactive-block.prediction_gate,
-.interactive-block.socratic_audit { border-color: var(--marker); }
+.interactive-block.socratic_audit { background: rgba(255, 214, 100, 0.08); }
 .interactive-block textarea { width: 100%; margin-top: 4px; }
 
 /* --- Providers: accordion list with clear hierarchy --- */
@@ -608,11 +631,13 @@ pre.output, .quickrun pre {
   font-size: 12px;
   font-weight: 400;
   padding: 2px 10px;
-  border: 1.5px solid var(--chalk-faint);
+  border: none;
+  border-radius: 999px;
+  background: var(--input);
   color: var(--chalk-soft);
   transform: none;
 }
-.chip:hover:not(:disabled) { border-color: var(--chalk); color: var(--chalk); background: transparent; }
+.chip:hover:not(:disabled) { color: var(--chalk); background: var(--card-hi); }
 .advanced { margin-top: 12px; }
 .advanced summary {
   cursor: pointer;
@@ -674,7 +699,8 @@ pre.output, .quickrun pre {
   height: 26px;
   padding: 0;
   border-radius: 50%;
-  border: 2px solid var(--chalk-faint);
+  border: none;
+  background: var(--paper-deep);
   color: var(--chalk-soft);
   font-size: 16px;
   line-height: 1;
@@ -682,7 +708,7 @@ pre.output, .quickrun pre {
   align-items: center;
   justify-content: center;
 }
-.buffer-cancel:hover:not(:disabled) { border-color: var(--red-chalk); color: var(--red-chalk); background: transparent; }
+.buffer-cancel:hover:not(:disabled) { color: var(--red-chalk); background: var(--red-wash); }
 .buffer-loader:hover .buffer-cancel,
 .buffer-cancel:focus-visible { opacity: 1; }
 
@@ -773,13 +799,15 @@ pre.output, .quickrun pre {
   50% { transform: rotate(1.2deg); }
 }
 
-/* --- Class-generation loader: illustrated dashed card --- */
+/* --- Class-generation loader: illustrated card, "in progress" reads via the
+       animated sketch + stage text (the dashed border is gone with the rest). --- */
 .gen-loader {
   display: flex;
   align-items: center;
   gap: 18px;
-  border: 2px dashed var(--chalk);
-  border-radius: 14px 4px 16px 5px / 5px 16px 4px 14px;
+  border: none;
+  border-radius: var(--squircle);
+  corner-shape: squircle;
   padding: 16px 18px;
   margin: 12px 0;
   background: var(--card);
@@ -788,6 +816,158 @@ pre.output, .quickrun pre {
 .gen-text { display: flex; flex-direction: column; gap: 6px; }
 .gen-stage { font-family: var(--font-hand); font-size: 25px; font-weight: 600; line-height: 1.2; }
 .gen-tip { font-size: 14px; color: var(--chalk-soft); }
+
+/* --- Class resources panel (real tutorials/docs found for the class) --- */
+.resource-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.resource-item { display: flex; flex-direction: column; gap: 3px; }
+.resource-kind {
+  align-self: flex-start; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--chalk-soft); background: var(--input); border-radius: 999px; padding: 1px 8px;
+}
+.resource-link {
+  align-self: flex-start; text-align: left; background: none; border: 0; padding: 0; color: inherit;
+  font: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; cursor: pointer;
+}
+.resource-link:hover { color: var(--chalk); }
+.resource-todo { margin: 0; font-size: 14px; }
+.resource-item .hint { margin: 0; }
+
+/* --- Roadmap profile form + plan adjustment (structured, no chat) --- */
+.profile-form { display: flex; flex-direction: column; gap: 14px; max-width: 760px; margin-top: 8px; }
+.pf-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pf-label { font-family: var(--font-hand); font-size: 19px; font-weight: 600; }
+.pf-fieldset { border: 0; padding: 0; margin: 0; }
+.pf-fieldset > legend { padding: 0; margin-bottom: 4px; }
+.pf-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.pf-row-3 { grid-template-columns: repeat(3, 1fr); }
+.pf-total { margin: -4px 0 0; }
+@media (max-width: 560px) { .pf-row, .pf-row-3 { grid-template-columns: 1fr; } }
+.choice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+.choice-card {
+  display: flex; flex-direction: column; gap: 4px; cursor: pointer; padding: 10px 12px;
+  border: none; border-radius: var(--squircle-sm); corner-shape: squircle; background: var(--card);
+}
+.choice-card input { position: absolute; opacity: 0; pointer-events: none; }
+.choice-card:hover { background: var(--card-hi); }
+.choice-card.selected { background: var(--marker); box-shadow: 0 0 0 2px var(--chalk-faint); }
+.choice-card:focus-within { outline: 2px solid var(--chalk); outline-offset: 2px; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip-choice {
+  padding: 6px 12px; border: none; border-radius: 999px; background: var(--input);
+  color: inherit; cursor: pointer; font: inherit;
+}
+.chip-choice:hover:not(:disabled) { background: var(--card-hi); }
+.chip-choice.selected { background: var(--marker); font-weight: 600; }
+.field-error { color: var(--red-chalk); font-size: 14px; }
+.pf-recap {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  padding: 8px 12px; border: none; border-radius: var(--squircle-sm); corner-shape: squircle; background: var(--card);
+}
+/* Divider before the details `<summary>`: spacing only — the dashed rule is
+   gone with every other border. */
+.adjust-panel { margin-top: 10px; padding-top: 10px; }
+.adjust-panel > summary { cursor: pointer; font-family: var(--font-hand); font-size: 19px; }
+.adjust-body { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+
+/* "Generating the next block" card: status line + skeleton shaped like the
+   block that will land. Same borderless surface as the loader: still WIP. */
+.gen-card {
+  position: relative;
+  border: none;
+  border-radius: var(--squircle);
+  corner-shape: squircle;
+  padding: 12px 16px 14px;
+  margin: 10px 0;
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+}
+.gen-card.phase-retrying { background: var(--red-wash); }
+.gen-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.gen-card-detail { margin: 0; font-size: 14px; color: var(--chalk-soft); line-height: 1.45; }
+.gen-card:hover .buffer-cancel,
+.gen-card .buffer-cancel:focus-visible { opacity: 1; }
+
+.gen-skeleton { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.gen-skeleton .sk-line,
+.gen-skeleton .sk-option,
+.gen-skeleton .sk-box {
+  display: block;
+  border-radius: 6px;
+  corner-shape: squircle;
+  background: linear-gradient(90deg, var(--chalk-faint) 20%, transparent 45%, var(--chalk-faint) 70%);
+  background-size: 220% 100%;
+  opacity: 0.55;
+  animation: sk-shimmer 1.6s ease-in-out infinite;
+}
+.gen-skeleton .sk-line { height: 12px; max-width: 100%; }
+.gen-skeleton .sk-title { height: 20px; width: 55%; }
+.gen-skeleton .sk-option { height: 34px; width: 100%; border-radius: 10px; }
+.gen-skeleton .sk-box { width: 100%; }
+.gen-skeleton .sk-diagram { height: 120px; border-radius: 12px; }
+.gen-skeleton .sk-input { height: 56px; border-radius: 10px; }
+.gen-skeleton.compact { margin-top: 2px; opacity: 0.8; }
+@keyframes sk-shimmer {
+  from { background-position: 120% 0; }
+  to { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gen-skeleton .sk-line,
+  .gen-skeleton .sk-option,
+  .gen-skeleton .sk-box { animation: none; background: var(--chalk-faint); opacity: 0.35; }
+}
+
+/* Live draft of the block being written (replaced by the real block when it
+   lands). Borderless squircle like the loader: still work in progress. */
+.block-draft {
+  border: none;
+  border-radius: var(--squircle);
+  corner-shape: squircle;
+  padding: 12px 16px;
+  margin: 10px 0;
+  background: var(--card);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+  animation: block-draft-in 0.25s ease-out;
+}
+.block-draft-kind { font-family: var(--font-hand); font-size: 17px; color: var(--chalk-soft); }
+.block-draft-title { margin: 0; font-family: var(--font-hand); font-size: 24px; line-height: 1.2; }
+.block-draft-field { margin: 0; font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+.block-draft-label { font-weight: 600; color: var(--chalk-soft); }
+@keyframes block-draft-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .block-draft { animation: none; }
+}
+
+/* The plan while it is being written in parts: each new piece (the outline, a
+   week's sessions) fades in, staggered by `--i` so a burst reads as a cascade.
+   Same borderless surface as the other work-in-progress cards. */
+.plan-draft {
+  border: none;
+  border-radius: var(--squircle);
+  corner-shape: squircle;
+  background: var(--card);
+}
+.plan-draft-progress { margin: 0 0 6px; }
+.draft-session-label { font-weight: 600; }
+.draft-fade {
+  animation: draft-fade-in 0.5s ease-out both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+@keyframes draft-fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .draft-fade { animation: none; }
+}
 
 /* --- Class Notebook (dynamic pedagogical blocks) ------------------------ */
 
@@ -852,7 +1032,7 @@ pre.output, .quickrun pre {
   width: 28px;
   height: 28px;
   border-radius: 50%;
-  border: 2px solid var(--chalk-faint);
+  border: none;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -860,7 +1040,7 @@ pre.output, .quickrun pre {
   font-size: 14px;
   font-weight: 600;
   color: var(--chalk-soft);
-  background: var(--paper-deep);
+  background: var(--input);
 }
 .class-path-node:not(:last-child) .class-path-dot::after {
   content: "";
@@ -872,17 +1052,17 @@ pre.output, .quickrun pre {
   height: 22px;
   background: var(--chalk-faint);
 }
-.class-path-node.done .class-path-dot { border-color: var(--green-chalk); color: var(--green-chalk); background: var(--green-wash); }
+.class-path-node.done .class-path-dot { color: var(--green-chalk); background: var(--green-wash); }
 .class-path-node.done:not(:last-child) .class-path-dot::after { background: var(--green-chalk); }
-.class-path-node.active .class-path-dot { border-color: var(--chalk); background: var(--chalk); color: var(--paper-deep); }
+.class-path-node.active .class-path-dot { background: var(--chalk); color: var(--paper-deep); }
 .class-path-label { font-size: 14px; color: var(--chalk-soft); padding-top: 4px; }
 .class-path-node.active .class-path-label { color: var(--chalk); font-weight: 600; }
 
 /* Sequential lock: a node with a padlock stays closed until every class
  * before it is complete — the client-side mirror of the server-side guard
- * in `start_class_notebook`. */
+ * in `start_class_notebook`. Dimmed (no dashed ring to draw it anymore). */
 .class-path-node.locked { cursor: not-allowed; }
-.class-path-node.locked .class-path-dot { border-style: dashed; }
+.class-path-node.locked .class-path-dot { opacity: 0.55; }
 .class-path-node.locked .class-path-label { color: var(--chalk-faint); }
 .class-path-node.locked .class-path-dot .lock-icon {
   fill: none;
@@ -894,11 +1074,13 @@ pre.output, .quickrun pre {
 
 .notebook-block-wrapper {
   background: var(--card);
-  border: 2px solid var(--chalk);
-  border-radius: 14px 4px 16px 5px / 5px 16px 4px 14px;
+  border: none;
+  border-radius: var(--squircle);
+  corner-shape: squircle;
   padding: 16px;
 }
-.notebook-block-wrapper.unsupported { border-style: dashed; border-color: var(--chalk-faint); }
+/* Unsupported block: dimmed card instead of a dashed ring. */
+.notebook-block-wrapper.unsupported { background: var(--paper-deep); opacity: 0.8; }
 .block-kicker {
   display: flex;
   align-items: center;
@@ -928,17 +1110,19 @@ pre.output, .quickrun pre {
 /* Static visuals (mermaid / declarative_svg / conceptual_matrix) */
 .static-visual { margin: 6px 0; }
 .static-visual figcaption { font-size: 15px; color: var(--chalk-soft); margin-top: 6px; text-align: center; }
-.mermaid-visual { background: var(--paper-deep); border-radius: 10px; padding: 8px; overflow-x: auto; }
+.mermaid-visual { background: var(--paper-deep); border-radius: var(--squircle-sm); corner-shape: squircle; padding: 8px; overflow-x: auto; }
 .mermaid-visual svg { max-width: 100%; }
-.declarative-svg-visual { width: 100%; max-height: 360px; background: var(--paper-deep); border-radius: 10px; }
+.declarative-svg-visual { width: 100%; max-height: 360px; background: var(--paper-deep); border-radius: var(--squircle-sm); corner-shape: squircle; }
 .svg-pedagogical-focus { font-family: var(--font-hand); font-size: 15px; color: var(--chalk-soft); margin: 8px 0 0; text-align: center; }
 .conceptual-matrix-visual { width: 100%; border-collapse: collapse; font-size: 15px; }
+/* Matrix cells: no grid lines — zebra rows + generous padding carry the
+   structure instead, so the table stays readable without a single border. */
 .conceptual-matrix-visual th, .conceptual-matrix-visual td {
-  border: 1px solid var(--chalk-faint);
-  padding: 6px 10px;
+  padding: 8px 12px;
   text-align: left;
 }
-.conceptual-matrix-visual th { color: var(--chalk); font-family: var(--font-hand); font-weight: 600; }
+.conceptual-matrix-visual tbody tr:nth-child(even) { background: var(--input); }
+.conceptual-matrix-visual th { color: var(--chalk); font-family: var(--font-hand); font-weight: 600; background: var(--card-hi); }
 
 .walkthrough-list { margin: 4px 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 .walkthrough-list li { font-size: 15px; }
@@ -959,7 +1143,7 @@ pre.output, .quickrun pre {
 .discarded-option { text-decoration: line-through; text-decoration-color: var(--red-chalk); color: var(--chalk); }
 
 /* "Mis notas" — private scratchpad under each question */
-.block-note { margin-top: 10px; border-top: 1px dashed var(--chalk-faint); padding-top: 8px; }
+.block-note { margin-top: 10px; padding-top: 8px; }
 .block-note summary { cursor: pointer; font-family: var(--font-hand); font-size: 17px; color: var(--chalk-soft); }
 .block-note summary:hover { color: var(--chalk); }
 .block-note-dot { color: var(--gold-chalk); }
@@ -972,9 +1156,11 @@ pre.output, .quickrun pre {
   display: flex;
   align-items: center;
   gap: 10px;
-  border: 2px solid var(--chalk-faint);
-  border-radius: 8px;
+  border: none;
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
   padding: 6px 10px;
+  background: var(--input);
 }
 .chain-no { flex: none; font-family: var(--font-hand); font-size: 18px; color: var(--gold-chalk); min-width: 1.2em; text-align: center; }
 .chain-text { flex: 1; min-width: 0; }
@@ -982,12 +1168,12 @@ pre.output, .quickrun pre {
 
 /* interactive_prediction_gate · boundary_case_audit */
 .case-list { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.case-item { border: 2px dashed var(--chalk-faint); border-radius: 8px; padding: 10px 12px; }
+.case-item { border: none; border-radius: var(--squircle-sm); corner-shape: squircle; padding: 10px 12px; background: var(--input); }
 .case-statement { margin: 0 0 8px; }
 .case-choices { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* heuristic_error_audit · "bug bounty": numbered, clickable lines */
-.bug-lines { list-style: none; margin: 8px 0; padding: 0; background: var(--paper-deep); border: 2px solid var(--chalk-faint); border-radius: 8px; overflow-x: auto; }
+.bug-lines { list-style: none; margin: 8px 0; padding: 0; background: var(--paper-deep); border: none; border-radius: var(--squircle-sm); corner-shape: squircle; overflow-x: auto; }
 .bug-lines li { margin: 0; }
 .bug-line {
   display: flex;
@@ -997,7 +1183,6 @@ pre.output, .quickrun pre {
   text-align: left;
   background: transparent;
   border: none;
-  border-left: 4px solid transparent;
   border-radius: 0;
   padding: 3px 10px;
   box-shadow: none;
@@ -1006,8 +1191,8 @@ pre.output, .quickrun pre {
 }
 .bug-line:hover:not(:disabled) { background: var(--gold-wash); }
 .bug-line:disabled { cursor: default; opacity: 1; }
-.bug-line.is-selected { background: var(--gold-wash); border-left-color: var(--gold-chalk); }
-.bug-line.is-faulty { background: var(--red-wash); border-left-color: var(--red-chalk); }
+.bug-line.is-selected { background: var(--gold-wash); }
+.bug-line.is-faulty { background: var(--red-wash); }
 .bug-line-no { flex: none; width: 2.2em; text-align: right; color: var(--chalk-faint); font-size: 14px; }
 .bug-line-code { white-space: pre-wrap; font-size: 15px; background: transparent; padding: 0; }
 
@@ -1015,8 +1200,8 @@ pre.output, .quickrun pre {
 .mission-level { align-self: flex-start; }
 .cloze-steps { display: flex; flex-direction: column; gap: 6px; }
 .cloze-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
-.cloze-step { border: 2px solid var(--chalk-faint); border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
-.cloze-step.is-done { border-color: var(--green-chalk); }
+.cloze-step { border: none; border-radius: var(--squircle-sm); corner-shape: squircle; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; background: var(--input); }
+.cloze-step.is-done { background: var(--green-wash); }
 .cloze-step.is-locked:not(.is-done) { opacity: 0.5; }
 .cloze-prompt { display: flex; gap: 10px; align-items: baseline; }
 .cloze-number { flex: none; font-family: var(--font-hand); font-size: 18px; color: var(--gold-chalk); min-width: 1.2em; text-align: center; }
@@ -1026,7 +1211,7 @@ pre.output, .quickrun pre {
 .cloze-chips .chip:disabled { opacity: 0.5; text-decoration: line-through; text-decoration-color: var(--red-chalk); }
 .cloze-input { flex: 1; min-width: 140px; }
 .hint-stack { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
-.hint-revealed { margin: 0; font-size: 15px; color: var(--chalk-soft); border-left: 3px solid var(--gold-chalk); padding-left: 10px; }
+.hint-revealed { margin: 0; font-size: 15px; color: var(--chalk-soft); background: var(--gold-wash); border: none; border-radius: var(--squircle-sm); corner-shape: squircle; padding: 6px 10px; }
 .hint-revealed-no { font-family: var(--font-hand); color: var(--gold-chalk); }
 .mission-editor-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 14px; white-space: pre; }
 
@@ -1034,9 +1219,9 @@ pre.output, .quickrun pre {
 .walkthrough-stepper { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .walkthrough-progress { display: flex; align-items: center; gap: 12px; }
 .walkthrough-dots { display: flex; gap: 6px; }
-.walkthrough-dot { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--chalk-faint); }
+.walkthrough-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--input); }
 .walkthrough-dot.is-seen { background: var(--chalk-faint); }
-.walkthrough-dot.is-current { background: var(--gold-chalk); border-color: var(--gold-chalk); }
+.walkthrough-dot.is-current { background: var(--gold-chalk); }
 .walkthrough-step { margin: 0; font-size: 16px; }
 .walkthrough-all summary { cursor: pointer; font-size: 14px; color: var(--chalk-soft); }
 .declarative-svg-visual .svg-group { transition: opacity 0.25s ease; }
@@ -1058,13 +1243,13 @@ pre.output, .quickrun pre {
 /* spaced_interleaved_retrieval — quick recall of PRIOR concepts, always the
    class's first block when the student has due items */
 .retrieval-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
-.retrieval-item { border: 1px dashed var(--chalk-faint); border-radius: 8px; padding: 10px 12px; }
+.retrieval-item { border: none; border-radius: var(--squircle-sm); corner-shape: squircle; padding: 10px 12px; background: var(--input); }
 .retrieval-concept-tag {
   display: inline-block;
   font-family: var(--font-hand);
   font-size: 12px;
   color: var(--chalk-soft);
-  border: 1px solid var(--chalk-faint);
+  background: var(--card-hi);
   border-radius: 999px;
   padding: 1px 8px;
   margin-bottom: 6px;
@@ -1074,27 +1259,33 @@ pre.output, .quickrun pre {
 
 /* diagnostic_battery */
 .diagnostic-question-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 16px; }
-.diagnostic-question { border-top: 1px dashed var(--chalk-faint); padding-top: 12px; }
-.diagnostic-question:first-child { border-top: none; padding-top: 0; }
+.diagnostic-question { padding-top: 12px; }
+.diagnostic-question:first-child { padding-top: 0; }
 .diagnostic-question-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
 .diagnostic-question-head .badge { flex: none; margin-top: 2px; }
 
-/* Nested inside .final-package on the plan screen — lighter inset shell so
-   it doesn't double up on the heavy hand-drawn card border. */
-.diagnostic-battery-card {
+/* The battery renders in two jobs that must NOT look the same:
+   - post-seal RECAP inside `.final-package` — a darker inset shell so it
+     reads as a card-inside-a-card without any border to say so;
+   - live STAGE inside `.messages` (`DiagnosticBatteryStage`) — it IS the
+     mentor's next turn, so it takes plain `.card` surface (inherited from
+     `.card`) and sits inline in the conversation instead of floating as a
+     detached form below the chat. */
+.final-package .diagnostic-battery-card {
   background: var(--paper-deep);
   background-image: none;
-  border: 2px dashed var(--chalk-faint);
-  border-radius: 10px;
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
   padding: 14px;
   margin: 14px 0;
 }
 .diagnostic-battery-card .card-head h3 { font-size: 20px; }
 
 .flawed-snippet {
-  background: var(--paper-deep);
-  border: 2px solid var(--red-chalk);
-  border-radius: 8px;
+  background: var(--red-wash);
+  border: none;
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
   padding: 10px 12px;
   font-size: 15px;
   white-space: pre-wrap;
@@ -1113,8 +1304,9 @@ pre.output, .quickrun pre {
 .rich-text > :last-child { margin-bottom: 0; }
 .code-block {
   background: var(--paper-deep);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 8px;
+  border: none;
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
   padding: 10px 12px;
   margin: 8px 0;
   font-size: 15px;
@@ -1129,8 +1321,9 @@ pre.output, .quickrun pre {
 .code-block code { color: var(--chalk); }
 .inline-code {
   background: var(--paper-deep);
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-radius: 4px;
+  border: none;
+  border-radius: var(--squircle-xs);
+  corner-shape: squircle;
   padding: 1px 5px;
   /* Prose now uses `--font-read` (system-ui family, normal x-height), so
      ui-monospace no longer out-grows its words the way it did under
@@ -1141,18 +1334,20 @@ pre.output, .quickrun pre {
 }
 
 /* Mastery gates — per-block status tint (see `BlockStatus` in Rust) and the
-   pacing "Continuar" row for content blocks between gates. */
-.notebook-block-wrapper.status-passed { border-color: var(--green-chalk); }
-.notebook-block-wrapper.status-failed { border-color: var(--red-chalk); }
-.notebook-block-wrapper.status-escalated { border-style: dashed; border-color: var(--red-chalk); opacity: 0.85; }
-.badge.warn { border-color: var(--red-chalk); color: var(--red-chalk); }
+   pacing "Continuar" row for content blocks between gates. With no borders
+   left, the status shows as a background wash on the whole block card. */
+.notebook-block-wrapper.status-passed { background: var(--green-wash), var(--card); }
+.notebook-block-wrapper.status-failed { background: var(--red-wash), var(--card); }
+.notebook-block-wrapper.status-escalated { background: var(--red-wash), var(--card); opacity: 0.85; }
+.badge.warn { background: var(--red-wash); color: var(--red-chalk); }
 .hint-warn { color: var(--red-chalk); }
 .hint-ok { color: var(--green-chalk); }
 .notebook-continue { justify-content: center; margin: 4px 0; }
 .prediction-comparison {
   background: var(--paper-deep);
-  border: 2px dashed var(--chalk-faint);
-  border-radius: 10px;
+  border: none;
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
   padding: 10px 12px;
   display: flex;
   flex-direction: column;
@@ -1238,11 +1433,14 @@ pre.output, .quickrun pre {
 }
 /* The unified margin comment (¿Dudas? button + selection): `position:
    fixed`, parked BESIDE its block by `useMarginCommentPosition` — margin
-   slot at `blockRect.right + 12` over the grid gap + sticky sidebar
-   (z-index 40 paints above it), near-selection centered fallback when the
-   viewport can't fit that slot, always clamped inside the viewport. Out of
-   flow by definition, so it can't affect the block or the sidebar's sticky
-   behavior; the width caps 10px short of both viewport edges at any size. */
+   slot at `blockRect.right + 12` over the grid gap + sticky sidebar,
+   near-selection centered fallback when the viewport can't fit that slot,
+   always clamped inside the viewport. Out of flow by definition, so it
+   can't affect the block or the sidebar's sticky behavior; the width caps
+   10px short of both viewport edges at any size.
+   z-index 45: above the dev sidebar (40) — the slot lives at the viewport's
+   right edge, exactly where the panel docks — but below the sessions drawer
+   (50), which is modal over everything. */
 .margin-comment {
   position: fixed;
   width: min(360px, calc(100vw - 20px));
@@ -1250,7 +1448,7 @@ pre.output, .quickrun pre {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  z-index: 40;
+  z-index: 45;
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
   /* Positioned only after the first measured layout pass (see
      `useMarginCommentPosition`'s `useLayoutEffect`) so it never flashes at
@@ -1272,8 +1470,11 @@ pre.output, .quickrun pre {
   font-family: var(--font-hand);
   font-size: 16px;
   color: var(--chalk-soft);
-  border-left: 3px solid var(--red-chalk);
-  padding: 2px 0 2px 10px;
+  background: var(--red-wash);
+  border: none;
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
+  padding: 4px 10px;
   margin: 0 22px 0 0;
   overflow-wrap: anywhere;
 }
@@ -1291,38 +1492,68 @@ pre.output, .quickrun pre {
 }
 
 
-/* Developer mode: docked generation inspector + per-block JSON. */
+/* Developer mode: generation inspector + per-block JSON, docked as a RIGHT
+   SIDEBAR (it used to be a bottom dock). Mirrors the sessions drawer on the
+   left: slide-over column, own scroll, squircle on the free edge. The
+   workspace reserves its width (see the `body:has` rule below) so content
+   never hides behind it. */
 .dev-panel {
-  position: fixed; left: 0; right: 0; bottom: 0; height: 42vh; z-index: 40;
-  display: flex; flex-direction: column; gap: 6px; padding: 10px 14px;
-  background: var(--paper-deep); border-top: 2px dashed var(--gold-chalk);
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--dev-sidebar-w);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--paper-deep);
+  border-radius: var(--squircle) 0 0 var(--squircle);
+  corner-shape: squircle;
+  box-shadow: -10px 0 28px rgba(0, 0, 0, 0.35);
+  /* Logs are meant to be read AND copied by hand: text stays selectable
+     everywhere in the panel (see also the `<summary>` click guard in
+     `DevPanel.tsx`, which stops a drag-selection from toggling the row). */
+  user-select: text;
+  -webkit-user-select: text;
 }
-.dev-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.dev-bar { display: flex; flex-direction: column; gap: 8px; }
+.dev-bar-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.dev-bar-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+/* The global `select { width: 100% }` is right for forms; here the filter
+   shares its row with the "solo incidencias" checkbox. */
+.dev-bar-filters select { flex: 1 1 170px; width: auto; min-width: 0; }
+.dev-bar-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .dev-note { margin: 0; }
-.dev-list { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
-.dev-row, .dev-block, .dev-section { border: 1px dashed var(--chalk-faint); border-radius: 8px; padding: 6px 10px; background: var(--card); }
-.dev-row.bad, .dev-block.bad { border-color: var(--red-chalk); }
+.dev-list { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.dev-row, .dev-block, .dev-section { border: none; border-radius: var(--squircle-sm); corner-shape: squircle; padding: 6px 10px; background: var(--card); }
+.dev-row.bad, .dev-block.bad { background: var(--red-wash); }
 .dev-row > summary, .dev-block > summary, .dev-section > summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .dev-body { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
-.dev-tool { border-left: 3px solid var(--blue-chalk); padding-left: 8px; }
+.dev-tool { background: var(--blue-wash); border: none; border-radius: var(--squircle-xs); corner-shape: squircle; padding: 4px 8px; }
 .dev-notes { margin: 4px 0; padding-left: 18px; color: var(--gold-chalk); }
 .dev-pre {
   margin: 6px 0 0; max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
   font-size: 12px; background: var(--input); padding: 8px; border-radius: 6px; color: var(--chalk-soft);
 }
-body:has(.dev-panel) .workspace { padding-bottom: 44vh; }
+/* The workspace keeps its scroll but loses the sidebar's column, so the
+   centered `.view` never slides under the panel. */
+body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16px); }
 
 /* Knowledge graph — the student's own map of ideas */
 .graph-view { display: flex; flex-direction: column; gap: 12px; }
-.graph-scroll { overflow: auto; border: 2px solid var(--chalk-faint); border-radius: 10px; background: var(--paper-deep); max-height: 70vh; }
+.graph-scroll { overflow: auto; border: none; border-radius: var(--squircle-sm); corner-shape: squircle; background: var(--paper-deep); max-height: 70vh; }
 .graph-svg { display: block; font-family: var(--font-read); font-size: 14px; }
 .graph-column-label { fill: var(--chalk-soft); font-family: var(--font-hand); font-size: 20px; }
 .graph-node { cursor: pointer; outline: none; }
-.graph-node rect { fill: var(--card); stroke: var(--chalk-faint); stroke-width: 2; }
-.graph-node-concept rect { fill: var(--gold-wash); stroke: var(--gold-chalk); stroke-dasharray: 5 3; }
+/* Node shapes: fill-only (the stroke was the last "border" in here). The
+   background is --paper-deep, so the --card fill already reads as a card. */
+.graph-node rect { fill: var(--card); stroke: none; }
+.graph-node-concept rect { fill: var(--gold-wash); }
 .graph-node text { fill: var(--chalk); pointer-events: none; }
-.graph-node:hover rect, .graph-node:focus-visible rect { stroke: var(--chalk); }
-.graph-node.is-selected rect { stroke: var(--blue-chalk); stroke-width: 3; }
+.graph-node:hover rect, .graph-node:focus-visible rect { fill: var(--card-hi); }
+.graph-node.is-selected rect { fill: var(--blue-wash); }
 .graph-edge { cursor: pointer; outline: none; }
 .graph-edge-hit { fill: none; stroke: transparent; stroke-width: 14; }
 .graph-edge-line { fill: none; stroke: var(--chalk-soft); stroke-width: 2; }
@@ -1330,13 +1561,13 @@ body:has(.dev-panel) .workspace { padding-bottom: 44vh; }
 .graph-edge-label { fill: var(--chalk); font-size: 13px; paint-order: stroke; stroke: var(--paper-deep); stroke-width: 4px; }
 .graph-edge:hover .graph-edge-line, .graph-edge:focus-visible .graph-edge-line { stroke: var(--chalk); }
 .graph-edge.is-selected .graph-edge-line { stroke: var(--blue-chalk); stroke-width: 3; }
-.graph-form { display: flex; flex-direction: column; gap: 10px; border: 2px dashed var(--chalk-faint); border-radius: 10px; padding: 12px; }
+.graph-form { display: flex; flex-direction: column; gap: 10px; border: none; border-radius: var(--squircle-sm); corner-shape: squircle; padding: 12px; background: var(--card); }
 .graph-form label { display: flex; flex-direction: column; gap: 4px; }
 .graph-inspector { display: flex; flex-direction: column; gap: 10px; }
 .graph-confirm { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .relation-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .relation-list .btn-quiet { text-align: left; width: 100%; }
-.relation-list .btn-quiet.is-selected { border-color: var(--blue-chalk); }
-.connect-step { border: 2px dashed var(--chalk-faint); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
-.connect-item { display: flex; flex-direction: column; gap: 6px; border-top: 1px dashed var(--chalk-faint); padding-top: 8px; }
-.connect-item:first-of-type { border-top: none; padding-top: 0; }
+.relation-list .btn-quiet.is-selected { background: var(--blue-wash); color: var(--chalk); }
+.connect-step { border: none; border-radius: var(--squircle-sm); corner-shape: squircle; padding: 12px; display: flex; flex-direction: column; gap: 10px; margin-top: 10px; background: var(--input); }
+.connect-item { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; }
+.connect-item:first-of-type { padding-top: 0; }

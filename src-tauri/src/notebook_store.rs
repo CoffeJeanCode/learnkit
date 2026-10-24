@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
+use crate::domain::calibration::{CourseCalibration, calibrate, diagnostic_profile_json};
+use crate::domain::resources::{ClassResource, ResearchStatus};
 use crate::domain::skill_evidence::{EvidenceKind, EvidenceOutcome, SkillEvidence};
 use crate::domain::study::{resolve_variant, StudyEvent, StudyEventKind, StudySettings, StudyVariant, VariantMode};
 use crate::domain::learner_memory::LearnerCognitiveMemory;
@@ -33,7 +35,8 @@ CREATE TABLE IF NOT EXISTS courses (
     target_goal TEXT NOT NULL,
     total_weeks INTEGER NOT NULL,
     created_at_ms INTEGER NOT NULL,
-    diagnostic_battery_json TEXT
+    diagnostic_battery_json TEXT,
+    calibration_json TEXT
 );
 
 CREATE TABLE IF NOT EXISTS syllabus_milestones (
@@ -55,6 +58,23 @@ CREATE TABLE IF NOT EXISTS classes (
     objective TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_classes_milestone ON classes(milestone_id);
+
+-- Real web resources curated per class by the research pipeline (see
+-- `domain::resources`). Cascades with the class, so deleting a course takes
+-- its resources along.
+CREATE TABLE IF NOT EXISTS class_resources (
+    class_id TEXT PRIMARY KEY REFERENCES classes(id) ON DELETE CASCADE,
+    resources_json TEXT NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+
+-- Where the research for a course stands. One row per course.
+CREATE TABLE IF NOT EXISTS course_research (
+    course_id TEXT PRIMARY KEY REFERENCES courses(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    detail TEXT,
+    updated_at_ms INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS notebook_documents (
     id TEXT PRIMARY KEY,
@@ -257,6 +277,31 @@ fn migrate_add_diagnostic_battery_column(conn: &Connection) -> AppResult<()> {
     Ok(())
 }
 
+/// One-time migration: a `courses` table created before level calibration is
+/// missing `calibration_json`. Same additive, nullable `ALTER TABLE` pattern as
+/// [`migrate_add_diagnostic_battery_column`]: existing rows are simply `NULL`
+/// (no calibration on record → generation behaves exactly as it always did).
+fn migrate_add_calibration_column(conn: &Connection) -> AppResult<()> {
+    let table_exists: bool = conn
+        .query_row("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'courses'", [], |_| Ok(()))
+        .optional()?
+        .is_some();
+    if !table_exists {
+        return Ok(()); // fresh database — the CREATE TABLE already has the column
+    }
+    let mut stmt = conn.prepare("PRAGMA table_info(courses)")?;
+    let has_column = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .iter()
+        .any(|name| name == "calibration_json");
+    drop(stmt);
+    if !has_column {
+        conn.execute("ALTER TABLE courses ADD COLUMN calibration_json TEXT", [])?;
+    }
+    Ok(())
+}
+
 /// One-time migration: `classes` created before one-class-per-micromodule
 /// (it used to always be one class per week) is missing `hours`, and
 /// `notebook_documents` created before the free-text rationale field
@@ -385,6 +430,7 @@ impl NotebookStore {
         // before trusting the schema.
         migrate_retired_section_type_column(&conn)?;
         migrate_add_diagnostic_battery_column(&conn)?;
+        migrate_add_calibration_column(&conn)?;
         migrate_add_class_micromodule_columns(&conn)?;
         migrate_add_block_gating_columns(&conn)?;
         conn.execute_batch(SCHEMA_SQL)?;
@@ -703,7 +749,151 @@ impl NotebookStore {
         state.answers = answers.clone();
         let json = serde_json::to_string(&state).map_err(|e| AppError::Persistence(e.to_string()))?;
         self.lock().execute("UPDATE courses SET diagnostic_battery_json = ?1 WHERE id = ?2", params![json, course_id])?;
+        // A student can still answer pending questions AFTER sealing (the plan
+        // screen's battery card): the calibration must follow the evidence, not
+        // freeze at whatever was answered when the plan was confirmed.
+        if let Some(previous) = self.get_course_calibration(course_id)? {
+            let mut next = calibrate(previous.declared_level, previous.weekly_commitment_hours, Some(&state));
+            next.learner_context = previous.learner_context.clone();
+            self.set_course_calibration(course_id, &next)?;
+        }
         Ok(())
+    }
+
+    // --- Class resources (research) -------------------------------------------
+
+    /// Replaces the curated resources of a class. An empty list removes the row.
+    pub fn set_class_resources(&self, class_id: &str, resources: &[ClassResource]) -> AppResult<()> {
+        if resources.is_empty() {
+            self.lock().execute("DELETE FROM class_resources WHERE class_id = ?1", params![class_id])?;
+            return Ok(());
+        }
+        let json = serde_json::to_string(resources).map_err(|e| AppError::Persistence(e.to_string()))?;
+        self.lock().execute(
+            "INSERT INTO class_resources (class_id, resources_json, updated_at_ms) VALUES (?1, ?2, ?3)
+             ON CONFLICT(class_id) DO UPDATE SET resources_json = excluded.resources_json, updated_at_ms = excluded.updated_at_ms",
+            params![class_id, json, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    /// The class's resources, or none (never researched, nothing found, or the
+    /// stored JSON no longer parses — a class simply has no links then).
+    pub fn get_class_resources(&self, class_id: &str) -> AppResult<Vec<ClassResource>> {
+        let json: Option<String> =
+            self.lock().query_row("SELECT resources_json FROM class_resources WHERE class_id = ?1", params![class_id], |row| row.get(0)).optional()?;
+        Ok(json.and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default())
+    }
+
+    fn status_to_str(status: ResearchStatus) -> &'static str {
+        match status {
+            ResearchStatus::Pending => "pending",
+            ResearchStatus::Running => "running",
+            ResearchStatus::Done => "done",
+            ResearchStatus::SkippedNoKey => "skipped_no_key",
+            ResearchStatus::Failed => "failed",
+        }
+    }
+
+    fn status_from_str(raw: &str) -> ResearchStatus {
+        match raw {
+            "pending" => ResearchStatus::Pending,
+            "running" => ResearchStatus::Running,
+            "done" => ResearchStatus::Done,
+            "skipped_no_key" => ResearchStatus::SkippedNoKey,
+            _ => ResearchStatus::Failed,
+        }
+    }
+
+    pub fn set_research_status(&self, course_id: &str, status: ResearchStatus, detail: Option<&str>) -> AppResult<()> {
+        self.lock().execute(
+            "INSERT INTO course_research (course_id, status, detail, updated_at_ms) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(course_id) DO UPDATE SET status = excluded.status, detail = excluded.detail, updated_at_ms = excluded.updated_at_ms",
+            params![course_id, Self::status_to_str(status), detail, now_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_research_status(&self, course_id: &str) -> AppResult<Option<(ResearchStatus, Option<String>)>> {
+        let row: Option<(String, Option<String>)> = self
+            .lock()
+            .query_row("SELECT status, detail FROM course_research WHERE course_id = ?1", params![course_id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?;
+        Ok(row.map(|(status, detail)| (Self::status_from_str(&status), detail)))
+    }
+
+    /// Atomically claims the research of a course: `true` only for the caller
+    /// that moved it to `Running`. Refused while it is already running or done
+    /// — so a second trigger (the UI and a retry racing, or every turn result
+    /// asking) never launches a duplicate. A previous failure, or a skip for a
+    /// missing key, may be tried again.
+    pub fn try_begin_research(&self, course_id: &str) -> AppResult<bool> {
+        let conn = self.lock();
+        let current: Option<String> =
+            conn.query_row("SELECT status FROM course_research WHERE course_id = ?1", params![course_id], |r| r.get(0)).optional()?;
+        if matches!(current.as_deref().map(Self::status_from_str), Some(ResearchStatus::Running | ResearchStatus::Done)) {
+            return Ok(false);
+        }
+        conn.execute(
+            "INSERT INTO course_research (course_id, status, detail, updated_at_ms) VALUES (?1, 'running', NULL, ?2)
+             ON CONFLICT(course_id) DO UPDATE SET status = 'running', detail = NULL, updated_at_ms = excluded.updated_at_ms",
+            params![course_id, now_ms()],
+        )?;
+        Ok(true)
+    }
+
+    /// Startup sweep: a research that was `running` when the app closed will
+    /// never finish, so it must not block a new attempt forever. Returns how
+    /// many were reset.
+    pub fn fail_interrupted_research(&self) -> AppResult<usize> {
+        Ok(self.lock().execute(
+            "UPDATE course_research SET status = 'failed', detail = 'interrumpida al cerrar la app', updated_at_ms = ?1 WHERE status = 'running'",
+            params![now_ms()],
+        )?)
+    }
+
+    // --- Level calibration -----------------------------------------------------
+
+    /// Stores the course's calibration (declared level, weekly hours, and what
+    /// the battery showed) — written at seal time and refreshed whenever more
+    /// battery answers arrive.
+    pub fn set_course_calibration(&self, course_id: &str, calibration: &CourseCalibration) -> AppResult<()> {
+        let json = serde_json::to_string(calibration).map_err(|e| AppError::Persistence(e.to_string()))?;
+        self.lock().execute("UPDATE courses SET calibration_json = ?1 WHERE id = ?2", params![json, course_id])?;
+        Ok(())
+    }
+
+    /// `None` for a course sealed before calibration existed (or whose stored
+    /// JSON no longer parses) — callers then behave exactly as they used to.
+    pub fn get_course_calibration(&self, course_id: &str) -> AppResult<Option<CourseCalibration>> {
+        let json: Option<String> = self
+            .lock()
+            .query_row("SELECT calibration_json FROM courses WHERE id = ?1", params![course_id], |row| row.get(0))
+            .optional()?
+            .flatten();
+        Ok(json.and_then(|j| serde_json::from_str(&j).ok()))
+    }
+
+    /// The `diagnosticProfile` for block generation: the battery's weak points
+    /// enriched with the course's calibration (declared vs shown level,
+    /// strengths, weekly hours). `None` only for a course that predates both.
+    pub fn get_course_diagnostic_profile(&self, course_id: &str) -> AppResult<Option<serde_json::Value>> {
+        let battery = self.get_course_diagnostic_battery(course_id)?;
+        let calibration = self.get_course_calibration(course_id)?;
+        Ok(diagnostic_profile_json(battery.as_ref(), calibration.as_ref()))
+    }
+
+    /// The learner's cognitive memory as block generation should SEE it for
+    /// THIS course: when the course has a calibration, its level replaces the
+    /// memory's global `calibrated_baseline` in the returned copy (a learner can
+    /// be a beginner in one topic and intermediate in another). The stored
+    /// memory is untouched — graded gates keep updating the global record.
+    pub fn get_learner_memory_for_course(&self, learner_id: &str, course_id: &str) -> AppResult<LearnerCognitiveMemory> {
+        let mut memory = self.get_learner_memory(learner_id)?;
+        if let Some(calibration) = self.get_course_calibration(course_id)? {
+            memory.calibrated_baseline = calibration.calibrated_baseline;
+        }
+        Ok(memory)
     }
 
     // --- Learner cognitive memory --------------------------------------------

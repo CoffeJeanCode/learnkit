@@ -223,7 +223,7 @@
         agents.register(crate::agents::notebook_gate_grader_agent::definition()).expect("register gate grader agent");
         agents.register(crate::agents::closure_feedback_grader_agent::definition()).expect("register closure feedback grader agent");
         let orchestrator = Arc::new(Orchestrator::new(agents, runner));
-        NotebookService::new(store, orchestrator)
+        NotebookService::new(store, orchestrator).with_blocking_critic()
     }
 
     #[derive(Default)]
@@ -327,6 +327,12 @@
     /// the production registry always has it; `service_with` leaves it out
     /// so the pre-critic tests exercise the "critic unavailable" fail-open.
     fn service_with_critic(runner: Arc<dyn PromptRunner>) -> NotebookService {
+        service_with_deferred_critic(runner).with_blocking_critic()
+    }
+
+    /// Production wiring: the critic registered AND deferred (runs after the
+    /// block is already shown).
+    fn service_with_deferred_critic(runner: Arc<dyn PromptRunner>) -> NotebookService {
         let agents = Arc::new(AgentRegistry::new());
         agents.register(crate::agents::notebook_agent::definition()).expect("register notebook agent");
         agents.register(crate::agents::notebook_gate_grader_agent::definition()).expect("register gate grader agent");
@@ -943,6 +949,81 @@
     }
 
     #[tokio::test]
+    async fn a_deferred_critic_shows_the_block_first_and_an_accepting_review_changes_nothing() {
+        // A gate as block 1 keeps the background chain out of the picture, so
+        // the only model calls are the generator and the deferred critic.
+        let runner = Arc::new(CriticRunner {
+            blocks: Mutex::new(vec![Some(prediction_gate("B"))].into()),
+            audits: Mutex::new(vec![Ok(BlockAuditResult { accepted: true, feedback: vec![] })].into()),
+            ..Default::default()
+        });
+        let service = service_with_deferred_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("block ships");
+        assert_eq!(payload.blocks.len(), 1);
+        assert_eq!(*runner.audit_calls.lock().unwrap(), 0, "the block is returned BEFORE the critic has run");
+
+        let_background_chain_settle().await;
+        assert_eq!(*runner.audit_calls.lock().unwrap(), 1, "the critic still reviews it afterwards");
+        assert_eq!(*runner.block_calls.lock().unwrap(), 1, "an accepting review must not regenerate");
+        let after = service.get_class_notebook_progress(&class_id).expect("load ok");
+        assert_eq!(after.blocks.len(), 1);
+        assert_eq!(after.blocks[0].id, payload.blocks[0].id);
+    }
+
+    #[tokio::test]
+    async fn a_deferred_critic_rejection_repairs_the_shown_block_in_place_with_the_feedback() {
+        let runner = Arc::new(CriticRunner {
+            blocks: Mutex::new(vec![Some(prediction_gate("A")), Some(prediction_gate("B"))].into()),
+            audits: Mutex::new(
+                vec![
+                    Ok(BlockAuditResult { accepted: false, feedback: vec!["el hook es vago".to_string()] }),
+                    Ok(BlockAuditResult { accepted: true, feedback: vec![] }),
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        });
+        let service = service_with_deferred_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("block ships");
+        let shown_id = payload.blocks[0].id.clone();
+        let_background_chain_settle().await;
+
+        assert_eq!(*runner.block_calls.lock().unwrap(), 2, "one original block + one in-place repair");
+        assert!(
+            runner.inputs.lock().unwrap()[1].contains("el hook es vago"),
+            "the critic's feedback reaches the repair prompt"
+        );
+        let after = service.get_class_notebook_progress(&class_id).expect("load ok");
+        assert_eq!(after.blocks.len(), 1, "repaired in place, never appended");
+        assert_eq!(after.blocks[0].id, shown_id, "same block id and slot");
+        assert_ne!(after.blocks[0].content_json, serde_json::to_value(prediction_gate("A")).unwrap(), "the content was replaced");
+    }
+
+    #[tokio::test]
+    async fn a_deferred_rejection_leaves_a_block_the_student_already_graded_untouched() {
+        let runner = Arc::new(CriticRunner {
+            blocks: Mutex::new(vec![Some(prediction_gate("A"))].into()),
+            audits: Mutex::new(vec![Ok(BlockAuditResult { accepted: false, feedback: vec!["el hook es vago".to_string()] })].into()),
+            ..Default::default()
+        });
+        let service = service_with_deferred_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("block ships");
+        let shown = &payload.blocks[0];
+        // The student resolves the gate before the critic's verdict lands.
+        service.store.update_block_status(&shown.id, BlockStatus::Failed, None, true).expect("grade the block");
+        let_background_chain_settle().await;
+
+        assert_eq!(*runner.audit_calls.lock().unwrap(), 1);
+        assert_eq!(*runner.block_calls.lock().unwrap(), 1, "no repair once the student has worked on the block");
+    }
+
+    #[tokio::test]
     async fn a_persistent_semantic_rejection_falls_back_to_the_last_grounded_block_instead_of_dead_ending() {
         let reject = || -> AppResult<BlockAuditResult> { Ok(BlockAuditResult { accepted: false, feedback: vec!["no llega".to_string()] }) };
         let runner = Arc::new(CriticRunner {
@@ -1499,4 +1580,84 @@
         ] {
             assert!(!source.contains("to_string_pretty"), "{name} must encode prompt payloads with toon_payload, not pretty JSON");
         }
+    }
+
+    /// First block as a mechanical gate: no critic round-trip and no background
+    /// chain, so `inputs[0]` is exactly the generator input for block 1.
+    fn gate_runner() -> Arc<CriticRunner> {
+        Arc::new(CriticRunner {
+            blocks: Mutex::new(vec![Some(prediction_gate("B"))].into()),
+            mechanical_next: Mutex::new(true),
+            ..Default::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn a_calibrated_course_gives_the_generator_its_real_level_and_heavy_scaffolding() {
+        use crate::domain::calibration::calibrate;
+        use crate::domain::roadmap::EntryLevel;
+        let runner = gate_runner();
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+        let course_id = service.store.class_generation_context(&class_id).expect("ctx").expect("class").course.id;
+        service.store.set_course_calibration(&course_id, &calibrate(EntryLevel::AbsoluteZero, 3.0, None)).expect("calibration");
+
+        service.start_class_notebook(None, &class_id).await.expect("start ok");
+
+        let input = runner.inputs.lock().unwrap()[0].clone();
+        assert!(input.contains("calibratedLevel") && input.contains("novice_zero"), "the declared level finally reaches the generator: {input}");
+        assert!(input.contains("declaredLevel") && input.contains("absolute_zero"));
+        assert!(input.contains("weeklyCommitmentHours"));
+        assert!(input.contains("andamiaje_fuerte"), "an absolute-zero course now triggers the heavy-scaffolding directive it never did");
+    }
+
+    #[tokio::test]
+    async fn a_course_without_calibration_generates_exactly_as_before() {
+        let runner = gate_runner();
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        service.start_class_notebook(None, &class_id).await.expect("start ok");
+
+        let input = runner.inputs.lock().unwrap()[0].clone();
+        assert!(!input.contains("calibratedLevel") && !input.contains("declaredLevel"), "old courses are untouched: {input}");
+        assert!(!input.contains("andamiaje_fuerte"));
+    }
+
+    #[tokio::test]
+    async fn a_class_with_researched_resources_gives_the_generator_titles_but_never_urls() {
+        use crate::domain::resources::{ClassResource, ResourceKind};
+        let runner = gate_runner();
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+        service
+            .store
+            .set_class_resources(
+                &class_id,
+                &[ClassResource {
+                    title: "Guía de inicio de Ubuntu".to_string(),
+                    url: "https://ubuntu.example/guia-secreta-url".to_string(),
+                    kind: ResourceKind::Tutorial,
+                    why: "Cubre la instalación paso a paso".to_string(),
+                    what_to_do: "Sigue la sección Primeros pasos".to_string(),
+                }],
+            )
+            .expect("resources");
+
+        service.start_class_notebook(None, &class_id).await.expect("start ok");
+
+        let input = runner.inputs.lock().unwrap()[0].clone();
+        assert!(input.contains("Guía de inicio de Ubuntu") && input.contains("Sigue la sección Primeros pasos"), "{input}");
+        assert!(!input.contains("ubuntu.example") && !input.contains("guia-secreta-url"), "the generator never sees a link it could mistype or invent: {input}");
+    }
+
+    #[tokio::test]
+    async fn a_class_without_resources_has_no_resources_key() {
+        let runner = gate_runner();
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        service.start_class_notebook(None, &class_id).await.expect("start ok");
+
+        assert!(!runner.inputs.lock().unwrap()[0].contains("resources"), "an old or unresearched class generates exactly as before");
     }

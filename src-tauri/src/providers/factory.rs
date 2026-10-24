@@ -5,12 +5,28 @@ use rig_core::client::CompletionClient;
 use crate::domain::model::ModelInfo;
 use crate::domain::provider::{ProviderConfig, ProviderKind};
 use crate::error::{AppError, AppResult};
+use crate::tools::block_stream::{BlockStreamHook, BlockStreamSink, current_sink};
 use crate::tools::{
     BlockAuditCapture, ClosureFeedbackCapture, ConfirmSyllabusPlanTool, DiagnosticToolScope, EchoTool, GateGradingCapture,
     GradeClosureSubmissionTool, GradeGateSubmissionTool, NotebookBlockCapture, PresentDiagnosticBatteryTool,
     ProposeCapstoneProjectTool, ProposeSyllabusPlanTool, PublishNotebookBlockTool, SharedRoadmapCapture, SubmitBlockAuditTool,
-    SubmitDiagnosticAssessmentTool, accept_terminal_stop, is_known_tool, stop_when_roadmap_captured, stop_when_some,
+    ResearchStep, SharedResearchCapture, StopWhenCaptured, SubmitContextQuestionsTool, SubmitDiagnosticAssessmentTool, SubmitPlanOutlineTool, SubmitResearchPlanTool, SubmitResourceSelectionTool, SubmitWeekSessionsTool, STOP_REASON, accept_terminal_stop, is_known_tool, stop_when_roadmap_captured, stop_when_some,
 };
+
+/// Pure parse of the `LEARNKIT_STREAM_BLOCKS` kill-switch: streaming is ON
+/// unless it is explicitly `0`/`false`/`off`/`no`.
+fn parse_stream_blocks(raw: Option<&str>) -> bool {
+    !matches!(raw.map(|v| v.trim().to_ascii_lowercase()).as_deref(), Some("0" | "false" | "off" | "no"))
+}
+
+/// The progress sink for the block turn about to run, or `None` when nobody
+/// scoped one or streaming is switched off (`LEARNKIT_STREAM_BLOCKS=0`).
+fn block_streaming_sink() -> Option<BlockStreamSink> {
+    if !parse_stream_blocks(std::env::var("LEARNKIT_STREAM_BLOCKS").ok().as_deref()) {
+        return None;
+    }
+    current_sink()
+}
 
 /// Límite para una llamada al LLM: sin esto, una red colgada o un proveedor
 /// lento deja el comando Tauri pendiente para siempre y la ventana parece
@@ -27,15 +43,51 @@ fn parse_prompt_timeout(raw: Option<&str>) -> u64 {
         .unwrap_or(DEFAULT_PROMPT_TIMEOUT_SECS)
 }
 
-/// Per-call ceiling for one notebook block. A reasoning model spends ~5k
-/// tokens thinking and then writes a multi-thousand-token tool payload, which
-/// does not fit the 200 s default; `LEARNKIT_PROMPT_TIMEOUT_SECS` still wins.
-const NOTEBOOK_BLOCK_TIMEOUT_SECS: u64 = 420;
+/// Knobs for ONE notebook-block model call, in one place. Defaults are tuned
+/// for a reasoning model (~5k thinking tokens + a multi-thousand-token tool
+/// payload); each can be overridden from the environment without a rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BlockCallParams {
+    /// Model turns per call. One valid call ends the loop (stop hook), so extra
+    /// turns only exist to fix a malformed call; each re-sends the whole context.
+    max_turns: usize,
+    /// Wall-clock ceiling for the call. `LEARNKIT_PROMPT_TIMEOUT_SECS`.
+    timeout_secs: u64,
+    /// Force a tool call instead of letting the model answer in prose.
+    /// `LEARNKIT_NOTEBOOK_TOOL_CHOICE=auto` for APIs that reject `required`.
+    require_tool: bool,
+}
 
-fn notebook_block_timeout_secs() -> u64 {
-    match std::env::var("LEARNKIT_PROMPT_TIMEOUT_SECS") {
-        Ok(v) => parse_prompt_timeout(Some(&v)),
-        Err(_) => NOTEBOOK_BLOCK_TIMEOUT_SECS,
+impl BlockCallParams {
+    const DEFAULT_MAX_TURNS: usize = 3;
+    const DEFAULT_TIMEOUT_SECS: u64 = 420;
+
+    fn resolve(timeout: Option<&str>, turns: Option<&str>, tool_choice: Option<&str>) -> Self {
+        Self {
+            max_turns: turns
+                .and_then(|v| v.trim().parse::<usize>().ok())
+                .map(|v| v.clamp(1, 10))
+                .unwrap_or(Self::DEFAULT_MAX_TURNS),
+            timeout_secs: timeout
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .map(|v| v.clamp(MIN_PROMPT_TIMEOUT_SECS, MAX_PROMPT_TIMEOUT_SECS))
+                .unwrap_or(Self::DEFAULT_TIMEOUT_SECS),
+            require_tool: tool_choice.map(str::trim) != Some("auto"),
+        }
+    }
+
+    fn from_env() -> Self {
+        let var = |k: &str| std::env::var(k).ok();
+        Self::resolve(
+            var("LEARNKIT_PROMPT_TIMEOUT_SECS").as_deref(),
+            var("LEARNKIT_NOTEBOOK_MAX_TURNS").as_deref(),
+            var("LEARNKIT_NOTEBOOK_TOOL_CHOICE").as_deref(),
+        )
+    }
+
+    fn tool_choice(&self) -> rig_core::completion::message::ToolChoice {
+        use rig_core::completion::message::ToolChoice;
+        if self.require_tool { ToolChoice::Required } else { ToolChoice::Auto }
     }
 }
 
@@ -43,6 +95,29 @@ fn notebook_block_timeout_secs() -> u64 {
 /// providers (e.g. live e2e runs) raise it without changing app defaults.
 fn prompt_timeout_secs() -> u64 {
     parse_prompt_timeout(std::env::var("LEARNKIT_PROMPT_TIMEOUT_SECS").ok().as_deref())
+}
+
+/// The syllabus proposal writes the whole plan (weeks x sessions, each with five
+/// fields) plus the capstone in ONE turn, and its size grows with the weeks and
+/// weekly hours the learner asks for: 8 weeks at 12 h/week is 24 sessions. A
+/// reasoning model needs minutes for that, so the default 200 s meant for short
+/// answers timed out at exactly that step every time. Scopes that can emit the
+/// proposal get [`PROPOSAL_TIMEOUT_FACTOR`] times the base limit (still
+/// overridable through `LEARNKIT_PROMPT_TIMEOUT_SECS`), capped at
+/// [`MAX_PROPOSAL_TIMEOUT_SECS`].
+const PROPOSAL_TIMEOUT_FACTOR: u64 = 3;
+const MAX_PROPOSAL_TIMEOUT_SECS: u64 = 1200;
+
+fn proposal_timeout_secs(base: u64) -> u64 {
+    base.saturating_mul(PROPOSAL_TIMEOUT_FACTOR).min(MAX_PROPOSAL_TIMEOUT_SECS)
+}
+
+fn diagnostic_timeout_secs(scope: DiagnosticToolScope) -> u64 {
+    let base = prompt_timeout_secs();
+    match scope {
+        DiagnosticToolScope::Propose | DiagnosticToolScope::All => proposal_timeout_secs(base),
+        DiagnosticToolScope::Assessment | DiagnosticToolScope::Battery => base,
+    }
 }
 /// Límite para los chequeos HTTP ligeros (verificar conexión, listar modelos).
 const HTTP_TIMEOUT_SECS: u64 = 30;
@@ -355,12 +430,13 @@ impl ProviderFactory {
         // plus a final turn, or Rig aborts with `MaxTurnsError` before the
         // last call ever happens.
         const DIAGNOSTIC_MAX_TURNS: usize = 6;
+        let timeout_secs = diagnostic_timeout_secs(scope);
         let text = tokio::time::timeout(
-            std::time::Duration::from_secs(prompt_timeout_secs()),
+            std::time::Duration::from_secs(timeout_secs),
             agent.prompt(input).max_turns(DIAGNOSTIC_MAX_TURNS).add_hook(hook),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?;
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {timeout_secs}s")))?;
         let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput {
             text,
@@ -455,21 +531,183 @@ impl ProviderFactory {
         // `output_budget`), not the modest plain-turn default — same as the
         // retired whole-notebook call, just spent on one block instead of 3-5.
         let hook = stop_when_some(capture.clone());
-        let agent = AgentBuilder::new(model).preamble(system_prompt).max_tokens(max_tokens).tool(PublishNotebookBlockTool(capture)).build();
-        // One valid call ends the loop (stop hook), so extra turns only exist to
-        // correct a malformed call (1-2 retries). Every extra turn re-sends the
-        // whole context to a reasoning model: 6 turns ran into the 200 s
-        // timeout. Fail fast instead and let the outer loop's corrective note
-        // drive the retry.
-        const NOTEBOOK_BLOCK_MAX_TURNS: usize = 3;
+        let params = BlockCallParams::from_env();
+        // Observed: the model sometimes answers in prose for every turn and never
+        // calls the tool, so the call is forced (see `BlockCallParams`).
+        let agent = AgentBuilder::new(model)
+            .preamble(system_prompt)
+            .max_tokens(max_tokens)
+            .tool(PublishNotebookBlockTool(capture))
+            .tool_choice(params.tool_choice())
+            .build();
+        let max_turns = params.max_turns;
+        // Live progress: only when the caller scoped a sink around this attempt
+        // (see `tools::block_stream`) and streaming is not switched off. Every
+        // other caller — tests, mocks, no UI — keeps the blocking call below.
+        if let Some(sink) = block_streaming_sink() {
+            return Self::stream_notebook_block(&agent, input, hook, sink, params).await;
+        }
         let text = tokio::time::timeout(
-            std::time::Duration::from_secs(notebook_block_timeout_secs()),
-            agent.prompt(input).max_turns(NOTEBOOK_BLOCK_MAX_TURNS).add_hook(hook),
+            std::time::Duration::from_secs(params.timeout_secs),
+            agent.prompt(input).max_turns(max_turns).add_hook(hook),
         )
         .await
-        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", notebook_block_timeout_secs())))?;
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", params.timeout_secs)))?;
         let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
         Ok(PromptOutput { text, tool_calls: vec!["publish_notebook_block".to_string()] })
+    }
+
+    /// Runs one block-generation turn as a STREAM, feeding `sink` with
+    /// sanitized progress (see `tools::block_stream`) while the model writes.
+    /// Same stop-at-the-first-tool-result hook, same timeout, same error shape
+    /// as the blocking path: the capture is filled by the tool exactly as
+    /// before, so everything downstream (salvage, critic, persistence) is
+    /// unchanged.
+    async fn stream_notebook_block(
+        agent: &rig_agent::agent::Agent,
+        input: &str,
+        stop: impl rig_agent::agent::AgentHook + 'static,
+        sink: BlockStreamSink,
+        params: BlockCallParams,
+    ) -> AppResult<PromptOutput> {
+        use futures::StreamExt;
+        use rig_agent::completion::PromptError;
+        use rig_agent::streaming::StreamingPrompt;
+
+        let (timeout_secs, max_turns) = (params.timeout_secs, params.max_turns);
+        let run = async {
+            let mut stream = agent.stream_prompt(input).max_turns(max_turns).add_hook(stop).add_hook(BlockStreamHook::new(sink)).await;
+            while let Some(item) = stream.next().await {
+                item?;
+            }
+            Ok::<(), rig_agent::agent::StreamingError>(())
+        };
+        let result = tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), run)
+            .await
+            .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {timeout_secs}s")))?;
+        match result {
+            Ok(()) => {}
+            // Our own terminal-tool stop is success, exactly as `accept_terminal_stop`
+            // treats it on the blocking path.
+            Err(rig_agent::agent::StreamingError::Prompt(e))
+                if matches!(*e, PromptError::PromptCancelled { ref reason, .. } if reason == STOP_REASON) => {}
+            Err(e) => return Err(AppError::AgentExecutionFailed(trim_error(&e.to_string()))),
+        }
+        Ok(PromptOutput { text: String::new(), tool_calls: vec!["publish_notebook_block".to_string()] })
+    }
+
+    /// Runs one step of the resource-research pipeline: the planner (propose
+    /// queries) or the curator (pick among the hits found), each with its own
+    /// single capture tool. Used only by `application::research_service`.
+    pub async fn run_research_prompt(
+        config: &ProviderConfig,
+        api_key: &str,
+        system_prompt: &str,
+        input: &str,
+        capture: SharedResearchCapture,
+        step: ResearchStep,
+    ) -> AppResult<PromptOutput> {
+        Self::require_key(api_key, &config.id)?;
+        let model_name = Self::resolve_model(config, None)?;
+        let base_url = config.effective_base_url();
+
+        match config.provider {
+            ProviderKind::OpenAI => {
+                let client = rig_core::providers::openai::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_research_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider), step).await
+            }
+            ProviderKind::Anthropic => {
+                let client = rig_core::providers::anthropic::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = anthropic_cached(client.completion_model(model_name));
+                Self::prompt_with_research_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider), step).await
+            }
+            ProviderKind::Gemini => {
+                let client = rig_core::providers::gemini::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_research_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider), step).await
+            }
+            ProviderKind::OpenRouter => {
+                let client = rig_core::providers::openrouter::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_research_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider), step).await
+            }
+            ProviderKind::DeepSeek => {
+                let client = rig_core::providers::deepseek::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_research_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider), step).await
+            }
+            ProviderKind::Xiaomi => {
+                let client = rig_core::providers::xiaomimimo::Client::builder()
+                    .api_key(api_key.to_string())
+                    .base_url(base_url)
+                    .build()
+                    .map_err(|e| connect_error(&e))?;
+                let model = client.completion_model(model_name);
+                Self::prompt_with_research_tool(model, system_prompt, input, capture, Self::output_budget(&config.provider), step).await
+            }
+        }
+    }
+
+    async fn prompt_with_research_tool<M>(
+        model: M,
+        system_prompt: &str,
+        input: &str,
+        capture: SharedResearchCapture,
+        max_tokens: u64,
+        step: ResearchStep,
+    ) -> AppResult<PromptOutput>
+    where
+        M: rig_agent::completion::CompletionModel + 'static,
+    {
+        // Ends the loop as soon as THIS step's slot is filled, like every other
+        // single-tool flow: no extra turns narrating or re-calling the tool.
+        let stop_capture = capture.clone();
+        let hook = StopWhenCaptured::new(move || stop_capture.lock().unwrap_or_else(|e| e.into_inner()).is_complete(step));
+        let base = AgentBuilder::new(model).preamble(system_prompt).max_tokens(max_tokens);
+        let agent = match step {
+            ResearchStep::Plan => base.tool(SubmitResearchPlanTool(capture)).build(),
+            ResearchStep::Select => base.tool(SubmitResourceSelectionTool(capture)).build(),
+            ResearchStep::Questions => base.tool(SubmitContextQuestionsTool(capture)).build(),
+            ResearchStep::Outline => base.tool(SubmitPlanOutlineTool(capture)).build(),
+            ResearchStep::Week => base.tool(SubmitWeekSessionsTool(capture)).build(),
+        };
+        const RESEARCH_MAX_TURNS: usize = 4;
+        let text = tokio::time::timeout(
+            std::time::Duration::from_secs(prompt_timeout_secs()),
+            agent.prompt(input).max_turns(RESEARCH_MAX_TURNS).add_hook(hook),
+        )
+        .await
+        .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {}s", prompt_timeout_secs())))?;
+        let text = accept_terminal_stop(text).map_err(|e| AppError::AgentExecutionFailed(trim_error(&e.to_string())))?;
+        let tool = match step {
+            ResearchStep::Plan => "submit_research_plan",
+            ResearchStep::Select => "submit_resource_selection",
+            ResearchStep::Questions => "submit_context_questions",
+            ResearchStep::Outline => "submit_plan_outline",
+            ResearchStep::Week => "submit_week_sessions",
+        };
+        Ok(PromptOutput { text, tool_calls: vec![tool.to_string()] })
     }
 
     /// Build a Rig agent with the single `grade_gate_submission` tool

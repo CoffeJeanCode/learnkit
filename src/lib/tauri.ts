@@ -2,7 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   ClassRecordSchema,
+  ClassResourceSchema,
   ClosureFeedbackSchema,
+  CourseResearchSchema,
   CourseSchema,
   DiagnosticBatteryStateSchema,
   ConceptGraphSchema,
@@ -13,9 +15,12 @@ import {
   NotebookPayloadSchema,
   RoadmapSessionSchema,
   RoadmapSessionSummarySchema,
+  PlanPartEventSchema,
+  ResearchStatusEventSchema,
   RoadmapTurnPayloadSchema,
+  SearchKeyStatusSchema,
 } from "./schemas";
-import type { GateSubmission, NotebookBlockEvent } from "./schemas";
+import type { ContextAnswer, GateSubmission, NotebookBlockEvent, PlanAdjustmentPayload, PlanPartEvent, ProfileBasics, ResearchStatusEvent } from "./schemas";
 import type { BlockUpdate } from "../types";
 import type { DevTraceEntry } from "./devTrace";
 import type {
@@ -154,6 +159,24 @@ export const answerDiagnosticQuestion = (session_id: string, question_index: num
   invoke("answer_diagnostic_question", { sessionId: session_id, questionIndex: question_index, answer }).then((v) =>
     RoadmapTurnPayloadSchema.parse(v),
   );
+
+/** Step 1 -> 2 of the profile form: sends topic, goal, weeks and hours and gets
+ *  back the session with intake questions generated for THIS topic. */
+export const proposeContextQuestions = (session_id: string, basics: ProfileBasics) =>
+  invoke("propose_context_questions", { sessionId: session_id, basics }).then((v) => RoadmapTurnPayloadSchema.parse(v));
+
+/** Step 2: the answers to those questions. The server validates them against its
+ *  own copy of the questions, deduces the level, and runs what follows. */
+export const submitRoadmapProfile = (session_id: string, answers: ContextAnswer[]) =>
+  invoke("submit_roadmap_profile", { sessionId: session_id, answers }).then((v) => RoadmapTurnPayloadSchema.parse(v));
+
+/** Confirms the proposed plan with a button: seals it without a model call. */
+export const confirmRoadmapPlan = (session_id: string) =>
+  invoke("confirm_roadmap_plan", { sessionId: session_id }).then((v) => RoadmapTurnPayloadSchema.parse(v));
+
+/** Revises the proposed plan from structured controls (one proposal turn). */
+export const adjustRoadmapPlan = (session_id: string, adjustment: PlanAdjustmentPayload) =>
+  invoke("adjust_roadmap_plan", { sessionId: session_id, adjustment }).then((v) => RoadmapTurnPayloadSchema.parse(v));
 
 /** Escape hatch: finishes the Diagnostic stage with whatever's answered so far. */
 export const skipDiagnosticBattery = (session_id: string) =>
@@ -363,7 +386,7 @@ export async function onAgentEvent(
  * frontend can reveal it without polling.
  */
 export async function onNotebookBlockEvent(
-  channel: "notebook_block://generating" | "notebook_block://ready" | "notebook_block://error",
+  channel: "notebook_block://generating" | "notebook_block://ready" | "notebook_block://error" | "notebook_block://delta",
   handler: (e: NotebookBlockEvent) => void,
 ): Promise<UnlistenFn> {
   return listen<unknown>(channel, (evt) => handler(NotebookBlockEventSchema.parse(evt.payload)));
@@ -379,4 +402,44 @@ export const clearDevTrace = () => invoke<void>("clear_dev_trace");
 /** Live generation traces; the backend only emits while dev mode is on. */
 export async function onDevTrace(handler: (e: DevTraceEntry) => void): Promise<UnlistenFn> {
   return listen<DevTraceEntry>("dev://trace", (evt) => handler(evt.payload));
+}
+
+// --- Resource research -------------------------------------------------------
+//
+// A background pipeline finds real tutorials/docs for each class once a course
+// is sealed. The search key lives in the same encrypted vault as the model keys
+// and is never sent back to the UI.
+
+export const getSearchKeyStatus = () =>
+  invoke("get_search_key_status").then((v) => SearchKeyStatusSchema.parse(v));
+
+export const saveSearchKey = (key: string) => invoke<void>("save_search_key", { key });
+
+export const deleteSearchKey = () => invoke<void>("delete_search_key");
+
+export const getCourseResearch = (course_id: string) =>
+  invoke("get_course_research", { courseId: course_id }).then((v) => CourseResearchSchema.parse(v));
+
+/** Idempotent: a running or finished research is left alone. */
+export const startCourseResearch = (course_id: string) => invoke<void>("start_course_research", { courseId: course_id });
+
+export const getClassResources = (class_id: string) =>
+  invoke("get_class_resources", { classId: class_id }).then((v) => ClassResourceSchema.array().parse(v));
+
+/** Opens a curated resource in the default browser. The backend refuses any
+ *  URL that is not on that class's list. */
+export const openClassResource = (class_id: string, url: string) =>
+  invoke<void>("open_class_resource", { classId: class_id, url });
+
+/** Parts of the syllabus as they are written (outline, then each week). */
+export async function onPlanPart(handler: (e: PlanPartEvent) => void): Promise<UnlistenFn> {
+  return listen<unknown>("roadmap://plan_part", (evt) => {
+    const parsed = PlanPartEventSchema.safeParse(evt.payload);
+    // A malformed progress event is only cosmetic: drop it, never fail the turn.
+    if (parsed.success) handler(parsed.data);
+  });
+}
+
+export async function onResearchStatus(handler: (e: ResearchStatusEvent) => void): Promise<UnlistenFn> {
+  return listen<unknown>("research://status", (evt) => handler(ResearchStatusEventSchema.parse(evt.payload)));
 }

@@ -9,6 +9,7 @@ pub mod orchestration;
 pub mod persistence;
 pub mod prompt_encoding;
 pub mod providers;
+pub mod search;
 pub mod secrets;
 pub mod state;
 pub mod tools;
@@ -17,8 +18,36 @@ use tauri::Manager;
 
 use state::AppState;
 
+/// Release builds have no console (`windows_subsystem = "windows"`), and a
+/// panic inside a WebView2/tao callback aborts the process (0xc0000409), so
+/// the message would be lost. Append it, with a backtrace, to `crash.log` in
+/// the app data dir before the abort happens.
+fn install_panic_log() {
+    let Some(local) = std::env::var_os("LOCALAPPDATA").or_else(|| std::env::var_os("HOME")) else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(local).join("com.learnkit.app").join("learnkit");
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        use std::io::Write;
+        let thread = std::thread::current();
+        let entry = format!(
+            "[{:?}] panic on thread '{}': {info}\n{}\n\n",
+            std::time::SystemTime::now(),
+            thread.name().unwrap_or("<unnamed>"),
+            std::backtrace::Backtrace::force_capture(),
+        );
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("crash.log")) {
+            let _ = f.write_all(entry.as_bytes());
+        }
+        previous(info);
+    }));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    install_panic_log();
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -84,6 +113,17 @@ pub fn run() {
             commands::roadmap::rename_roadmap_session,
             commands::roadmap::delete_roadmap_session,
             commands::roadmap::ensure_course_imported,
+            commands::research::get_search_key_status,
+            commands::research::save_search_key,
+            commands::research::delete_search_key,
+            commands::research::get_course_research,
+            commands::research::start_course_research,
+            commands::research::get_class_resources,
+            commands::research::open_class_resource,
+            commands::roadmap::propose_context_questions,
+            commands::roadmap::submit_roadmap_profile,
+            commands::roadmap::confirm_roadmap_plan,
+            commands::roadmap::adjust_roadmap_plan,
             commands::roadmap::answer_diagnostic_question,
             commands::roadmap::skip_diagnostic_battery,
             commands::notebook::import_course_from_roadmap,

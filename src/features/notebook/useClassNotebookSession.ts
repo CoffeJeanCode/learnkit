@@ -3,6 +3,7 @@ import type { UnlistenFn } from "@tauri-apps/api/event";
 import type { GenerationStage } from "../../components/AgentLoader";
 import type { GateResult, GateSubmission, NotebookBlock, NotebookBlockEvent, NotebookDocument } from "../../lib/schemas";
 import { onAgentEvent, onNotebookBlockEvent, regenerateNotebookBlock, requestEasierStep as requestEasierStepCommand, retryPendingBlock as retryPendingBlockCommand, saveBlockAnnotation, startClassNotebook, submitGateResponse, tauriError } from "../../lib/tauri";
+import { type BlockDraft, applyBlockDelta } from "./blockDraft";
 
 export type BufferState = "idle" | "generating" | "error";
 
@@ -35,14 +36,17 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
   // narrates what the model is actually doing instead of looping one line.
   const [stage, setStage] = useState<GenerationStage>("preparando");
   const [regeneratingBlockId, setRegeneratingBlockId] = useState<string | null>(null);
+  // Live preview of the block being written (from `notebook_block://delta`).
+  // Cleared the moment the real block arrives, a new block starts, or it fails.
+  const [draft, setDraft] = useState<BlockDraft | null>(null);
   const documentIdRef = useRef<string | null>(null);
+  // Generator runs started for the block being made RIGHT NOW: 1 = first try,
+  // 2+ = a retry. Reset at every block boundary (`generating`).
   const generatorStartsRef = useRef(0);
-  const blockBoundaryRef = useRef(false);
 
   useEffect(() => {
     documentIdRef.current = null;
     generatorStartsRef.current = 0;
-    blockBoundaryRef.current = false;
     if (!classId) {
       setDocument(null);
       setBlocks([]);
@@ -55,6 +59,7 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
     setBufferError(null);
     setBufferState("idle");
     setStage("preparando");
+    setDraft(null);
     setDocument(null);
     setBlocks([]);
 
@@ -72,6 +77,9 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
               if (e.document_id === documentIdRef.current) {
                 setBufferState("generating");
                 setBufferError(null);
+                // A new block starts: drop the previous block's draft so its
+                // attempt counter cannot make the new one look stale.
+                setDraft(null);
               }
             },
           ],
@@ -81,6 +89,7 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
               if (e.document_id !== documentIdRef.current || !e.block) return;
               setBlocks((prev) => upsertBlock(prev, e.block!));
               setBufferState("idle");
+              setDraft(null);
             },
           ],
           [
@@ -89,30 +98,42 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
               if (e.document_id !== documentIdRef.current) return;
               setBufferState("error");
               setBufferError(e.message ?? "No se pudo generar el siguiente bloque.");
+              setDraft(null);
             },
           ],
-          // Unfiltered: a `generating` boundary marks "a NEW block started",
-          // which is how the stage listener below tells block N+1's chain
-          // apart from a retry of THIS block (no boundary in between).
+          // Live progress. Unlike the events above it must also be accepted
+          // WHILE LOADING: block 1 is generated inside `start_class_notebook`,
+          // before `documentIdRef` is known, so any delta then is this
+          // document's (same reasoning as the unfiltered `generating` below).
+          [
+            "notebook_block://delta",
+            (e) => {
+              if (documentIdRef.current !== null && e.document_id !== documentIdRef.current) return;
+              setDraft((prev) => applyBlockDelta(prev, e));
+            },
+          ],
+          // Unfiltered: a `generating` boundary marks "a NEW block started" —
+          // the attempt count and stage start over for it. A second generator
+          // run WITHOUT a boundary in between is a retry of the SAME block.
           // During loading any boundary is effectively this document's —
           // `documentIdRef` isn't set until the payload arrives.
           [
             "notebook_block://generating",
             () => {
-              blockBoundaryRef.current = true;
+              generatorStartsRef.current = 0;
+              setStage("preparando");
             },
           ],
         ];
         const acquired = await Promise.all([
           ...subs.map(([channel, fn]) => onNotebookBlockEvent(channel, fn)),
           onAgentEvent("agent://started", (e) => {
+            // Only the generator narrates the stage. The pedagogical critic
+            // now runs AFTER a block is shown, in parallel with the next one,
+            // so its start says nothing about the block being written.
             if (e.agent_id === "notebook_generator") {
               generatorStartsRef.current += 1;
-              setStage(
-                generatorStartsRef.current === 1 || blockBoundaryRef.current ? "escribiendo" : "reintentando",
-              );
-            } else if (e.agent_id === "pedagogical_critic") {
-              setStage("revisando");
+              setStage(generatorStartsRef.current === 1 ? "escribiendo" : "reintentando");
             }
           }),
         ]);
@@ -127,6 +148,9 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
         documentIdRef.current = payload.document.id;
         setDocument(payload.document);
         setBlocks(sortByOrder(payload.blocks));
+        // Block 1 is in `payload`, not in a `ready` event, so its draft is
+        // cleared here (the next block's `generating` clears again).
+        setDraft(null);
       } catch (e) {
         console.error("useClassNotebookSession: start_class_notebook failed", e);
         if (!cancelled) setError(tauriError(e).message);
@@ -230,6 +254,7 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
   const cancelBuffer = () => {
     setBufferState("error");
     setBufferError("Cancelado. Toca «Reintentar» para seguir con la clase.");
+    setDraft(null);
   };
 
   return {
@@ -240,6 +265,7 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
     loading,
     error,
     stage,
+    draft,
     submitGate,
     requestEasierStep,
     annotateBlock,

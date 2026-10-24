@@ -5,8 +5,8 @@ use uuid::Uuid;
 use crate::domain::notebook::{DiagnosticBattery, DiagnosticBatteryState, DiagnosticDimension};
 use crate::domain::roadmap::{
     CapstoneProject, ChatTurn, Deliverable, DeliverableArtifactType, DiagnosticAssessmentArgs, DiagnosticSummaryCard, EntryLevel,
-    LearnerProfileCard, Micromodule, Milestone, ProposedPlan, RoadmapPhase, RoadmapSession, RoadmapSessionSummary,
-    RoadmapSyllabusPackage, SealedRoadmap, SessionStatus,
+    LearnerProfileCard, Micromodule, Milestone, PlanAdjustment, ProfileBasics, ProposedPlan, RoadmapPhase, RoadmapSession,
+    RoadmapSessionSummary, RoadmapSyllabusPackage, SealedRoadmap, SessionStatus,
 };
 use crate::error::{AppError, AppResult};
 use crate::notebook_store::NotebookStore;
@@ -90,6 +90,9 @@ pub struct RoadmapService {
     orchestrator: Arc<Orchestrator>,
     store: FileStore,
     notebook_store: NotebookStore,
+    /// Write the syllabus proposal in parts (outline, then weeks in parallel)
+    /// instead of one giant call — see `plan_parts`. Off unless asked for.
+    plan_in_parts: bool,
 }
 
 impl RoadmapService {
@@ -144,7 +147,7 @@ impl RoadmapService {
     const RETRY_BACKOFF_BASE: std::time::Duration = std::time::Duration::from_millis(500);
 
     pub fn new(orchestrator: Arc<Orchestrator>, store: FileStore, notebook_store: NotebookStore) -> Self {
-        Self { orchestrator, store, notebook_store }
+        Self { orchestrator, store, notebook_store, plan_in_parts: false }
     }
 
     pub fn get_session(&self, session_id: &str) -> AppResult<RoadmapSession> {
@@ -310,50 +313,7 @@ impl RoadmapService {
         // are sequential stages), and never mid-seal (status re-checked
         // against the post-main-turn session).
         if !had_violation {
-            if Self::battery_followup_needed(&session) {
-                let (t, v) = self
-                    .run_diagnostic_turn_with_grounding_retry(
-                        app,
-                        &mut session,
-                        ROADMAP_AGENT_ID,
-                        DiagnosticToolScope::Battery,
-                        render_battery_followup_input,
-                    )
-                    .await?;
-                text = t;
-                had_violation = v;
-            } else if Self::propose_followup_needed(&session) {
-                // Durable checkpoint before the Gate 3a hand-off: Gate 1 just
-                // set `learner_profile_card` (and, via `apply_capture`,
-                // `diagnostic_summary_card` when it chains further) purely in
-                // memory — the only save so far was the one taken BEFORE the
-                // main turn ran (line above, still the pre-turn state). The
-                // upcoming call below is its own separate, potentially slow
-                // LLM turn (the full milestone/syllabus tree); if it fails
-                // hard or the process crashes mid-flight, an unsaved profile
-                // card would be lost and have to be regathered from scratch
-                // instead of resuming from what Gate 1 already produced. Only
-                // fires here — right before this specific hand-off — so a
-                // turn that never reaches Gate 3a (e.g. the battery hand-off
-                // above, or a plain chat turn) never pays for an extra write.
-                session.updated_at_ms = now_ms();
-                self.store.save_roadmap_session(&session)?;
-                let (t, v) = self
-                    .run_diagnostic_turn_with_grounding_retry(
-                        app,
-                        &mut session,
-                        ROADMAP_AGENT_ID,
-                        DiagnosticToolScope::Propose,
-                        |s| match s.learner_profile_card.as_ref() {
-                            Some(profile) => render_propose_syllabus_input(
-                                profile,
-                                s.pending_diagnostic_battery.as_ref(),
-                                &s.last_rejection_reasons,
-                            ),
-                            None => String::new(),
-                        },
-                    )
-                    .await?;
+            if let Some((t, v)) = self.run_followup_hand_off(app, &mut session).await? {
                 text = t;
                 had_violation = v;
             }
@@ -443,6 +403,18 @@ impl RoadmapService {
             return Err(AppError::InvalidInput("roadmap session already sealed".to_string()));
         }
 
+        // Shape 0: the profile is saved (typed in the FORM, or captured by the
+        // analyst) but the hand-off behind it — the battery, or the proposal
+        // for `absolute_zero` — never landed. Re-run exactly that hand-off. It
+        // goes first because after a form submit the log ends with the form's
+        // summary as a `user` turn, which Shape 1 below would wrongly replay
+        // as a chat message.
+        if session.learner_profile_card.is_some()
+            && (Self::battery_followup_needed(&session) || Self::propose_followup_needed(&session))
+        {
+            return self.finish_profile_hand_off(app, session).await;
+        }
+
         // Shape 1: a user message with no assistant reply yet — the normal
         // send path. The turn already sits in the log AND in `draft`, so run
         // the model against it without recording anything again.
@@ -494,14 +466,16 @@ impl RoadmapService {
 }
 
 mod flow;
+mod form;
 mod grounding;
+mod plan_parts;
 mod render;
 mod session;
 mod synth;
 
 use crate::agents::roadmap_agent::ROADMAP_AGENT_ID;
 use crate::tools::DiagnosticToolScope;
-use render::{render_battery_followup_input, render_propose_syllabus_input, render_turn_input};
+use render::render_turn_input;
 use session::{now_ms, record_message, trim_message_log};
 
 #[cfg(test)]

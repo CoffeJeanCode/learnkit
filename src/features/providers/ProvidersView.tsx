@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useProviders } from "../../stores/providers";
 import { DevModeCard } from "../dev/DevModeCard";
 import { StudySettingsCard } from "../study/StudySettingsCard";
+import { SearchKeyCard } from "./SearchKeyCard";
 import type { ModelInfo } from "../../types";
 
 // Module-level stable fallbacks: selectors must return referentially stable
@@ -210,6 +211,7 @@ export function ProvidersView() {
           <ProviderCard key={p.id} id={p.id} />
         ))}
       </div>
+      <SearchKeyCard />
       <StudySettingsCard />
       <DevModeCard />
     </div>
