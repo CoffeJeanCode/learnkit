@@ -14,7 +14,7 @@ import { useRoadmap } from "../../stores/roadmap";
 import { useUi } from "../../stores/ui";
 import { PlanAdjustPanel } from "./PlanAdjustPanel";
 import { PlanDraftView } from "./PlanDraftView";
-import { ProfileForm } from "./ProfileForm";
+import { ControlPanel } from "./panel/ControlPanel";
 
 // User-facing labels for the phase tracker — deliberately about the
 // milestone the student reaches, not the agent's internal vocabulary.
@@ -404,11 +404,11 @@ export function RoadmapView() {
         <h2>Tu ruta de aprendizaje</h2>
         <p className="muted">
           {showForm
-            ? "Cuéntame qué quieres aprender y cuánto tiempo tienes. Te haré unas preguntas sobre tu tema y armo tu plan y tu primera clase."
+            ? "Arma tu misión en el tablero: qué quieres aprender, para qué y cuánto tiempo tienes. Luego te haré unas preguntas sobre tu tema y armo tu plan y tu primera clase."
             : "Tu plan se arma con lo que me contaste. Revísalo, ajústalo si hace falta y confírmalo."}
         </p>
         {showForm && (
-          <ProfileForm
+          <ControlPanel
             initialBasics={session?.profile_basics ?? null}
             questions={session?.pending_context_questions ?? null}
             busy={sending || opening}

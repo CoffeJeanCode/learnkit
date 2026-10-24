@@ -1571,3 +1571,72 @@ body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16p
 .connect-step { border: none; border-radius: var(--squircle-sm); corner-shape: squircle; padding: 12px; display: flex; flex-direction: column; gap: 10px; margin-top: 10px; background: var(--input); }
 .connect-item { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; }
 .connect-item:first-of-type { padding-top: 0; }
+
+/* --- Roadmap control panel: board of tiles, dial, day switches, answer cards --- */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.control-panel { display: flex; flex-direction: column; gap: 14px; max-width: 860px; margin-top: 8px; }
+.cp-meter { display: flex; align-items: center; gap: 12px; }
+.cp-meter-bar { flex: 1; height: 10px; border-radius: 999px; background: var(--input); overflow: hidden; }
+.cp-meter-fill { height: 100%; background: var(--marker); box-shadow: inset 0 0 0 1px var(--chalk-faint); border-radius: inherit; transition: width 0.3s ease; }
+.cp-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.cp-tile {
+  display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; min-width: 0;
+  border-radius: var(--squircle); corner-shape: squircle; background: var(--card);
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+.cp-tile.cp-wide { grid-column: span 2; }
+.cp-tile.cp-ready { box-shadow: 0 0 0 2px var(--green-wash); }
+.cp-tile.cp-error { box-shadow: 0 0 0 2px var(--red-wash); }
+.cp-tile-head { display: flex; align-items: center; gap: 8px; }
+.cp-toggle { flex: 1; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 0; border: none; background: none; color: inherit; font: inherit; cursor: pointer; text-align: left; min-width: 0; }
+.cp-summary { color: var(--chalk-soft); font-size: 14px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-tile-head > .pf-label { flex: 1; }
+.cp-status { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 999px; font-weight: 700; font-size: 14px; }
+.cp-status-ready { background: var(--green-wash); color: var(--green-chalk); }
+.cp-status-error { background: var(--red-wash); color: var(--red-chalk); }
+.cp-status-empty { background: var(--input); }
+.cp-move { display: inline-flex; gap: 2px; opacity: 0.5; }
+.cp-tile:hover .cp-move, .cp-move:focus-within { opacity: 1; }
+.cp-tile-body { display: flex; flex-direction: column; gap: 8px; animation: cp-pop 0.16s ease-out; }
+@keyframes cp-pop { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.weeks-dial { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.dial-svg { touch-action: none; cursor: grab; border-radius: 50%; }
+.dial-svg:active { cursor: grabbing; }
+.dial-svg:focus-visible { outline: 2px solid var(--chalk); outline-offset: 4px; }
+.dial-track, .dial-fill { fill: none; stroke-width: 12; stroke-linecap: round; }
+.dial-track { stroke: var(--input); }
+.dial-fill { stroke: var(--gold-chalk); }
+.dial-knob { fill: var(--chalk); stroke: var(--paper); stroke-width: 3; }
+.dial-value { fill: var(--chalk); font-family: var(--font-hand); font-size: 40px; font-weight: 700; }
+.dial-unit { fill: var(--chalk-soft); font-size: 13px; }
+.dial-notches { justify-content: center; align-items: center; }
+.dial-type input { width: 64px; text-align: center; }
+.rhythm-tile { display: flex; flex-direction: column; gap: 10px; }
+.day-switches { display: flex; gap: 6px; flex-wrap: wrap; }
+.day-switch {
+  width: 40px; height: 40px; border: none; border-radius: var(--squircle-sm); corner-shape: squircle;
+  background: var(--input); color: var(--chalk-soft); font-family: var(--font-hand); font-size: 22px; font-weight: 700; cursor: pointer;
+  transition: transform 0.1s ease, background 0.15s ease;
+}
+.day-switch:hover:not(:disabled) { background: var(--card-hi); }
+.day-switch:active:not(:disabled) { transform: scale(0.94); }
+.day-switch.on { background: var(--marker); color: var(--chalk); }
+.hours-slider { width: 100%; accent-color: var(--gold-chalk); }
+.answer-cards { display: flex; flex-direction: column; gap: 14px; }
+.answer-card { padding: 0; }
+.card-deck { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+.pick-card {
+  min-height: 64px; padding: 12px 14px; border: none; border-radius: var(--squircle); corner-shape: squircle; text-align: left;
+  background: var(--card); color: inherit; font: inherit; line-height: 1.4; cursor: pointer;
+  transition: transform 0.1s ease, background 0.15s ease;
+}
+.pick-card:hover:not(:disabled) { background: var(--card-hi); transform: translateY(-1px); }
+.pick-card.selected { background: var(--marker); font-weight: 600; box-shadow: 0 0 0 2px var(--chalk-faint); }
+.pick-card.pick-unknown { background: var(--input); color: var(--chalk-soft); }
+.pick-card.pick-unknown.selected { background: var(--marker); color: var(--chalk); }
+.pick-card:focus-visible { outline: 2px solid var(--chalk); outline-offset: 2px; }
+@media (max-width: 640px) { .cp-grid { grid-template-columns: 1fr; } .cp-tile.cp-wide { grid-column: auto; } }
+@media (prefers-reduced-motion: reduce) {
+  .cp-tile-body { animation: none; }
+  .cp-meter-fill, .day-switch, .pick-card, .cp-tile { transition: none; }
+}
