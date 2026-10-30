@@ -1,7 +1,8 @@
 import { useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { SubmitGate } from "./index";
-import { answerKey, moveItem } from "./interaction";
+import { answerKey } from "./interaction";
+import { CaseWiring, ChainOrder } from "./nodes";
 import { asNullableString, asStringArray, usePersistedState } from "./persist";
 import type { Annotate } from "./persist";
 import { InlineText, RichText } from "./RichText";
@@ -118,30 +119,8 @@ export function InteractivePredictionGateBlock({
     return (
       <div className="notebook-block-body">
         {header}
-        <p className="hint">Ordena los eslabones de la cadena: primero arriba, último abajo.</p>
-        <ol className="chain-list">
-          {order.map((step, i) => (
-            <li key={step} className="chain-item">
-              <span className="chain-no">{i + 1}</span>
-              <span className="chain-text">
-                <InlineText text={step} />
-              </span>
-              <span className="chain-moves">
-                <button className="btn-quiet" onClick={() => patch({ order: moveItem(order, i, -1) })} disabled={!isActive || busy || i === 0} aria-label={`Subir el paso ${i + 1}`}>
-                  ↑
-                </button>
-                <button
-                  className="btn-quiet"
-                  onClick={() => patch({ order: moveItem(order, i, 1) })}
-                  disabled={!isActive || busy || i === order.length - 1}
-                  aria-label={`Bajar el paso ${i + 1}`}
-                >
-                  ↓
-                </button>
-              </span>
-            </li>
-          ))}
-        </ol>
+        <p className="hint">Arrastra cada eslabón hasta su lugar: primero arriba, último abajo.</p>
+        <ChainOrder steps={order} onChange={(next) => patch({ order: next })} disabled={!isActive || busy} render={(step) => <InlineText text={step} />} />
         <div className="row">
           <button className="btn-primary" onClick={checkOrder} disabled={!isActive || busy || alreadyTried}>
             {busy ? "Calificando…" : "Comprobar secuencia"}
@@ -159,34 +138,18 @@ export function InteractivePredictionGateBlock({
     return (
       <div className="notebook-block-body">
         {header}
-        <p className="hint">Clasifica cada caso: ¿cumple la regla o la rompe?</p>
-        <ul className="case-list">
-          {cases.map((c, i) => (
-            <li key={i} className="case-item">
-              <p className="case-statement">
-                <InlineText text={c.statement} />
-              </p>
-              <div className="case-choices" role="group" aria-label={`Caso ${i + 1}`}>
-                {([true, false] as const).map((value) => (
-                  <button
-                    key={String(value)}
-                    className={verdicts[i] === value ? "btn-primary" : ""}
-                    aria-pressed={verdicts[i] === value}
-                    onClick={() => patch({ verdicts: verdicts.map((x, j) => (j === i ? value : x)) })}
-                    disabled={!isActive || busy}
-                  >
-                    {value ? "Cumple la regla" : "Rompe la regla"}
-                  </button>
-                ))}
-              </div>
-            </li>
-          ))}
-        </ul>
+        <p className="hint">Conecta cada caso con lo que le corresponde: arrastra desde su punto hasta «Cumple» o «Rompe».</p>
+        <CaseWiring
+          cases={cases.map((c, i) => ({ key: `${i}:${c.statement}`, content: <InlineText text={c.statement} /> }))}
+          verdicts={verdicts}
+          onChange={(i, value) => patch({ verdicts: verdicts.map((x, j) => (j === i ? value : x)) })}
+          disabled={!isActive || busy}
+        />
         <div className="row">
           <button className="btn-primary" onClick={checkCases} disabled={!isActive || busy || !allClassified || alreadyTried}>
             {busy ? "Calificando…" : "Comprobar casos"}
           </button>
-          {!allClassified && isActive && <span className="hint">Clasifica todos los casos para comprobar.</span>}
+          {!allClassified && isActive && <span className="hint">Conecta todos los casos para comprobar.</span>}
           {alreadyTried && <span className="hint">Ya probaste esta clasificación — cambia algún caso.</span>}
         </div>
         {busy && <p className="hint">Calificando…</p>}

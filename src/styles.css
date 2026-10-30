@@ -1081,6 +1081,22 @@ pre.output, .quickrun pre {
 }
 /* Unsupported block: dimmed card instead of a dashed ring. */
 .notebook-block-wrapper.unsupported { background: var(--paper-deep); opacity: 0.8; }
+
+/* --- Microinteractions: a block arriving ---------------------------------
+   `block-rise` only: the block comes up a few pixels, which is what says
+   "this is new content". No blur (paint-heavy, nothing to say) and no colour
+   sweep: colour that carries no information just pulls the eye off the text
+   the student was about to read.
+   `fill-mode: backwards`, NOT `both`: the end state must not stick, or
+   `.status-escalated`'s opacity 0.85 would be pinned to 1 forever. */
+.notebook-block-wrapper:not(.unsupported) {
+  animation: block-rise 0.28s ease-out backwards;
+}
+@keyframes block-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
 .block-kicker {
   display: flex;
   align-items: center;
@@ -1150,27 +1166,69 @@ pre.output, .quickrun pre {
 .block-note textarea { width: 100%; margin-top: 6px; }
 .block-note-status { display: block; min-height: 1.2em; font-size: 13px; }
 
-/* interactive_prediction_gate · causal_chain_order */
-.chain-list { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+/* interactive_prediction_gate · node-style gates (causal chain + case wiring).
+   Node-editor vocabulary: items are nodes with ports; drag a node and its
+   neighbours slide aside, drag a wire from a port and it snaps to the next.
+   Wires and ports are always neutral chalk: colour never hints at the answer. */
+.node-port { display: block; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--chalk-faint); transition: background 0.12s ease, transform 0.12s ease; }
+
+.chain-list { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 18px; }
 .chain-item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
-  border: none;
+  padding: 8px 12px;
   border-radius: var(--squircle-sm);
   corner-shape: squircle;
-  padding: 6px 10px;
   background: var(--input);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
+.chain-item:focus-visible { outline: 2px solid var(--chalk); outline-offset: 2px; }
+.chain-list.is-dragging .chain-item { cursor: grabbing; }
+.chain-list.is-dragging .chain-item:not(.is-dragged) { transition: transform 0.14s ease; }
+.chain-item.is-dragged { z-index: 2; background: var(--card-hi); box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35); }
+/* Ports sit on the node's top and bottom edge; the wire is the gap between them. */
+.chain-item .node-port-in, .chain-item .node-port-out { position: absolute; left: 50%; margin-left: -5px; }
+.chain-item .node-port-in { top: -5px; }
+.chain-item .node-port-out { bottom: -5px; }
+.chain-item:not(:last-child)::after { content: ""; position: absolute; left: 50%; top: 100%; width: 2px; height: 18px; margin-left: -1px; background: var(--chalk-faint); }
+.chain-item:hover .node-port, .chain-item.is-dragged .node-port { background: var(--chalk-soft); }
 .chain-no { flex: none; font-family: var(--font-hand); font-size: 18px; color: var(--gold-chalk); min-width: 1.2em; text-align: center; }
 .chain-text { flex: 1; min-width: 0; }
-.chain-moves { flex: none; display: flex; gap: 4px; }
+.chain-grip { flex: none; color: var(--chalk-faint); letter-spacing: -3px; }
+.chain-item:hover .chain-grip { color: var(--chalk-soft); }
 
-/* interactive_prediction_gate · boundary_case_audit */
-.case-list { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.case-item { border: none; border-radius: var(--squircle-sm); corner-shape: squircle; padding: 10px 12px; background: var(--input); }
-.case-statement { margin: 0 0 8px; }
-.case-choices { display: flex; gap: 8px; flex-wrap: wrap; }
+.wiring { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 176px; column-gap: 72px; align-items: center; margin: 8px 0; }
+.wiring-layer { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.wire-line { fill: none; stroke: var(--chalk-soft); stroke-width: 2; stroke-linecap: round; }
+.wire-hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }
+.wire:hover .wire-line { stroke: var(--red-chalk); }
+.wire-live { stroke: var(--chalk-faint); stroke-dasharray: 5 5; }
+.wire-live.is-snapped { stroke: var(--chalk); stroke-dasharray: none; }
+.wiring-cases { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.wire-node { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 6px 10px 14px; border-radius: var(--squircle-sm); corner-shape: squircle; background: var(--input); }
+.wire-text { flex: 1; min-width: 0; }
+.wire-handle { position: relative; flex: none; width: 24px; height: 24px; padding: 0; border: none; background: transparent; box-shadow: none; border-radius: 50%; cursor: crosshair; touch-action: none; }
+.wire-handle::before { content: ""; position: absolute; inset: 7px; border-radius: 50%; background: var(--chalk-faint); transition: background 0.12s ease, transform 0.12s ease; }
+.wire-handle:hover:not(:disabled)::before, .wire-handle.is-linked::before { background: var(--chalk-soft); transform: scale(1.25); }
+.wiring.is-wiring .wire-handle { cursor: grabbing; }
+.wiring-sinks { display: flex; flex-direction: column; justify-content: center; gap: 28px; }
+.wire-sink { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: var(--squircle-sm); corner-shape: squircle; background: var(--input); transition: background 0.12s ease; }
+.wire-sink .node-port { width: 12px; height: 12px; margin-left: -18px; }
+.wire-sink.is-snapped { background: var(--card-hi); }
+.wire-sink.is-snapped .node-port { background: var(--chalk); transform: scale(1.5); }
+.wire-sink-label { flex: 1; font-family: var(--font-hand); font-size: 18px; white-space: nowrap; }
+.wire-sink-count { color: var(--chalk-faint); font-size: 14px; }
+/* Keyboard / screen-reader path: the same choice as a radio pair, visible only while focused. */
+.kbd-fallback { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.wire-node:has(.kbd-fallback button:focus-visible) .kbd-fallback { position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; white-space: normal; flex-basis: 100%; display: flex; gap: 8px; flex-wrap: wrap; }
+@media (max-width: 560px) { .wiring { grid-template-columns: minmax(0, 1fr) 132px; column-gap: 40px; } .wire-sink-label { font-size: 15px; } }
+@media (prefers-reduced-motion: reduce) {
+  .node-port, .wire-handle::before, .wire-sink, .chain-list.is-dragging .chain-item:not(.is-dragged) { transition: none; }
+}
 
 /* heuristic_error_audit · "bug bounty": numbered, clickable lines */
 .bug-lines { list-style: none; margin: 8px 0; padding: 0; background: var(--paper-deep); border: none; border-radius: var(--squircle-sm); corner-shape: squircle; overflow-x: auto; }
@@ -1208,6 +1266,13 @@ pre.output, .quickrun pre {
 .cloze-step.is-done .cloze-number { color: var(--green-chalk); }
 .cloze-answer { margin: 0; color: var(--green-chalk); }
 .cloze-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.cloze-bench { display: flex; flex-direction: column; gap: 8px; }
+.cloze-socket { align-self: flex-start; min-width: 120px; padding: 6px 14px; border-radius: var(--squircle-sm); corner-shape: squircle; background: var(--paper); color: var(--chalk-faint); font-family: var(--font-read); text-align: center; transition: background 0.12s ease, color 0.12s ease; }
+.cloze-socket.is-over { background: var(--card-hi); color: var(--chalk); }
+.cloze-op { cursor: grab; touch-action: none; user-select: none; min-width: 44px; padding: 6px 14px; border: none; border-radius: var(--squircle-sm); corner-shape: squircle; background: var(--card-hi); font-family: ui-monospace, "Cascadia Code", Consolas, monospace; font-size: 17px; }
+.cloze-op:disabled { cursor: not-allowed; }
+.cloze-op.is-held { opacity: 0.4; }
+.cloze-ghost { position: fixed; z-index: 70; transform: translate(-50%, -120%); padding: 6px 12px; border-radius: 999px; background: var(--card-hi); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35); pointer-events: none; font: inherit; }
 .cloze-chips .chip:disabled { opacity: 0.5; text-decoration: line-through; text-decoration-color: var(--red-chalk); }
 .cloze-input { flex: 1; min-width: 140px; }
 .hint-stack { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
@@ -1564,6 +1629,110 @@ body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16p
 .graph-form { display: flex; flex-direction: column; gap: 10px; border: none; border-radius: var(--squircle-sm); corner-shape: squircle; padding: 12px; background: var(--card); }
 .graph-form label { display: flex; flex-direction: column; gap: 4px; }
 .graph-inspector { display: flex; flex-direction: column; gap: 10px; }
+
+/* ============================================================================
+   MICROINTERACTIONS — motion that says something happened.
+   Rule: an animation earns its place only if it tells the student a state
+   changed (a press registered, new content arrived, a gate was passed, which
+   tab is current). Anything that loops or sparkles without carrying that
+   information is out: no rainbow plates, no cursor glow, no ripple colours.
+     · pressing      → a small squash on the control
+     · new content   → a short rise-in (block, alert, generating card)
+     · navigating    → a quick fade for the view, a solid line under the tab
+     · success       → a restrained burst, only when a gate is passed
+   Every rule is disabled under prefers-reduced-motion at the bottom.
+   ========================================================================= */
+
+/* --- Pressing: the press registers ------------------------------------ */
+.btn-primary:active:not(:disabled),
+.btn-quiet:active:not(:disabled),
+.tab:active:not(:disabled),
+.chip:active:not(:disabled),
+.chip-choice:active:not(:disabled),
+.prediction-options button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+/* `.tab` carries a micro-rotation — squash it in place rather than
+   cancelling the rotation it needs to keep. */
+.tab:active:not(:disabled) { transform: rotate(-0.6deg) scale(0.97); }
+.tab:nth-child(even):active:not(:disabled) { transform: rotate(0.6deg) scale(0.97); }
+
+/* --- New content: surfaces that appear once --------------------------- */
+.alert,
+.gen-card,
+.final-package {
+  animation: content-rise 0.22s ease-out backwards;
+}
+@keyframes content-rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* --- Navigating: the current tab gets a solid line --------------------
+   Painted as the tab gains .active, so it draws left-to-right on every
+   switch without a measurement in JS. One ink, no gradient. */
+.tab.active::after {
+  content: "";
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--chalk);
+  transform: scaleX(0);
+  transform-origin: left center;
+  animation: tab-ink 0.2s ease-out forwards;
+}
+@keyframes tab-ink {
+  to { transform: scaleX(1); }
+}
+
+/* --- Navigating: the view fades in -----------------------------------
+   Opacity only: a transform held after the fact would make the block's
+   fixed margin comment position itself against the view instead of the
+   viewport, and a blur is paint-heavy for no information. */
+.view {
+  animation: view-enter 0.16s ease-out backwards;
+}
+@keyframes view-enter {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* --- Navigating: where you are on the class path ----------------------
+   A still halo; the dot already has the active state, so no pulse. */
+.class-path-dot::before {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+}
+.class-path-node.active .class-path-dot::before {
+  background: radial-gradient(circle, var(--gold-wash) 0%, transparent 70%);
+  opacity: 1;
+}
+
+/* --- Reduced motion ----------------------------------------------------
+   Not a degraded version of the effects: a still one. fx.ts bails out
+   before drawing a single scrap, and every surface renders in its final
+   state. */
+@media (prefers-reduced-motion: reduce) {
+  .notebook-block-wrapper:not(.unsupported) { animation: none; }
+
+  .btn-primary:active:not(:disabled),
+  .btn-quiet:active:not(:disabled),
+  .tab:active:not(:disabled),
+  .chip:active:not(:disabled),
+  .chip-choice:active:not(:disabled),
+  .prediction-options button:active:not(:disabled) { transform: none; }
+
+  .alert, .gen-card, .final-package, .view { animation: none; }
+
+  .tab.active::after { animation: none; transform: scaleX(1); }
+}
 .graph-confirm { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .relation-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .relation-list .btn-quiet { text-align: left; width: 100%; }
@@ -1612,7 +1781,32 @@ body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16p
 .day-switch:hover:not(:disabled) { background: var(--card-hi); }
 .day-switch:active:not(:disabled) { transform: scale(0.94); }
 .day-switch.on { background: var(--marker); color: var(--chalk); }
-.hours-slider { width: 100%; accent-color: var(--gold-chalk); }
+.scope { position: relative; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.scope-scale { position: absolute; top: 3px; right: 6px; font-size: 12px; color: var(--chalk-faint); pointer-events: none; }
+.scope-svg { width: 100%; height: 56px; display: block; border-radius: var(--squircle-xs); background: var(--input); }
+.scope-grid { stroke: var(--paper); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.scope-base { stroke: var(--chalk-faint); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.scope-fill { fill: var(--gold-wash); stroke: none; }
+.scope-line { fill: none; stroke: var(--gold-chalk); stroke-width: 2; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.scope-days { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-family: var(--font-hand); font-size: 15px; color: var(--chalk-faint); }
+.scope-days .on { color: var(--chalk-soft); }
+.scope-total { color: var(--chalk-soft); font-size: 14px; }
+.scrub { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; padding: 8px 12px; border-radius: var(--squircle-sm); corner-shape: squircle; background: var(--input); cursor: ew-resize; touch-action: none; user-select: none; position: relative; }
+.scrub:hover:not(.is-disabled) { background: var(--card-hi); }
+.scrub:focus-visible { outline: 2px solid var(--chalk); outline-offset: 2px; }
+.scrub.is-disabled { cursor: default; opacity: 0.6; }
+.scrub-value { margin-left: auto; font-family: var(--font-hand); font-size: 24px; font-weight: 700; }
+.scrub-value small { font-size: 15px; font-weight: 400; color: var(--chalk-soft); }
+.scrub-track { flex-basis: 100%; height: 3px; border-radius: 999px; background: var(--paper); overflow: hidden; }
+.scrub-fill { display: block; height: 100%; background: var(--gold-chalk); }
+.scrub-marks { position: relative; flex-basis: 100%; height: 30px; margin: 2px 0 0; cursor: default; }
+.scrub-mark { position: absolute; top: 0; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 1px; padding: 0 4px; border: none; background: none; box-shadow: none; color: var(--chalk-faint); font-family: var(--font-read); font-size: 12px; cursor: pointer; }
+.scrub-mark i { display: block; width: 2px; height: 7px; border-radius: 1px; background: currentColor; }
+.scrub-mark:hover:not(:disabled) { color: var(--chalk); background: none; }
+.scrub-mark.is-on { color: var(--gold-chalk); font-weight: 700; }
+.scrub-mark.is-on i { height: 10px; }
+.scrub-typing { cursor: text; align-items: center; }
+.scrub-typing input { width: 90px; margin-left: auto; text-align: right; }
 .answer-cards { display: flex; flex-direction: column; gap: 16px; }
 .answer-card { padding: 0; }
 .answer-card > legend { text-align: left; }
@@ -1630,3 +1824,36 @@ body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16p
 @media (prefers-reduced-motion: reduce) {
   .cp-body { animation: none; }
   .day-switch, .pick-card { transition: none; }
+}
+
+/* --- The student's table: pieces earned in the notebook, with physics ---------- */
+.reward-dock { position: fixed; right: 16px; bottom: 16px; z-index: 40; }
+.reward-tab { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border: none; border-radius: 999px; background: var(--card-hi); color: var(--gold-chalk); cursor: pointer; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35); }
+.reward-tab:hover { background: var(--marker); }
+.reward-tab-count { font-family: var(--font-hand); font-size: 20px; font-weight: 700; color: var(--chalk); }
+.reward-panel { width: min(440px, calc(100vw - 32px)); padding: 10px 12px 8px; border-radius: var(--squircle); corner-shape: squircle; background: var(--card); box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45); animation: cp-pop 0.18s ease-out; }
+.reward-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.reward-head .pf-label { flex: 1; }
+.reward-count { color: var(--chalk-soft); font-size: 14px; }
+.yard { position: relative; border-radius: var(--squircle-sm); corner-shape: squircle; background: var(--input); overflow: hidden; }
+.yard-canvas { display: block; touch-action: none; }
+.reward-caption { min-height: 1.5em; margin: 6px 0 0; color: var(--chalk-soft); font-size: 14px; }
+.reward-caption.is-new { color: var(--gold-chalk); }
+@media (prefers-reduced-motion: reduce) { .reward-panel { animation: none; } }
+
+/* --- Stickers: a sheet in the table's panel, and stuck on the notebook page (peel, after Sticker.js) --- */
+[data-sticker-layer] { position: relative; }
+.page-stickers { position: absolute; inset: 0; z-index: 30; pointer-events: none; overflow: hidden; }
+.page-sticker { position: absolute; pointer-events: auto; cursor: grab; touch-action: none; user-select: none; filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.4)); transition: filter 0.2s ease; }
+.page-sticker:hover { filter: drop-shadow(0 6px 8px rgba(0, 0, 0, 0.45)); }
+.page-sticker.is-dragging { cursor: grabbing; z-index: 2; }
+.page-sticker.is-dragging .peel-sticker { pointer-events: none; }
+.peel-sticker { display: block; overflow: visible; }
+.sticker-sheet { display: flex; flex-direction: column; gap: 4px; margin: 2px 0 8px; padding: 8px 10px; border-radius: var(--squircle-sm); corner-shape: squircle; background: var(--input); }
+.sticker-sheet-hint { color: var(--chalk-faint); font-size: 12px; }
+.sticker-sheet-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.sheet-sticker { cursor: grab; touch-action: none; user-select: none; filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.4)); }
+.sheet-sticker.is-lifted { opacity: 0.35; }
+.sticker-ghost { position: fixed; z-index: 80; transform: translate(-50%, -50%) rotate(-6deg); pointer-events: none; filter: drop-shadow(0 8px 10px rgba(0, 0, 0, 0.45)); }
+.reward-sound { font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { .page-sticker { transition: none; } }

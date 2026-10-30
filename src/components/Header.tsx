@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { queueBlockResume } from "../lib/resumeSession";
 import { useDev } from "../stores/dev";
 import { useNotebookNav } from "../stores/notebook";
 import { displaySessionTitle, useRoadmap } from "../stores/roadmap";
@@ -82,6 +83,8 @@ export function Header() {
       // Loads (or reloads) this session's classes and resumes the last one
       // read — the store already handles the stale-class fallback.
       await openCourse(courseId);
+      // Back to the block where the student stopped reading, not the top of the class.
+      if (session) queueBlockResume(session.session_id);
       setView("notebook");
     } catch {
       // Leave the student where they are rather than landing on an empty

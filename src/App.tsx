@@ -14,6 +14,8 @@ import { useDev } from "./stores/dev";
 import { useStudy } from "./stores/study";
 import { useUpdater } from "./stores/updater";
 import { logStudyEvent } from "./lib/tauri";
+import { browserStore, saveResume } from "./lib/resume";
+import { isRestoring, resumeSession } from "./lib/resumeSession";
 import "./styles.css";
 
 // Single-column layout: top bar (brand + the active session's section tabs)
@@ -66,16 +68,24 @@ export default function App() {
     (async () => {
       const activeId = readActiveSessionId();
       if (!activeId) return;
-      // `openSession` restores the conversation AND loads that session's
-      // classes (see the roadmap store) — it swallows its own errors, so a
+      // Reopen the session and land where it was left (the class and block inside
+      // the notebook, or the plan / conversation). It swallows its own errors, so a
       // vanished session just leaves us on the roadmap landing.
-      await openSession(activeId);
-      if (!cancelled) setView("roadmap");
+      await resumeSession(activeId);
     })();
     return () => {
       cancelled = true;
     };
-  }, [openSession, setView]);
+  }, []);
+
+  // Remember where the student is, per session, so reopening it lands here. Quiet while a
+  // session is being restored: the screen the app starts on must not overwrite the saved one.
+  const sessionId = useRoadmap((s) => s.session?.session_id);
+  useEffect(() => {
+    if (!sessionId || isRestoring()) return;
+    if (view !== "roadmap" && view !== "plan" && view !== "notebook") return;
+    saveResume(browserStore(), sessionId, view === "notebook" ? { view, classId: activeClassId ?? undefined } : { view });
+  }, [sessionId, view, activeClassId]);
 
   return (
     <div className="app">

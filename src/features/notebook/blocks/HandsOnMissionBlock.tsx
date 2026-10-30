@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { RequestEasierStep, SubmitGate } from "./index";
 import { usePresentation } from "../../../stores/study";
-import { tokenMatches } from "./interaction";
+import { isClick, nearRect, tokenMatches } from "./interaction";
 import { asNumber, asNullableString, usePersistedState } from "./persist";
 import type { Annotate } from "./persist";
 import { InlineText, RichText } from "./RichText";
@@ -40,6 +40,17 @@ function ClozeStep({
   const [typed, setTyped] = useState("");
   const [misses, setMisses] = useState(0);
   const [discarded, setDiscarded] = useState<string[]>([]);
+  // The options are a palette of operators: drag one onto the socket (the hole).
+  // A press that barely moves is a click, so the mouse path still works; the
+  // keyboard path is the button's own click (detail 0).
+  const socket = useRef<HTMLSpanElement>(null);
+  const press = useRef<{ opt: string; x0: number; y0: number } | null>(null);
+  const dragRef = useRef<{ opt: string; x: number; y: number; over: boolean; moved: boolean } | null>(null);
+  const [drag, setDragState] = useState<{ opt: string; x: number; y: number; over: boolean; moved: boolean } | null>(null);
+  const setDrag = (next: typeof drag) => {
+    dragRef.current = next;
+    setDragState(next);
+  };
 
   const attempt = (value: string) => {
     if (tokenMatches(value, step.expectedToken)) {
@@ -64,12 +75,53 @@ function ClozeStep({
         !locked && (
           <>
             {step.options ? (
-              <div className="cloze-chips">
-                {step.options.map((opt) => (
-                  <button key={opt} className="chip" disabled={discarded.includes(opt)} onClick={() => attempt(opt)}>
-                    {opt}
-                  </button>
-                ))}
+              <div className="cloze-bench">
+                <span ref={socket} className={`cloze-socket${drag?.over ? " is-over" : ""}`} aria-hidden="true">
+                  {drag?.over ? drag.opt : "___"}
+                </span>
+                <div className="cloze-chips" role="group" aria-label="Opciones: arrastra una al hueco o actívala">
+                  {step.options.map((opt) => (
+                    <button
+                      key={opt}
+                      className={`chip cloze-op${drag?.opt === opt && drag.moved ? " is-held" : ""}`}
+                      disabled={discarded.includes(opt)}
+                      onClick={(e) => e.detail === 0 && attempt(opt)}
+                      onPointerDown={(e) => {
+                        if (e.button !== 0) return;
+                        e.currentTarget.setPointerCapture(e.pointerId);
+                        press.current = { opt, x0: e.clientX, y0: e.clientY };
+                        setDrag({ opt, x: e.clientX, y: e.clientY, over: false, moved: false });
+                      }}
+                      onPointerMove={(e) => {
+                        const p = press.current;
+                        if (!p) return;
+                        const moved = !isClick(e.clientX - p.x0, e.clientY - p.y0);
+                        const box = socket.current?.getBoundingClientRect();
+                        setDrag({ opt: p.opt, x: e.clientX, y: e.clientY, moved, over: moved && !!box && nearRect(box, e.clientX, e.clientY, 28) });
+                      }}
+                      onPointerUp={(e) => {
+                        const p = press.current;
+                        const d = dragRef.current;
+                        press.current = null;
+                        setDrag(null);
+                        if (!p) return;
+                        // A click, or a drop on the socket, tries the option; a drop elsewhere cancels.
+                        if (isClick(e.clientX - p.x0, e.clientY - p.y0) || d?.over) attempt(p.opt);
+                      }}
+                      onPointerCancel={() => {
+                        press.current = null;
+                        setDrag(null);
+                      }}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+                {drag?.moved && (
+                  <span className="cloze-ghost" style={{ left: drag.x, top: drag.y }} aria-hidden="true">
+                    {drag.opt}
+                  </span>
+                )}
               </div>
             ) : (
               <div className="row">

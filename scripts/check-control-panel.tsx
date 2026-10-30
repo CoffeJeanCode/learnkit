@@ -5,26 +5,24 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { AnswerCards } from "../src/features/roadmap/panel/AnswerCards";
 import { ControlPanel } from "../src/features/roadmap/panel/ControlPanel";
+import { ChannelScope } from "../src/features/roadmap/panel/ChannelScope";
 import { WeeksDial } from "../src/features/roadmap/panel/WeeksDial";
 import {
-  DEFAULT_ORDER,
-  type KeyValueStore,
-  ORDER_STORAGE_KEY,
   angleToWeeks,
   arcPath,
   clampWeeks,
   daysFromCount,
   daysFromDraft,
   hoursToDraft,
-  loadOrder,
   missionProgress,
-  moveTile,
   pointerAngle,
-  saveOrder,
   sliderHours,
   stepWeeks,
+  niceMax,
+  stepPath,
   tileStatus,
   toggleDay,
+  weekSamples,
   weeksToAngle,
 } from "../src/features/roadmap/panel/panelModel";
 import { STARTING_DRAFT } from "../src/features/roadmap/panel/ControlPanel";
@@ -60,6 +58,21 @@ assert.equal(sliderHours("0,5"), 0.5);
 assert.equal(sliderHours("20"), 8, "the slider stops at 8 h");
 assert.equal(hoursToDraft(0.25), "0.25");
 
+// ---- The week as a channel ------------------------------------------------------------------
+assert.deepEqual(weekSamples(["mon", "wed", "fri"], 1.5), [1.5, 0, 1.5, 0, 1.5, 0, 0], "lit days hold the hours, the rest are 0");
+assert.equal(weekSamples([], 2).every((v) => v === 0), true);
+assert.equal(weekSamples(["mon"], 1).reduce((a, b) => a + b, 0), 1, "the sum is the weekly total");
+assert.equal(niceMax(0), 1);
+assert.equal(niceMax(1.5), 2, "rounds up to a readable scale");
+assert.equal(niceMax(4), 4);
+assert.equal(niceMax(99), 24, "never past a day");
+assert.equal(stepPath([], 280, 56, 8), "", "no samples, no trace");
+assert.equal(stepPath([1], 280, 56, 0), "", "no scale, no trace");
+const trace = stepPath([2, 0], 100, 40, 8);
+assert.ok(trace.startsWith("M 0 30"), "starts at the first sample's height (2 of 8 -> y=30)");
+assert.ok(trace.includes("L 50 30 L 50 40"), "holds, then steps down at the slot edge");
+assert.ok(stepPath([99], 100, 40, 8).startsWith("M 0 0"), "values above full scale clamp to the top");
+
 // ---- Tiles ---------------------------------------------------------------------------
 const blank = emptyBasics();
 assert.equal(tileStatus("topic", blank, false), "empty", "calm before the first attempt");
@@ -71,38 +84,16 @@ const full = { topic: "Linux", targetGoal: "Usar la terminal", weeks: "8", hours
 assert.deepEqual(missionProgress(full), { done: 4, total: 4 });
 assert.equal(missionProgress(blank).done, 0, "an empty board has no tile ready (days alone do not make the rhythm ready)");
 
-// ---- Layout --------------------------------------------------------------------------
-assert.deepEqual(moveTile(DEFAULT_ORDER, "topic", -1), [...DEFAULT_ORDER], "no-op at the start");
-assert.deepEqual(moveTile(DEFAULT_ORDER, "topic", 1).slice(0, 2), ["goal", "topic"]);
-const memory = new Map<string, string>();
-const store: KeyValueStore = { getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => void memory.set(k, v) };
-saveOrder(store, ["rhythm", "weeks", "goal", "topic"]);
-assert.deepEqual(loadOrder(store), ["rhythm", "weeks", "goal", "topic"]);
-memory.set(ORDER_STORAGE_KEY, JSON.stringify(["topic", "topic", "goal", "weeks"]));
-assert.deepEqual(loadOrder(store), [...DEFAULT_ORDER], "a repeated tile is rejected");
-memory.set(ORDER_STORAGE_KEY, "not json");
-assert.deepEqual(loadOrder(store), [...DEFAULT_ORDER], "bad JSON falls back");
-const throwing: KeyValueStore = {
-  getItem: () => {
-    throw new Error("blocked");
-  },
-  setItem: () => {
-    throw new Error("blocked");
-  },
-};
-assert.deepEqual(loadOrder(throwing), [...DEFAULT_ORDER], "a store that throws falls back");
-saveOrder(throwing, DEFAULT_ORDER);
-assert.deepEqual(loadOrder(null), [...DEFAULT_ORDER], "no storage at all");
-
-// ---- Starting point: only two things left to type
-assert.deepEqual(Object.keys(basicsErrors(STARTING_DRAFT)).sort(), ["targetGoal", "topic"], "weeks and time start filled");
-
 // ---- Rendering -----------------------------------------------------------------------
 const noop = () => {};
 const board = renderToStaticMarkup(
   <ControlPanel initialBasics={null} questions={null} busy={false} serverError={null} onPropose={noop} onSubmit={noop} />,
 );
-for (const text of ["¿Qué quieres aprender?", "¿Qué quieres lograr", "Semanas", "Tu ritmo", "8 semanas", "Continuar", "Personalizar"]) assert.ok(board.includes(text), `board shows ${text}`);
+for (const text of ["¿Qué quieres aprender?", "¿Qué quieres lograr", "Semanas", "Tu ritmo", "8 semanas", "Continuar"]) assert.ok(board.includes(text), `board shows ${text}`);
+
+const scope = renderToStaticMarkup(<ChannelScope samples={weekSamples(["mon", "tue"], 1)} max={8} totalLabel="Son 2 h por semana" />);
+assert.ok(scope.includes("scope-line") && scope.includes("Son 2 h por semana") && scope.includes(">L<"), "the scope draws the trace, the days and the total");
+assert.ok(board.includes("scope-svg") === false, "the scope lives inside the rhythm tile, not on the closed board");
 
 const dial = renderToStaticMarkup(<WeeksDial value="8" onChange={noop} />);
 assert.ok(dial.includes('role="slider"') && dial.includes('aria-valuenow="8"') && dial.includes('aria-valuetext="8 semanas"'));

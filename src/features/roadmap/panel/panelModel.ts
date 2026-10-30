@@ -91,6 +91,35 @@ export function toggleDay(days: readonly DayId[], id: DayId): DayId[] {
   return DAYS.map((d) => d.id).filter((d) => d === id || days.includes(d));
 }
 
+// --- The week as a channel ------------------------------------------------------------------
+// A CHOP-style view of the schedule: one sample per weekday (hours studied that day), so the
+// learner SEES the shape of their week, and the sum is the weekly total.
+
+/** Hours studied on each weekday, Monday to Sunday: `hoursPerDay` on lit days, 0 on the rest. */
+export function weekSamples(days: readonly DayId[], hoursPerDay: number): number[] {
+  return DAYS.map((d) => (days.includes(d.id) ? hoursPerDay : 0));
+}
+
+/** Full scale for a scope showing `peak`: the next of 1, 2, 4, 8, 16, 24 h, so the trace fills the
+ *  view (a scope autoscales) while the scale stays a round number the learner can read. */
+export function niceMax(peak: number): number {
+  return [1, 2, 4, 8, 16, 24].find((m) => peak <= m) ?? 24;
+}
+
+/** The trace of a stepped channel (each sample holds until the next) as an SVG path in a `w` x `h` box.
+ *  `max` is the full-scale value; a flat-zero channel sits on the baseline. */
+export function stepPath(samples: readonly number[], w: number, h: number, max: number): string {
+  if (samples.length === 0 || max <= 0) return "";
+  const f = (n: number) => Math.round(n * 10) / 10;
+  const y = (v: number) => f(h - (Math.min(max, Math.max(0, v)) / max) * h);
+  const slot = w / samples.length;
+  let d = `M 0 ${y(samples[0]!)}`;
+  samples.forEach((v, i) => {
+    d += ` L ${f(i * slot)} ${y(v)} L ${f((i + 1) * slot)} ${y(v)}`;
+  });
+  return d;
+}
+
 // --- Hours per day slider --------------------------------------------------------------------
 
 export const HOURS_SLIDER = { min: 0.25, max: 8, step: 0.25 } as const;
@@ -107,10 +136,29 @@ export function hoursToDraft(hours: number): string {
   return String(Math.round(hours * 100) / 100);
 }
 
+/** Where a value sits along a track, as a 0-100 percentage (clamped to the track). */
+export function markPosition(value: number, min: number, max: number): number {
+  if (max <= min) return 0;
+  return Math.round(Math.min(100, Math.max(0, ((value - min) / (max - min)) * 100)) * 100) / 100;
+}
+
+/** Legend stops for the hours-per-day field: the values people actually pick. */
+export const HOURS_MARKS = [0.5, 1, 2, 3, 4, 6, 8] as const;
+
+/** Click-and-drag a number sideways to change it, like a node editor's parameter field. `dx` is the
+ *  pointer travel in px; every `pxPerStep` px moves one `step`; `fine` (Shift) moves ten times slower.
+ *  The result is snapped to the step grid and clamped. */
+export function scrub(start: number, dx: number, opts: { step: number; min: number; max: number; pxPerStep?: number; fine?: boolean }): number {
+  const unit = opts.fine ? opts.step / 10 : opts.step;
+  const raw = start + (dx / (opts.pxPerStep ?? 10)) * unit;
+  const snapped = Math.round(raw / unit) * unit;
+  return Math.min(opts.max, Math.max(opts.min, Math.round(snapped * 1000) / 1000));
+}
+
 // --- Tiles -----------------------------------------------------------------------------------
 
 export type TileId = "topic" | "goal" | "weeks" | "rhythm";
-export const DEFAULT_ORDER: readonly TileId[] = ["topic", "goal", "weeks", "rhythm"];
+export const TILE_ORDER: readonly TileId[] = ["topic", "goal", "weeks", "rhythm"];
 export const TILE_TITLES: Record<TileId, string> = {
   topic: "Qué aprender",
   goal: "Qué lograr",
@@ -139,58 +187,7 @@ export function tileStatus(id: TileId, draft: BasicsDraft, attempted: boolean): 
 }
 
 export function missionProgress(draft: BasicsDraft): { done: number; total: number } {
-  const total = DEFAULT_ORDER.length;
-  const done = DEFAULT_ORDER.filter((id) => tileStatus(id, draft, false) === "ready").length;
+  const total = TILE_ORDER.length;
+  const done = TILE_ORDER.filter((id) => tileStatus(id, draft, false) === "ready").length;
   return { done, total };
-}
-
-/** Moves one tile a step; a no-op at either end. */
-export function moveTile(order: readonly TileId[], id: TileId, dir: -1 | 1): TileId[] {
-  const from = order.indexOf(id);
-  const to = from + dir;
-  if (from === -1 || to < 0 || to >= order.length) return [...order];
-  const next = [...order];
-  [next[from], next[to]] = [next[to], next[from]];
-  return next;
-}
-
-// --- Persisted layout ----------------------------------------------------------------------------
-
-export interface KeyValueStore {
-  getItem(key: string): string | null;
-  setItem(key: string, value: string): void;
-}
-
-export const ORDER_STORAGE_KEY = "learnkit.controlPanel.order";
-
-/** The saved tile order, or the default when nothing valid is stored (a missing tile,
- *  an unknown one, a repeat, bad JSON or a store that throws all fall back). */
-export function loadOrder(store: KeyValueStore | null): TileId[] {
-  try {
-    const raw = store?.getItem(ORDER_STORAGE_KEY);
-    if (!raw) return [...DEFAULT_ORDER];
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [...DEFAULT_ORDER];
-    const valid = parsed.length === DEFAULT_ORDER.length && DEFAULT_ORDER.every((id) => parsed.filter((p) => p === id).length === 1);
-    return valid ? (parsed as TileId[]) : [...DEFAULT_ORDER];
-  } catch {
-    return [...DEFAULT_ORDER];
-  }
-}
-
-/** Best effort: the layout still works for this session when storage is unavailable. */
-export function saveOrder(store: KeyValueStore | null, order: readonly TileId[]): void {
-  try {
-    store?.setItem(ORDER_STORAGE_KEY, JSON.stringify(order));
-  } catch {
-    /* private window, blocked site data, quota: ignore */
-  }
-}
-
-export function browserStore(): KeyValueStore | null {
-  try {
-    return typeof window === "undefined" ? null : window.localStorage;
-  } catch {
-    return null;
-  }
 }

@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
-import { formatWeekly, parseDaysPerWeek, weeklyHours } from "../profileFormModel";
-import { DAYS, HOURS_SLIDER, type DayId, daysFromDraft, hoursToDraft, sliderHours, toggleDay } from "./panelModel";
+import { formatWeekly, parseDaysPerWeek, parseHoursPerDay, weeklyHours } from "../profileFormModel";
+import { ChannelScope } from "./ChannelScope";
+import { DAYS, HOURS_MARKS, HOURS_SLIDER, type DayId, daysFromDraft, niceMax, toggleDay, weekSamples } from "./panelModel";
+import { ScrubField } from "./ScrubField";
 
 /**
- * "How much time do you have": seven day switches plus an hours-per-day slider.
+ * "How much time do you have": seven day switches plus an hours-per-day scrub field (drag it sideways).
  * It stays controlled by the two draft strings the backend model already
  * understands (`daysPerWeek` is a COUNT, `hoursPerDay` a number), and shows the
  * weekly total live. Which weekdays are lit is only a visual choice.
@@ -30,6 +32,7 @@ export function RhythmTile({
   }, [daysPerWeek]);
 
   const weekly = weeklyHours(hoursPerDay, daysPerWeek);
+  const samples = weekSamples(days, parseHoursPerDay(hoursPerDay) ?? 0);
   const flip = (id: DayId) => {
     const next = toggleDay(days, id);
     setDays(next);
@@ -48,20 +51,19 @@ export function RhythmTile({
           );
         })}
       </div>
-      <label className="pf-field">
-        <span className="pf-label">Horas por día: {hoursPerDay.trim() === "" ? "–" : hoursPerDay.replace(".", ",")}</span>
-        <input
-          type="range"
-          className="hours-slider"
-          min={HOURS_SLIDER.min}
-          max={HOURS_SLIDER.max}
-          step={HOURS_SLIDER.step}
-          value={sliderHours(hoursPerDay)}
-          onChange={(e) => onChange({ hoursPerDay: hoursToDraft(Number(e.target.value)) })}
-          disabled={disabled}
-        />
-      </label>
-      {weekly !== null && !error && <p className="hint pf-total">Son {formatWeekly(weekly)}.</p>}
+      <ScrubField
+        label="Horas por día"
+        value={hoursPerDay}
+        fallback={1}
+        min={HOURS_SLIDER.min}
+        max={HOURS_SLIDER.max}
+        step={HOURS_SLIDER.step}
+        unit="h"
+        marks={HOURS_MARKS}
+        onChange={(next) => onChange({ hoursPerDay: next })}
+        disabled={disabled}
+      />
+      <ChannelScope samples={samples} max={niceMax(Math.max(0, ...samples))} totalLabel={weekly !== null && !error ? `Son ${formatWeekly(weekly)}` : undefined} />
       {error && (
         <span className="field-error" role="alert">
           {error}

@@ -64,6 +64,10 @@ test: typecheck ## tsc --noEmit + UI render checks + cargo test
 	bun run scripts/check-generation-status.ts
 	bun run scripts/check-profile-form.ts
 	bun run scripts/check-control-panel.tsx
+	bun run scripts/check-node-interactions.tsx
+	bun run scripts/check-rewards.tsx
+	bun run scripts/check-stickers.tsx
+	bun run scripts/check-resume.ts
 	bun run scripts/check-resources-panel.ts
 	bun run scripts/check-plan-draft.ts
 	bun run scripts/check-dev-trace.ts

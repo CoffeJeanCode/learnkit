@@ -10,12 +10,17 @@ import {
   tauriError,
 } from "../../lib/tauri";
 import { useNotebookNav } from "../../stores/notebook";
+import { browserStore, saveResume } from "../../lib/resume";
+import { useResumeTarget } from "../../lib/resumeSession";
+import { useRewards } from "../../stores/rewards";
 import { useRoadmap } from "../../stores/roadmap";
 import { useUi } from "../../stores/ui";
 import { ClassGenerationLoader } from "../../components/AgentLoader";
 import { BlockDraftPreview } from "./BlockDraftPreview";
 import { BlockGeneratingCard } from "./BlockGeneratingCard";
 import { ResourcesPanel } from "./ResourcesPanel";
+import { STICKER_LAYER_ATTR, PageStickers } from "./rewards/PageStickers";
+import { RewardDock } from "./rewards/RewardDock";
 import { ClassPath } from "../../components/ClassPath";
 import { DynamicNotebookBlock } from "./blocks";
 import { useClassNotebookSession } from "./useClassNotebookSession";
@@ -180,12 +185,52 @@ export function ClassNotebookView() {
     }
   }, [awaitingGate, nextBufferedBlock]);
 
+  // Remember the last block the student reached, so reopening the session lands on it.
+  const sessionId = useRoadmap((s) => s.session?.session_id);
+  const lastVisibleId = lastVisible?.id;
+  useEffect(() => {
+    if (!sessionId || !classId || !lastVisibleId) return;
+    saveResume(browserStore(), sessionId, { blockId: lastVisibleId, blockClassId: classId });
+  }, [sessionId, classId, lastVisibleId]);
+
+  // Coming back to a session: scroll to the block where the student stopped. The target is
+  // queued by `resumeSession`; the block may not be revealed yet (content auto-advances up to
+  // the first open gate), so this retries as more blocks appear and gives up after a while.
+  const pending = useResumeTarget((s) => s.pending);
+  useEffect(() => {
+    if (!pending) return;
+    if (pending.classId !== classId) {
+      useResumeTarget.setState({ pending: null });
+      return;
+    }
+    const el = window.document.querySelector(`[data-block-id="${pending.blockId}"]`);
+    if (el) {
+      el.scrollIntoView({ block: "center" });
+      useResumeTarget.setState({ pending: null });
+      return;
+    }
+    const giveUp = window.setTimeout(() => useResumeTarget.setState({ pending: null }), 12000);
+    return () => window.clearTimeout(giveUp);
+  }, [pending, classId, visibleCount, blocks.length]);
+
+  // Passing a gate (or closing the class) earns a piece for the student's table
+  // (see `RewardDock`): its colour and size say how it was earned, so the reward
+  // carries information instead of just sparkling. Each source pays once.
+  const earn = (event: Parameters<ReturnType<typeof useRewards.getState>["earn"]>[1]) => {
+    if (document) useRewards.getState().earn(document.id, event);
+  };
+
   const handleSubmitGate = async (blockId: string, submission: Parameters<typeof submitGate>[1]) => {
     const result = await submitGate(blockId, submission);
     // Passing (or exhausting) a gate IS the "continue" action — content
     // blocks past it auto-reveal on their own (see the effect above).
     if (result.passed || result.escalation_block) {
       setVisibleCount((n) => n + 1);
+    }
+    if (result.passed) {
+      // `attempt_count` is what was already spent before this submission.
+      const spent = blocks.find((b) => b.id === blockId)?.attempt_count ?? 0;
+      earn({ type: "gate_passed", sourceId: blockId, attempts: spent + 1 });
     }
     // The submission may have flipped this class's last unresolved gate —
     // re-sync the path so the next class's lock state updates immediately.
@@ -230,6 +275,8 @@ export function ClassNotebookView() {
     try {
       const result = await gradeClosureReflection(blockId, reflection);
       void refreshClasses();
+      // A pass here completes the whole class: a sticker, not a brick.
+      if (result.passed) earn({ type: "class_closed", sourceId: classId ?? blockId });
       return result;
     } catch (e) {
       throw new Error(tauriError(e).message);
@@ -286,7 +333,7 @@ export function ClassNotebookView() {
   }
 
   return (
-    <div className="view notebook">
+    <div className="view notebook" {...{ [STICKER_LAYER_ATTR]: "" }}>
       <div className="notebook-shell">
         <div className="notebook-main">
           <div className="row notebook-header">
@@ -410,6 +457,8 @@ export function ClassNotebookView() {
           </aside>
         )}
       </div>
+      {document && <PageStickers notebookId={document.id} />}
+      {document && <RewardDock notebookId={document.id} />}
     </div>
   );
 }

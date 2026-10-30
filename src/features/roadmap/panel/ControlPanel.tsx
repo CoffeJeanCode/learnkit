@@ -17,7 +17,7 @@ import {
 import { AnswerCards } from "./AnswerCards";
 import { RhythmTile } from "./RhythmTile";
 import { WeeksDial } from "./WeeksDial";
-import { DEFAULT_ORDER, TILE_TITLES, type TileId, browserStore, loadOrder, moveTile, saveOrder, tileStatus } from "./panelModel";
+import { TILE_ORDER, TILE_TITLES, type TileId, tileStatus } from "./panelModel";
 
 /** Sensible starting values, so the learner only has to TYPE two things; weeks and
  *  time are changed only if the default does not fit. */
@@ -36,7 +36,6 @@ const QUESTIONS: Record<"topic" | "goal", { label: string; placeholder: string }
  * them to the same callbacks, so the backend contract is unchanged. Which step
  * shows comes from the SESSION (`questions` present = step 2), as before.
  *
- * Rearranging the rows is available but hidden behind "Personalizar".
  */
 export function ControlPanel({
   initialBasics,
@@ -58,8 +57,6 @@ export function ControlPanel({
   const [editing, setEditing] = useState(false);
   const [attempted, setAttempted] = useState(false);
   const [open, setOpen] = useState<TileId | null>(null);
-  const [customizing, setCustomizing] = useState(false);
-  const [order, setOrder] = useState<TileId[]>(() => loadOrder(browserStore()));
 
   const questionsKey = questions ? JSON.stringify(questions) : "";
   useEffect(() => {
@@ -70,17 +67,6 @@ export function ControlPanel({
 
   const set = (patch: Partial<BasicsDraft>) => setBasics((b) => ({ ...b, ...patch }));
   const errors = useMemo(() => basicsErrors(basics), [basics]);
-  const move = (id: TileId, dir: -1 | 1) => {
-    const next = moveTile(order, id, dir);
-    setOrder(next);
-    saveOrder(browserStore(), next);
-  };
-  const resetOrder = () => {
-    setOrder([...DEFAULT_ORDER]);
-    saveOrder(browserStore(), DEFAULT_ORDER);
-  };
-  const isDefaultOrder = order.every((id, i) => id === DEFAULT_ORDER[i]);
-
   const step2 = questions !== null && !editing;
 
   if (!step2) {
@@ -101,19 +87,8 @@ export function ControlPanel({
       rhythm: weekly === null ? "Elegir" : formatWeekly(weekly),
     };
 
-    const row = (id: TileId, i: number) => {
+    const row = (id: TileId) => {
       const hasError = tileStatus(id, basics, attempted) === "error";
-      const mover = customizing && (
-        <span className="cp-move">
-          <button type="button" className="btn-quiet" aria-label={`Mover «${TILE_TITLES[id]}» antes`} disabled={i === 0} onClick={() => move(id, -1)}>
-            ↑
-          </button>
-          <button type="button" className="btn-quiet" aria-label={`Mover «${TILE_TITLES[id]}» después`} disabled={i === order.length - 1} onClick={() => move(id, 1)}>
-            ↓
-          </button>
-        </span>
-      );
-
       if (id === "topic" || id === "goal") {
         const field = id === "topic" ? "topic" : "targetGoal";
         const q = QUESTIONS[id];
@@ -121,10 +96,9 @@ export function ControlPanel({
           <div key={id} className={`cp-row${hasError ? " cp-error" : ""}`}>
             <label className="pf-field">
               <span className="pf-label">{q.label}</span>
-              <input value={basics[field]} onChange={(e) => set({ [field]: e.target.value })} placeholder={q.placeholder} disabled={busy} autoFocus={id === order[0]} />
+              <input value={basics[field]} onChange={(e) => set({ [field]: e.target.value })} placeholder={q.placeholder} disabled={busy} autoFocus={id === "topic"} />
               {err(field)}
             </label>
-            {mover}
           </div>
         );
       }
@@ -138,7 +112,6 @@ export function ControlPanel({
               <span className="cp-value">{value[id as "weeks" | "rhythm"]}</span>
               <span className="cp-chevron">{expanded ? "Cerrar" : "Cambiar"}</span>
             </button>
-            {mover}
           </div>
           {expanded && (
             <div className="cp-body">
@@ -163,7 +136,7 @@ export function ControlPanel({
         }}
         noValidate
       >
-        <div className="cp-list">{order.map(row)}</div>
+        <div className="cp-list">{TILE_ORDER.map(row)}</div>
 
         <div className="cp-examples">
           <span className="hint">¿Sin ideas? Prueba:</span>
@@ -184,14 +157,6 @@ export function ControlPanel({
           <button className="btn-primary" type="submit" disabled={busy}>
             {busy ? "Pensando qué preguntarte…" : "Continuar"}
           </button>
-          <button type="button" className="btn-quiet" onClick={() => setCustomizing((c) => !c)} disabled={busy}>
-            {customizing ? "Listo" : "Personalizar"}
-          </button>
-          {customizing && !isDefaultOrder && (
-            <button type="button" className="btn-quiet" onClick={resetOrder} disabled={busy}>
-              Restablecer orden
-            </button>
-          )}
           {attempted && Object.keys(errors).length > 0 && <span className="hint">Revisa lo marcado.</span>}
         </div>
       </form>

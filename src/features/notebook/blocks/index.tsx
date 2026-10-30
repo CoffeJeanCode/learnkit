@@ -161,7 +161,11 @@ export function DynamicNotebookBlock({
   const lexical = deriveBlockLexicalContext(content);
 
   return (
-    <section className={`notebook-block-wrapper ${content.blockType} status-${block.status}`} ref={blockRef}>
+    <section
+      className={`notebook-block-wrapper ${content.blockType} status-${block.status}`}
+      ref={blockRef}
+      data-block-id={block.id}
+    >
       <div className="block-kicker">
         <span className="block-kicker-label">
           {BLOCK_LABEL[content.blockType] ?? content.blockType}
