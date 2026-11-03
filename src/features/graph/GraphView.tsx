@@ -3,195 +3,305 @@ import { useNotebookNav } from "../../stores/notebook";
 import { useGraph } from "../../stores/graph";
 import { useRoadmap } from "../../stores/roadmap";
 import { useUi } from "../../stores/ui";
-import { ConceptForm, ConfirmButton, GraphCanvas, LinkForm, RelationList } from "./GraphParts";
 import { GraphCanvasD3 } from "./GraphCanvasD3";
+import { GraphContextMenu, type ContextMenuState } from "./GraphContextMenu";
+import { GraphSidebar } from "./GraphSidebar";
 import type { Selection } from "./GraphParts";
-import { classLabel, layoutGraph, nodeOptions } from "./graph";
+import { classLabel } from "./graph";
+import { IconClose, IconPlus, IconSidebar } from "../../components/Icons";
 
-type Panel =
-  | { kind: "concept"; classId: string }
-  | { kind: "link"; fromId?: string }
-  | null;
-
-/** The student's own map of ideas. They write the concepts and draw (and
- *  name) every relation themselves — putting into words WHY two ideas connect
- *  is the point, so nothing here is suggested or generated. */
 export function GraphView() {
   const sessionCourse = useRoadmap((s) => s.session?.imported_course_id ?? null);
   const navCourse = useNotebookNav((s) => s.courseId);
   const courseId = sessionCourse ?? navCourse;
   const setView = useUi((s) => s.setView);
-  const { classes, graph, loading, error, load, clearError, addConcept, renameConcept, removeConcept, addLink, editLink, removeLink } = useGraph();
+  const setActiveClass = useNotebookNav((s) => s.setActiveClass);
 
+  const {
+    classes,
+    graph,
+    loading,
+    error,
+    load,
+    clearError,
+    addConcept,
+    renameConcept,
+    removeConcept,
+    addLink,
+    editLink,
+    removeLink,
+  } = useGraph();
+
+  // Selection & Sidebar
   const [selection, setSelection] = useState<Selection>(null);
-  const [panel, setPanel] = useState<Panel>(null);
-  const [viewMode, setViewMode] = useState<"d3" | "columns">("d3");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Context Menu state
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
+  // Connection mode (from ID)
+  const [connectingFromId, setConnectingFromId] = useState<string | null>(null);
+
+  // New Concept dialog
+  const [conceptModal, setConceptModal] = useState<{
+    open: boolean;
+    classId: string;
+    label: string;
+    sourceNodeId?: string;
+  } | null>(null);
 
   useEffect(() => {
     if (courseId) void load(courseId);
   }, [courseId, load]);
 
-  const layout = useMemo(() => layoutGraph(classes, graph.concepts, graph.links), [classes, graph]);
-  const options = useMemo(() => nodeOptions(classes, graph.concepts), [classes, graph.concepts]);
+  const firstClassId = classes[0]?.id ?? "";
 
-  const selectedLink = selection?.kind === "link" ? graph.links.find((l) => l.id === selection.id) : undefined;
-  const selectedNode = selection?.kind === "node" ? layout.nodes.find((n) => n.id === selection.id) : undefined;
-  const selectedConcept = selectedNode?.kind === "concept" ? graph.concepts.find((c) => c.id === selectedNode.id) : undefined;
-  const firstClass = classes[0]?.id ?? "";
-
-  const select = (s: Selection) => {
+  const handleSelect = (s: Selection) => {
     setSelection(s);
-    setPanel(null);
+    if (s && !sidebarOpen) setSidebarOpen(true);
     clearError();
+  };
+
+  const handleNavigateToClass = (classId: string) => {
+    setActiveClass(classId);
+    setView("notebook");
+  };
+
+  const handleOpenNewConceptModal = (
+    classId?: string,
+    sourceNodeId?: string,
+  ) => {
+    setConceptModal({
+      open: true,
+      classId: classId || firstClassId,
+      label: "",
+      sourceNodeId,
+    });
+  };
+
+  const handleCreateConcept = async (classId: string, label: string) => {
+    if (!classId || !label.trim()) return;
+    const created = await addConcept(classId, label.trim());
+    if (created) {
+      if (conceptModal?.sourceNodeId) {
+        // Automatically link the source node to this new concept (Figma-style drag-to-create)
+        await addLink(conceptModal.sourceNodeId, created.id, "relacionado");
+      }
+      setSelection({ kind: "node", id: created.id });
+      setConceptModal(null);
+    }
   };
 
   if (!courseId) {
     return (
-      <div className="view graph-view">
+      <div className="view graph-view p-8">
         <h2>Tu grafo de ideas</h2>
-        <p className="muted">Todavía no hay clases. Cuando tu sesión tenga un curso, aquí podrás conectar lo que aprendes con tus propias palabras.</p>
+        <p className="muted">
+          Todavía no hay clases cargadas. Cuando tu sesión tenga un curso, aquí podrás conectar lo que aprendes con tus propias palabras.
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="view graph-view">
-      <h2>Tu grafo de ideas</h2>
-      <p className="muted">
-        Conecta lo que aprendes con tus propias palabras. Las relaciones las creas tú: explicar <em>por qué</em> dos ideas se unen es lo que convierte la
-        información en conocimiento.
-      </p>
-
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="row">
-          <button className="btn-primary" disabled={!firstClass} onClick={() => { setSelection(null); setPanel({ kind: "concept", classId: selectedNode?.classId ?? firstClass }); }}>
-            ＋ Nuevo concepto
-          </button>
-          <button className="btn-primary" disabled={options.length < 2} onClick={() => { setSelection(null); setPanel({ kind: "link", fromId: selectedNode?.id }); }}>
-            ＋ Nueva relación
-          </button>
-        </div>
-        <div className="flex items-center gap-1.5 p-1 rounded-lg bg-paper-deep border border-slate-800 text-xs">
-          <button
-            type="button"
-            className={`px-2 py-1 rounded transition-colors ${viewMode === "d3" ? "bg-slate-700 text-slate-100 font-semibold" : "text-slate-400 hover:text-slate-200"}`}
-            onClick={() => setViewMode("d3")}
-          >
-            Grafo D3
-          </button>
-          <button
-            type="button"
-            className={`px-2 py-1 rounded transition-colors ${viewMode === "columns" ? "bg-slate-700 text-slate-100 font-semibold" : "text-slate-400 hover:text-slate-200"}`}
-            onClick={() => setViewMode("columns")}
-          >
-            Columnas
-          </button>
-        </div>
-      </div>
-
-      {error && (
-        <div className="alert error" onClick={clearError}>
-          {error}
-        </div>
-      )}
-      {loading && <p className="muted">Cargando…</p>}
-
-      {panel?.kind === "concept" && (
-        <ConceptForm classes={classes} defaultClassId={panel.classId} submitLabel="Añadir concepto" onSubmit={async (classId, label) => (await addConcept(classId, label)) !== null} onCancel={() => setPanel(null)} />
-      )}
-      {panel?.kind === "link" && (
-        <LinkForm options={options} initialFrom={panel.fromId} submitLabel="Crear relación" onSubmit={addLink} onCancel={() => setPanel(null)} />
+    <div className="view graph-view graph-fullscreen">
+      {/* Top right Toggle Sidebar trigger if closed */}
+      {!sidebarOpen && (
+        <button
+          type="button"
+          className="graph-sidebar-toggle-btn"
+          onClick={() => setSidebarOpen(true)}
+          title="Abrir panel lateral de detalles"
+        >
+          <IconSidebar />
+          <span>Detalles</span>
+        </button>
       )}
 
-      {!loading && layout.nodes.length === 0 ? (
-        <p className="muted">Este curso aún no tiene clases para conectar.</p>
-      ) : viewMode === "d3" ? (
+      {/* Main Fullscreen D3 Canvas */}
+      <div className="graph-canvas-area">
+        {error && (
+          <div className="graph-floating-alert" onClick={clearError}>
+            <span>{error}</span>
+            <button type="button" onClick={clearError}>✕</button>
+          </div>
+        )}
+
         <GraphCanvasD3
           classes={classes}
           concepts={graph.concepts}
           links={graph.links}
           selection={selection}
-          onSelect={select}
+          onSelect={handleSelect}
           onCreateLink={addLink}
+          searchQuery={searchQuery}
+          connectingFromId={connectingFromId}
+          onCancelConnect={() => setConnectingFromId(null)}
+          onNewConceptAt={(canvasX, canvasY, sourceNodeId) => {
+            handleOpenNewConceptModal(undefined, sourceNodeId);
+          }}
+          onOpenContextMenu={(e, type, targetId, worldPos, nodeInfo, linkInfo) => {
+            setContextMenu({
+              x: e.clientX,
+              y: e.clientY,
+              canvasX: worldPos?.x,
+              canvasY: worldPos?.y,
+              targetType: type,
+              targetId,
+              nodeKind: nodeInfo?.kind,
+              nodeLabel: nodeInfo?.label,
+              linkLabel: linkInfo?.label,
+            });
+          }}
         />
-      ) : (
-        <GraphCanvas layout={layout} selection={selection} onSelect={select} />
-      )}
-      {!loading && graph.links.length === 0 && layout.nodes.length > 0 && (
-        <p className="hint">Aún no has creado relaciones. Empieza con «＋ Nueva relación», o al terminar una clase usa el paso «Conecta lo aprendido».</p>
-      )}
-
-      {selectedLink && (
-        <section className="card graph-inspector" aria-label="Editar relación">
-          <h3>Relación</h3>
-          <LinkForm
-            key={selectedLink.id}
-            options={options}
-            initialFrom={selectedLink.fromId}
-            initialTo={selectedLink.toId}
-            initialLabel={selectedLink.label}
-            submitLabel="Guardar cambios"
-            onSubmit={(from, to, label) => editLink(selectedLink.id, from, to, label)}
-            onCancel={() => setSelection(null)}
-          />
-          <ConfirmButton
-            label="Borrar relación"
-            warning="¿Borrar esta relación?"
-            onConfirm={async () => {
-              if (await removeLink(selectedLink.id)) setSelection(null);
-            }}
-          />
-        </section>
-      )}
-
-      {selectedNode?.kind === "class" && (
-        <section className="card graph-inspector" aria-label="Clase seleccionada">
-          <h3>{classLabel(classes.find((c) => c.id === selectedNode.id)?.title ?? selectedNode.label)}</h3>
-          <div className="row">
-            <button className="btn-quiet" onClick={() => setPanel({ kind: "concept", classId: selectedNode.id })}>
-              ＋ Añadir un concepto aquí
-            </button>
-            <button className="btn-quiet" onClick={() => setPanel({ kind: "link", fromId: selectedNode.id })}>
-              Relacionar desde aquí
-            </button>
-          </div>
-        </section>
-      )}
-
-      {selectedConcept && (
-        <section className="card graph-inspector" aria-label="Editar concepto">
-          <h3>Concepto</h3>
-          <ConceptForm
-            key={selectedConcept.id}
-            classes={classes}
-            defaultClassId={selectedConcept.classId}
-            initialLabel={selectedConcept.label}
-            submitLabel="Guardar cambios"
-            onSubmit={(classId, label) => renameConcept(selectedConcept.id, classId, label)}
-            onCancel={() => setSelection(null)}
-          />
-          <div className="row">
-            <button className="btn-quiet" onClick={() => setPanel({ kind: "link", fromId: selectedConcept.id })}>
-              Relacionar desde aquí
-            </button>
-            <ConfirmButton
-              label="Borrar concepto"
-              warning="Se borrarán también sus relaciones."
-              onConfirm={async () => {
-                if (await removeConcept(selectedConcept.id)) setSelection(null);
-              }}
-            />
-          </div>
-        </section>
-      )}
-
-      <RelationList links={graph.links} options={options} selection={selection} onSelect={select} />
-
-      <div className="row">
-        <button className="btn-quiet" onClick={() => setView("notebook")}>
-          Volver a las clases
-        </button>
       </div>
+
+      {/* Inspector Sidebar (Details & Overview) */}
+      {sidebarOpen && (
+        <GraphSidebar
+          classes={classes}
+          concepts={graph.concepts}
+          links={graph.links}
+          selection={selection}
+          onSelect={handleSelect}
+          onClose={() => setSidebarOpen(false)}
+          onNewConcept={(classId) => handleOpenNewConceptModal(classId)}
+          onStartConnect={(fromId) => setConnectingFromId(fromId)}
+          onRenameConcept={renameConcept}
+          onRemoveConcept={removeConcept}
+          onEditLink={editLink}
+          onRemoveLink={removeLink}
+          onNavigateToClass={handleNavigateToClass}
+          searchQuery={searchQuery}
+          onSearchChange={setSearchQuery}
+        />
+      )}
+
+      {/* Context Menu Overlay */}
+      {contextMenu && (
+        <GraphContextMenu
+          menu={contextMenu}
+          onClose={() => setContextMenu(null)}
+          onNewConcept={(canvasX, canvasY, classId) =>
+            handleOpenNewConceptModal(classId)
+          }
+          onConnectFrom={(nodeId) => setConnectingFromId(nodeId)}
+          onEditNode={(nodeId) => {
+            setSelection({ kind: "node", id: nodeId });
+            setSidebarOpen(true);
+          }}
+          onViewDetails={(nodeId) => {
+            setSelection({ kind: "node", id: nodeId });
+            setSidebarOpen(true);
+          }}
+          onDeleteNode={async (nodeId) => {
+            const ok = await removeConcept(nodeId);
+            if (ok && selection?.kind === "node" && selection.id === nodeId) {
+              setSelection(null);
+            }
+          }}
+          onNavigateToClass={handleNavigateToClass}
+          onEditLink={(linkId) => {
+            setSelection({ kind: "link", id: linkId });
+            setSidebarOpen(true);
+          }}
+          onDeleteLink={async (linkId) => {
+            const ok = await removeLink(linkId);
+            if (ok && selection?.kind === "link" && selection.id === linkId) {
+              setSelection(null);
+            }
+          }}
+          onResetZoom={() => {
+            // Triggered inside D3 canvas via context menu
+          }}
+          onReorganize={() => {
+            // Re-warm simulation
+          }}
+        />
+      )}
+
+      {/* Modal: New Concept */}
+      {conceptModal?.open && (
+        <div className="graph-modal-backdrop">
+          <div className="graph-modal-box">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <h4 className="text-sm font-semibold text-slate-100 flex items-center gap-1.5">
+                <IconPlus /> Nuevo concepto
+              </h4>
+              <button
+                type="button"
+                className="text-slate-400 hover:text-slate-200"
+                onClick={() => setConceptModal(null)}
+              >
+                <IconClose />
+              </button>
+            </div>
+
+            <div className="space-y-3 pt-2">
+              <div>
+                <label className="block text-2xs text-slate-400 uppercase tracking-wider mb-1">
+                  Clase de origen
+                </label>
+                <select
+                  className="w-full text-xs p-2 rounded bg-input text-slate-100 border border-slate-700"
+                  value={conceptModal.classId}
+                  onChange={(e) =>
+                    setConceptModal({ ...conceptModal, classId: e.target.value })
+                  }
+                >
+                  {classes.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {classLabel(c.title)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-2xs text-slate-400 uppercase tracking-wider mb-1">
+                  Nombre o síntesis de la idea
+                </label>
+                <input
+                  type="text"
+                  autoFocus
+                  className="w-full text-xs p-2 rounded bg-input text-slate-100 border border-slate-700 placeholder:text-slate-500"
+                  placeholder="Ej. La densidad multiplica el base sin sustituirlo…"
+                  value={conceptModal.label}
+                  onChange={(e) =>
+                    setConceptModal({ ...conceptModal, label: e.target.value })
+                  }
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && conceptModal.label.trim()) {
+                      void handleCreateConcept(conceptModal.classId, conceptModal.label);
+                    }
+                  }}
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+              <button
+                type="button"
+                className="btn-quiet text-xs py-1 px-3"
+                onClick={() => setConceptModal(null)}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                className="btn-primary text-xs py-1 px-3"
+                disabled={!conceptModal.label.trim()}
+                onClick={() =>
+                  void handleCreateConcept(conceptModal.classId, conceptModal.label)
+                }
+              >
+                Crear concepto
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

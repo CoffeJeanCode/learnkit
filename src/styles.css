@@ -2001,29 +2001,373 @@ pre.output, .quickrun pre {
    centered `.view` never slides under the panel. */
 body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16px); }
 
-/* Knowledge graph — the student's own map of ideas */
-.graph-view { display: flex; flex-direction: column; gap: 12px; }
-.graph-scroll { overflow: auto; border: none; border-radius: var(--squircle-sm); corner-shape: squircle; background: var(--paper-deep); max-height: 70vh; }
-.graph-svg { display: block; font-family: var(--font-read); font-size: 14px; }
-.graph-column-label { fill: var(--chalk-soft); font-family: var(--font-hand); font-size: 20px; }
-.graph-node { cursor: pointer; outline: none; }
-/* Node shapes: fill-only (the stroke was the last "border" in here). The
-   background is --paper-deep, so the --card fill already reads as a card. */
-.graph-node rect { fill: var(--card); stroke: none; }
-.graph-node-concept rect { fill: var(--gold-wash); }
-.graph-node text { fill: var(--chalk); pointer-events: none; }
-.graph-node:hover rect, .graph-node:focus-visible rect { fill: var(--card-hi); }
-.graph-node.is-selected rect { fill: var(--blue-wash); }
-.graph-edge { cursor: pointer; outline: none; }
-.graph-edge-hit { fill: none; stroke: transparent; stroke-width: 14; }
-.graph-edge-line { fill: none; stroke: var(--chalk-soft); stroke-width: 2; }
-.graph-arrow-head { fill: var(--chalk-soft); }
-.graph-edge-label { fill: var(--chalk); font-size: 13px; paint-order: stroke; stroke: var(--paper-deep); stroke-width: 4px; }
-.graph-edge:hover .graph-edge-line, .graph-edge:focus-visible .graph-edge-line { stroke: var(--chalk); }
-.graph-edge.is-selected .graph-edge-line { stroke: var(--blue-chalk); stroke-width: 3; }
-.graph-form { display: flex; flex-direction: column; gap: 10px; border: none; border-radius: var(--squircle-sm); corner-shape: squircle; padding: 12px; background: var(--card); }
-.graph-form label { display: flex; flex-direction: column; gap: 4px; }
-.graph-inspector { display: flex; flex-direction: column; gap: 10px; }
+/* Knowledge graph — the student's own map of ideas (Figma-style Canvas & Sidebar) */
+.workspace.is-graph {
+  padding: 0;
+  overflow: hidden;
+  height: calc(100vh - 46px);
+  display: flex;
+}
+
+.view.graph-view.graph-fullscreen {
+  max-width: none;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  position: relative;
+  overflow: hidden;
+  animation: none;
+}
+
+.graph-canvas-area {
+  flex: 1;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+}
+
+.graph-canvas-wrapper {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+  background-color: var(--paper-deep);
+}
+
+.graph-canvas-svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Floating Canvas Overlays */
+.graph-canvas-overlay-topleft {
+  position: absolute;
+  top: var(--space-md);
+  left: var(--space-md);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  pointer-events: auto;
+}
+
+.graph-badge-pill {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: calc(var(--space-xs) * 1.2) var(--space-md);
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--squircle-full);
+}
+
+.graph-badge-title {
+  font-size: var(--font-xs);
+  font-weight: 600;
+  color: var(--chalk);
+}
+
+.graph-badge-count {
+  font-size: var(--font-2xs);
+  color: var(--chalk-soft);
+  padding-left: var(--space-xs);
+  border-left: 1px solid var(--border-soft);
+}
+
+.graph-overlay-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: calc(var(--space-xs) * 1.2) var(--space-md);
+  font-size: var(--font-xs);
+  font-weight: 500;
+  color: var(--chalk);
+  background: rgba(30, 41, 59, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--squircle-full);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.graph-overlay-btn:hover {
+  background: var(--card-hi);
+  color: #fff;
+  border-color: var(--chalk-soft);
+}
+
+.graph-canvas-overlay-bottomright {
+  position: absolute;
+  bottom: var(--space-md);
+  right: var(--space-md);
+  z-index: 10;
+  pointer-events: auto;
+}
+
+.graph-zoom-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: rgba(15, 23, 42, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--squircle-sm);
+}
+
+.graph-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  min-width: 26px;
+  padding: 0 6px;
+  font-size: var(--font-xs);
+  font-weight: 600;
+  color: var(--chalk-soft);
+  background: transparent;
+  border: none;
+  border-radius: var(--squircle-xs);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.graph-zoom-btn:hover {
+  background: var(--card-hi);
+  color: var(--chalk);
+}
+
+.graph-zoom-val {
+  font-size: var(--font-2xs);
+  font-family: var(--font-mono);
+  color: var(--chalk-soft);
+  padding: 0 var(--space-xs);
+}
+
+.graph-canvas-overlay-bottomleft {
+  position: absolute;
+  bottom: var(--space-md);
+  left: var(--space-md);
+  z-index: 10;
+  padding: calc(var(--space-xs) * 0.8) var(--space-md);
+  background: rgba(15, 23, 42, 0.75);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--squircle-full);
+  pointer-events: none;
+}
+
+/* Floating Trigger for Sidebar */
+.graph-sidebar-toggle-btn {
+  position: absolute;
+  top: var(--space-md);
+  right: var(--space-md);
+  z-index: 15;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: calc(var(--space-xs) * 1.2) var(--space-md);
+  font-size: var(--font-xs);
+  font-weight: 500;
+  color: var(--chalk);
+  background: rgba(30, 41, 59, 0.9);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--squircle-full);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.graph-sidebar-toggle-btn:hover {
+  background: var(--card-hi);
+  color: #fff;
+}
+
+/* Graph Floating Alert */
+.graph-floating-alert {
+  position: absolute;
+  top: var(--space-md);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-md);
+  font-size: var(--font-xs);
+  color: var(--red-chalk);
+  background: rgba(69, 10, 10, 0.92);
+  border: 1px solid rgba(153, 27, 27, 0.8);
+  border-radius: var(--squircle-full);
+  backdrop-filter: blur(8px);
+  cursor: pointer;
+}
+
+/* ==================== GRAPH SIDEBAR ==================== */
+.graph-sidebar {
+  width: 340px;
+  height: 100%;
+  background: var(--card);
+  border-left: 1px solid var(--border-soft);
+  display: flex;
+  flex-direction: column;
+  z-index: 20;
+  flex-shrink: 0;
+  animation: sidebar-slide-in 0.18s ease-out;
+}
+
+@keyframes sidebar-slide-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+.graph-sidebar-header {
+  padding: var(--space-md) var(--space-lg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface-deep);
+}
+
+.graph-sidebar-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--chalk-soft);
+  border-radius: var(--squircle-xs);
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.graph-sidebar-close:hover {
+  color: var(--chalk);
+  background: var(--card-hi);
+}
+
+.graph-sidebar-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-lg);
+}
+
+.graph-sidebar-card {
+  padding: var(--space-md);
+  border-radius: var(--squircle-sm);
+  background: var(--paper-deep);
+  border: 1px solid var(--border-soft);
+}
+
+.graph-sidebar-section {
+  padding-top: var(--space-sm);
+}
+
+/* ==================== CONTEXT MENU ==================== */
+.graph-context-menu {
+  position: fixed;
+  z-index: 50;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--surface-deep);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--squircle-sm);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(12px);
+  animation: context-menu-pop 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes context-menu-pop {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.graph-menu-header {
+  padding: 6px 10px 4px;
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--chalk-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 6px 10px;
+  font-size: var(--font-xs);
+  color: var(--chalk);
+  background: transparent;
+  border: none;
+  border-radius: var(--squircle-xs);
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.1s ease;
+}
+
+.graph-menu-item:hover {
+  background: var(--card-hi);
+  color: #fff;
+}
+
+.graph-menu-item.is-danger {
+  color: var(--red-chalk);
+}
+
+.graph-menu-item.is-danger:hover {
+  background: rgba(153, 27, 27, 0.4);
+  color: #fca5a5;
+}
+
+.graph-menu-divider {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border-soft);
+}
+
+/* ==================== GRAPH MODAL ==================== */
+.graph-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-md);
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(4px);
+}
+
+.graph-modal-box {
+  width: 100%;
+  max-width: 420px;
+  padding: var(--space-lg);
+  background: var(--surface-deep);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--squircle-md);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+  animation: modal-scale-in 0.15s ease-out;
+}
+
+@keyframes modal-scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
 
 /* ============================================================================
    MICROINTERACTIONS — motion that says something happened.

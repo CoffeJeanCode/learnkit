@@ -120,7 +120,7 @@ export default function App() {
     <div className="app">
       <Header />
       <UpdateBanner />
-      <main className="workspace" ref={workspaceRef}>
+      <main className={`workspace${view === "graph" ? " is-graph" : ""}`} ref={workspaceRef}>
         {bootstrapping ? (
           <div
             className="view-loading"

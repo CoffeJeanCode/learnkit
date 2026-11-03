@@ -3,6 +3,12 @@ import * as d3 from "d3";
 import type { ClassRecord, Concept, ConceptLink } from "../../lib/schemas";
 import { RELATION_HINTS, classLabel, truncate } from "./graph";
 import type { Selection } from "./GraphParts";
+import {
+  IconClose,
+  IconLink,
+  IconPlus,
+  IconRefresh,
+} from "../../components/Icons";
 
 export interface D3Node extends d3.SimulationNodeDatum {
   id: string;
@@ -28,6 +34,11 @@ export function GraphCanvasD3({
   selection,
   onSelect,
   onCreateLink,
+  onOpenContextMenu,
+  onNewConceptAt,
+  searchQuery,
+  connectingFromId,
+  onCancelConnect,
 }: {
   classes: ClassRecord[];
   concepts: Concept[];
@@ -35,64 +46,104 @@ export function GraphCanvasD3({
   selection: Selection;
   onSelect: (s: Selection) => void;
   onCreateLink: (fromId: string, toId: string, label: string) => Promise<boolean>;
+  onOpenContextMenu: (
+    e: React.MouseEvent,
+    type: "canvas" | "node" | "link",
+    targetId?: string,
+    worldPos?: { x: number; y: number },
+    nodeInfo?: { kind: "class" | "concept"; label: string },
+    linkInfo?: { label: string },
+  ) => void;
+  onNewConceptAt?: (canvasX: number, canvasY: number, sourceNodeId?: string) => void;
+  searchQuery?: string;
+  connectingFromId?: string | null;
+  onCancelConnect?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
 
-  // Connecting rubberband state
+  // Figma-style interactive connection rubberband
   const [connectingFrom, setConnectingFrom] = useState<string | null>(null);
-  const [dragLine, setDragLine] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const [snapTargetId, setSnapTargetId] = useState<string | null>(null);
+  const [dragLine, setDragLine] = useState<{
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  } | null>(null);
+
+  // Hovered node for revealing Figma 4-handle anchors
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
   // Quick relation modal when connection is dropped onto target
   const [pendingRelation, setPendingRelation] = useState<{ fromId: string; toId: string } | null>(null);
   const [relationLabel, setRelationLabel] = useState("");
   const [creating, setCreating] = useState(false);
 
-  // D3 zoom transform reference for coord mapping
+  // Zoom behavior reference
   const zoomBehaviorRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const currentTransformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
+  const [zoomScale, setZoomScale] = useState(1);
 
-  // Simulation ref
+  // Simulation references
   const simRef = useRef<d3.Simulation<D3Node, D3Link> | null>(null);
   const nodesRef = useRef<D3Node[]>([]);
   const linksRef = useRef<D3Link[]>([]);
 
-  // Build node and link datasets
+  // Build node and link datasets & initialize D3 simulation
   useEffect(() => {
-    const width = containerRef.current?.clientWidth || 900;
-    const height = 550;
+    const width = containerRef.current?.clientWidth || 1000;
+    const height = containerRef.current?.clientHeight || 700;
 
-    // 1. Build nodes
+    // 1. Build nodes map
     const nodeMap = new Map<string, D3Node>();
     const d3Nodes: D3Node[] = [];
 
+    // Prior layout coordinates cache if re-simulating
+    const prevPosMap = new Map<string, { x: number; y: number }>();
+    nodesRef.current.forEach((n) => {
+      if (typeof n.x === "number" && typeof n.y === "number") {
+        prevPosMap.set(n.id, { x: n.x, y: n.y });
+      }
+    });
+
     classes.forEach((c, idx) => {
+      const prev = prevPosMap.get(c.id);
       const node: D3Node = {
         id: c.id,
         kind: "class",
         label: classLabel(c.title),
         classId: c.id,
         milestoneId: c.milestone_id,
-        w: 200,
-        h: 44,
-        x: width * 0.2 + (idx % 3) * 220,
-        y: 100 + Math.floor(idx / 3) * 140,
+        w: 220,
+        h: 46,
+        x: prev ? prev.x : width * 0.15 + (idx % 3) * 260,
+        y: prev ? prev.y : 120 + Math.floor(idx / 3) * 180,
       };
       nodeMap.set(c.id, node);
       d3Nodes.push(node);
     });
 
     concepts.forEach((c) => {
+      const prev = prevPosMap.get(c.id);
       const parent = nodeMap.get(c.classId);
       const node: D3Node = {
         id: c.id,
         kind: "concept",
         label: c.label,
         classId: c.classId,
-        w: 170,
-        h: 36,
-        x: parent ? (parent.x ?? width / 2) + (Math.random() - 0.5) * 80 : width / 2,
-        y: parent ? (parent.y ?? height / 2) + 70 + (Math.random() - 0.5) * 40 : height / 2,
+        w: 190,
+        h: 40,
+        x: prev
+          ? prev.x
+          : parent
+            ? (parent.x ?? width / 2) + (Math.random() - 0.5) * 120
+            : width / 2,
+        y: prev
+          ? prev.y
+          : parent
+            ? (parent.y ?? height / 2) + 85 + (Math.random() - 0.5) * 60
+            : height / 2,
       };
       nodeMap.set(c.id, node);
       d3Nodes.push(node);
@@ -130,7 +181,7 @@ export function GraphCanvasD3({
     nodesRef.current = d3Nodes;
     linksRef.current = d3Links;
 
-    // 3. Initialize Force Simulation
+    // 3. Initialize Force Simulation with gentle decay
     const sim = d3
       .forceSimulation<D3Node>(d3Nodes)
       .force(
@@ -138,13 +189,13 @@ export function GraphCanvasD3({
         d3
           .forceLink<D3Node, D3Link>(d3Links)
           .id((d) => d.id)
-          .distance((d) => (d.label ? 160 : 70))
+          .distance((d) => (d.label ? 180 : 90))
           .strength((d) => (d.label ? 0.6 : 0.8)),
       )
-      .force("charge", d3.forceManyBody().strength(-350))
-      .force("collide", d3.forceCollide().radius(60).strength(0.7))
-      .force("center", d3.forceCenter(width / 2, height / 2).strength(0.05))
-      .alphaDecay(0.028);
+      .force("charge", d3.forceManyBody().strength(-400))
+      .force("collide", d3.forceCollide().radius(75).strength(0.75))
+      .force("center", d3.forceCenter(width / 2, height / 2).strength(0.04))
+      .alphaDecay(0.03);
 
     simRef.current = sim;
 
@@ -156,9 +207,10 @@ export function GraphCanvasD3({
     // 4. Zoom & Pan
     const zoom = d3
       .zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.3, 3])
+      .scaleExtent([0.25, 3.5])
       .on("zoom", (event) => {
         currentTransformRef.current = event.transform;
+        setZoomScale(Math.round(event.transform.k * 100));
         g.attr("transform", event.transform);
       });
 
@@ -168,20 +220,31 @@ export function GraphCanvasD3({
     // 5. Simulation Tick
     sim.on("tick", () => {
       // Update link lines
-      g.selectAll<SVGLineElement, D3Link>(".d3-link-line")
+      g.selectAll<SVGPathElement, D3Link>(".d3-link-path")
         .data(d3Links, (d) => d.id)
-        .join("line")
-        .attr("x1", (d) => (d.source as D3Node).x || 0)
-        .attr("y1", (d) => (d.source as D3Node).y || 0)
-        .attr("x2", (d) => (d.target as D3Node).x || 0)
-        .attr("y2", (d) => (d.target as D3Node).y || 0);
+        .join("path")
+        .attr("d", (d) => {
+          const s = d.source as D3Node;
+          const t = d.target as D3Node;
+          const sx = s.x || 0;
+          const sy = s.y || 0;
+          const tx = t.x || 0;
+          const ty = t.y || 0;
+          const dx = tx - sx;
+          const dy = ty - sy;
+          const cx1 = sx + dx * 0.45;
+          const cy1 = sy;
+          const cx2 = sx + dx * 0.55;
+          const cy2 = ty;
+          return `M ${sx} ${sy} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${tx} ${ty}`;
+        });
 
       // Update link labels
       g.selectAll<SVGTextElement, D3Link>(".d3-link-label")
         .data(d3Links.filter((d) => !!d.label), (d) => d.id)
         .join("text")
         .attr("x", (d) => (((d.source as D3Node).x || 0) + ((d.target as D3Node).x || 0)) / 2)
-        .attr("y", (d) => (((d.source as D3Node).y || 0) + ((d.target as D3Node).y || 0)) / 2 - 4);
+        .attr("y", (d) => (((d.source as D3Node).y || 0) + ((d.target as D3Node).y || 0)) / 2 - 6);
 
       // Update node groups
       g.selectAll<SVGGElement, D3Node>(".d3-node-group")
@@ -194,6 +257,13 @@ export function GraphCanvasD3({
       sim.stop();
     };
   }, [classes, concepts, links]);
+
+  // Handle external connectingFrom trigger (e.g. from sidebar or context menu)
+  useEffect(() => {
+    if (connectingFromId) {
+      setConnectingFrom(connectingFromId);
+    }
+  }, [connectingFromId]);
 
   // Connected nodes map for spotlighting
   const connectedNodeIds = new Set<string>();
@@ -211,17 +281,28 @@ export function GraphCanvasD3({
     }
   }
 
-  // Zoom control handlers
+  // Zoom handlers
   const handleZoom = (factor: number) => {
     if (!svgRef.current || !zoomBehaviorRef.current) return;
     const svg = d3.select(svgRef.current);
-    svg.transition().duration(250).call(zoomBehaviorRef.current.scaleBy as any, factor);
+    svg.transition().duration(200).call(zoomBehaviorRef.current.scaleBy as any, factor);
   };
 
   const handleResetZoom = () => {
     if (!svgRef.current || !zoomBehaviorRef.current) return;
     const svg = d3.select(svgRef.current);
-    svg.transition().duration(300).call(zoomBehaviorRef.current.transform as any, d3.zoomIdentity);
+    svg.transition().duration(250).call(zoomBehaviorRef.current.transform as any, d3.zoomIdentity);
+  };
+
+  // Convert client coordinates to canvas world coordinates
+  const screenToWorld = (clientX: number, clientY: number) => {
+    const rect = svgRef.current?.getBoundingClientRect();
+    const transform = currentTransformRef.current;
+    if (!rect) return { x: 0, y: 0 };
+    return {
+      x: (clientX - rect.left - transform.x) / transform.k,
+      y: (clientY - rect.top - transform.y) / transform.k,
+    };
   };
 
   // Node Drag handlers (D3 force drag)
@@ -260,23 +341,35 @@ export function GraphCanvasD3({
     window.addEventListener("pointerup", onPointerUp);
   };
 
-  // Connector handle drag (to connect knowledge)
-  const handleConnectorStart = (e: React.PointerEvent, sourceId: string) => {
+  // Figma-style Connector Handle Drag (from any of 4 anchors)
+  const handleConnectorStart = (
+    e: React.PointerEvent,
+    sourceId: string,
+    anchorOffset: { dx: number; dy: number },
+  ) => {
     e.stopPropagation();
     setConnectingFrom(sourceId);
 
     const sourceNode = nodesRef.current.find((n) => n.id === sourceId);
     if (!sourceNode) return;
 
-    const transform = currentTransformRef.current;
-    const p1 = { x: sourceNode.x || 0, y: sourceNode.y || 0 };
+    const p1 = {
+      x: (sourceNode.x || 0) + anchorOffset.dx,
+      y: (sourceNode.y || 0) + anchorOffset.dy,
+    };
 
     const onPointerMove = (ev: PointerEvent) => {
-      const rect = svgRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const mouseX = (ev.clientX - rect.left - transform.x) / transform.k;
-      const mouseY = (ev.clientY - rect.top - transform.y) / transform.k;
-      setDragLine({ x1: p1.x, y1: p1.y, x2: mouseX, y2: mouseY });
+      const mouse = screenToWorld(ev.clientX, ev.clientY);
+      setDragLine({ x1: p1.x, y1: p1.y, x2: mouse.x, y2: mouse.y });
+
+      // Magnetic snap detection towards candidate nodes
+      const target = nodesRef.current.find((n) => {
+        if (n.id === sourceId) return false;
+        const dx = (n.x || 0) - mouse.x;
+        const dy = (n.y || 0) - mouse.y;
+        return Math.hypot(dx, dy) < 65;
+      });
+      setSnapTargetId(target ? target.id : null);
     };
 
     const onPointerUp = (ev: PointerEvent) => {
@@ -284,23 +377,24 @@ export function GraphCanvasD3({
       window.removeEventListener("pointerup", onPointerUp);
       setDragLine(null);
       setConnectingFrom(null);
+      setSnapTargetId(null);
 
-      // Check if dropped over another node
-      const rect = svgRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const mouseX = (ev.clientX - rect.left - transform.x) / transform.k;
-      const mouseY = (ev.clientY - rect.top - transform.y) / transform.k;
+      const mouse = screenToWorld(ev.clientX, ev.clientY);
 
+      // Check if dropped onto a target node
       const target = nodesRef.current.find((n) => {
         if (n.id === sourceId) return false;
-        const dx = (n.x || 0) - mouseX;
-        const dy = (n.y || 0) - mouseY;
-        return Math.sqrt(dx * dx + dy * dy) < 45;
+        const dx = (n.x || 0) - mouse.x;
+        const dy = (n.y || 0) - mouse.y;
+        return Math.hypot(dx, dy) < 65;
       });
 
       if (target) {
         setPendingRelation({ fromId: sourceId, toId: target.id });
         setRelationLabel("causa");
+      } else if (onNewConceptAt && Math.hypot(mouse.x - p1.x, mouse.y - p1.y) > 80) {
+        // Dropped onto empty canvas far from start: offer creating and connecting a concept!
+        onNewConceptAt(mouse.x, mouse.y, sourceId);
       }
     };
 
@@ -319,77 +413,193 @@ export function GraphCanvasD3({
     }
   };
 
+  // Re-warm simulation
+  const handleReorganize = () => {
+    if (simRef.current) {
+      simRef.current.alpha(0.7).restart();
+    }
+  };
+
   return (
-    <div ref={containerRef} className="d3-graph-container relative w-full h-[550px] overflow-hidden rounded-xl bg-paper-deep border border-slate-800">
-      {/* Zoom controls floating toolbar */}
-      <div className="absolute top-3 right-3 z-10 flex items-center gap-1.5 p-1 rounded-lg bg-surface-deep/80 backdrop-blur border border-slate-800 text-xs">
-        <button
-          className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 font-bold"
-          onClick={() => handleZoom(1.25)}
-          title="Acercar (+)"
-        >
-          ＋
-        </button>
-        <button
-          className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 font-bold"
-          onClick={() => handleZoom(0.8)}
-          title="Alejar (-)"
-        >
-          －
-        </button>
-        <button
-          className="px-2 py-1 hover:bg-slate-700/60 rounded text-slate-300 font-medium text-2xs"
-          onClick={handleResetZoom}
-          title="Centrar vista (1:1)"
-        >
-          Centrar
-        </button>
+    <div
+      ref={containerRef}
+      className="graph-canvas-wrapper"
+      onContextMenu={(e) => {
+        e.preventDefault();
+        const world = screenToWorld(e.clientX, e.clientY);
+        onOpenContextMenu(e, "canvas", undefined, world);
+      }}
+      onClick={() => {
+        if (connectingFrom) {
+          setConnectingFrom(null);
+          onCancelConnect?.();
+        }
+      }}
+    >
+      {/* Floating Canvas Header Overlay (Top Left) */}
+      <div className="graph-canvas-overlay-topleft">
+        <div className="graph-badge-pill">
+          <span className="graph-badge-title">Grafo de ideas</span>
+          <span className="graph-badge-count">
+            {concepts.length} conceptos · {links.length} relaciones
+          </span>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            className="graph-overlay-btn"
+            onClick={() => onNewConceptAt?.(0, 0)}
+            title="Crear un nuevo concepto"
+          >
+            <IconPlus />
+            <span>Concepto</span>
+          </button>
+          <button
+            type="button"
+            className="graph-overlay-btn"
+            onClick={handleResetZoom}
+            title="Centrar vista (100%)"
+          >
+            <IconRefresh />
+            <span>Centrar</span>
+          </button>
+        </div>
       </div>
 
-      {/* Guide pill */}
-      <div className="absolute bottom-3 left-3 z-10 px-2.5 py-1 rounded-md bg-paper/90 border border-slate-800 text-2xs text-slate-400">
-        💡 <strong>Tip:</strong> Arrastra el círculo azul del nodo hacia otro para conectar ideas al vuelo.
+      {/* Floating Zoom Toolbar Overlay (Bottom Right) */}
+      <div className="graph-canvas-overlay-bottomright">
+        <div className="graph-zoom-toolbar">
+          <button
+            type="button"
+            className="graph-zoom-btn"
+            onClick={() => handleZoom(1.25)}
+            title="Acercar (+)"
+          >
+            ＋
+          </button>
+          <span className="graph-zoom-val" title="Escala actual">
+            {zoomScale}%
+          </span>
+          <button
+            type="button"
+            className="graph-zoom-btn"
+            onClick={() => handleZoom(0.8)}
+            title="Alejar (-)"
+          >
+            －
+          </button>
+          <button
+            type="button"
+            className="graph-zoom-btn text-2xs px-2"
+            onClick={handleResetZoom}
+            title="Restablecer vista (1:1)"
+          >
+            Centrar
+          </button>
+          <button
+            type="button"
+            className="graph-zoom-btn text-2xs px-2"
+            onClick={handleReorganize}
+            title="Reorganizar nodos automáticamente"
+          >
+            Ordenar
+          </button>
+        </div>
       </div>
 
-      <svg ref={svgRef} className="w-full h-full cursor-grab active:cursor-grabbing select-none" role="group" aria-label="Grafo de conocimiento D3">
+      {/* Floating Hint Overlay (Bottom Left) */}
+      <div className="graph-canvas-overlay-bottomleft">
+        <span className="text-2xs text-slate-400">
+          💡 Arrastra los 4 puntos azules de cualquier nodo para conectar como en Figma · Clic derecho para opciones
+        </span>
+      </div>
+
+      {/* SVG Canvas with D3 Viewport */}
+      <svg
+        ref={svgRef}
+        className="graph-canvas-svg"
+        role="group"
+        aria-label="Grafo de conocimiento interactivo"
+      >
         <defs>
-          <marker id="d3-arrow" viewBox="0 0 10 10" refX="28" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--blue-chalk, #7fb0d8)" opacity="0.8" />
+          {/* Dot matrix grid pattern for infinite canvas feel */}
+          <pattern id="d3-dot-grid" width="28" height="28" patternUnits="userSpaceOnUse">
+            <circle cx="2" cy="2" r="1.2" fill="var(--chalk-soft, #475569)" opacity="0.25" />
+          </pattern>
+
+          {/* Arrow markers */}
+          <marker
+            id="d3-arrow"
+            viewBox="0 0 10 10"
+            refX="30"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--blue-chalk, #7fb0d8)" opacity="0.85" />
+          </marker>
+          <marker
+            id="d3-arrow-active"
+            viewBox="0 0 10 10"
+            refX="10"
+            refY="5"
+            markerWidth="7"
+            markerHeight="7"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--gold-chalk, #d9b168)" />
           </marker>
         </defs>
 
+        {/* Canvas background dot grid */}
+        <rect width="100%" height="100%" fill="url(#d3-dot-grid)" />
+
         <g className="d3-viewport">
-          {/* Link lines */}
+          {/* Link paths */}
           {linksRef.current.map((link) => {
             const isExplicit = !!link.label;
             const isSelected = selection?.kind === "link" && selection.id === link.id;
-            const dimmed = connectedNodeIds.size > 0 && !connectedNodeIds.has(link.fromId) && !connectedNodeIds.has(link.toId);
+            const dimmed =
+              connectedNodeIds.size > 0 &&
+              !connectedNodeIds.has(link.fromId) &&
+              !connectedNodeIds.has(link.toId);
 
             return (
-              <line
+              <path
                 key={link.id}
-                className={`d3-link-line transition-opacity duration-200 ${
-                  isExplicit ? "stroke-[1.75px] stroke-sky-400/70" : "stroke-[1px] stroke-slate-700/40 stroke-dasharray-[3,3]"
-                } ${isSelected ? "stroke-amber-400 stroke-[2.5px]" : ""} ${dimmed ? "opacity-15" : "opacity-85"}`}
+                className={`d3-link-path transition-all duration-200 cursor-pointer ${
+                  isExplicit
+                    ? "stroke-[2px] stroke-sky-400/75 hover:stroke-sky-300 fill-none"
+                    : "stroke-[1.2px] stroke-slate-700/50 stroke-dasharray-[4,4] fill-none"
+                } ${isSelected ? "stroke-amber-400 stroke-[3px]" : ""} ${dimmed ? "opacity-15" : "opacity-90"}`}
                 markerEnd={isExplicit ? "url(#d3-arrow)" : undefined}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (isExplicit) onSelect({ kind: "link", id: link.id });
                 }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (isExplicit) {
+                    onOpenContextMenu(e, "link", link.id, undefined, undefined, {
+                      label: link.label,
+                    });
+                  }
+                }}
               />
             );
           })}
 
-          {/* Interactive rubberband drag line */}
+          {/* Interactive rubberband drag line (Figma style) */}
           {dragLine && (
-            <line
-              x1={dragLine.x1}
-              y1={dragLine.y1}
-              x2={dragLine.x2}
-              y2={dragLine.y2}
+            <path
+              d={`M ${dragLine.x1} ${dragLine.y1} C ${(dragLine.x1 + dragLine.x2) / 2} ${dragLine.y1}, ${(dragLine.x1 + dragLine.x2) / 2} ${dragLine.y2}, ${dragLine.x2} ${dragLine.y2}`}
+              fill="none"
               stroke="var(--gold-chalk, #d9b168)"
               strokeWidth="2.5"
-              strokeDasharray="4 4"
+              strokeDasharray="5 4"
+              markerEnd="url(#d3-arrow-active)"
               className="pointer-events-none"
             />
           )}
@@ -399,21 +609,31 @@ export function GraphCanvasD3({
             .filter((l) => !!l.label)
             .map((link) => {
               const isSelected = selection?.kind === "link" && selection.id === link.id;
-              const dimmed = connectedNodeIds.size > 0 && !connectedNodeIds.has(link.fromId) && !connectedNodeIds.has(link.toId);
+              const dimmed =
+                connectedNodeIds.size > 0 &&
+                !connectedNodeIds.has(link.fromId) &&
+                !connectedNodeIds.has(link.toId);
 
               return (
                 <text
                   key={`lbl-${link.id}`}
                   className={`d3-link-label text-[11px] font-mono cursor-pointer transition-opacity duration-200 ${
-                    isSelected ? "fill-amber-300 font-bold" : "fill-slate-400 hover:fill-slate-200"
-                  } ${dimmed ? "opacity-15" : "opacity-90"}`}
+                    isSelected ? "fill-amber-300 font-bold" : "fill-slate-300 hover:fill-slate-100"
+                  } ${dimmed ? "opacity-15" : "opacity-95"}`}
                   textAnchor="middle"
                   onClick={(e) => {
                     e.stopPropagation();
                     onSelect({ kind: "link", id: link.id });
                   }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    onOpenContextMenu(e, "link", link.id, undefined, undefined, {
+                      label: link.label,
+                    });
+                  }}
                 >
-                  {truncate(link.label, 20)}
+                  {truncate(link.label, 24)}
                 </text>
               );
             })}
@@ -422,79 +642,146 @@ export function GraphCanvasD3({
           {nodesRef.current.map((node) => {
             const isSelected = selection?.kind === "node" && selection.id === node.id;
             const isConnected = connectedNodeIds.has(node.id);
-            const dimmed = connectedNodeIds.size > 0 && !isConnected;
+            const isSnapTarget = snapTargetId === node.id;
+            const isHovered = hoveredNodeId === node.id;
+            const dimmed =
+              (connectedNodeIds.size > 0 && !isConnected) ||
+              (!!searchQuery &&
+                !node.label.toLowerCase().includes(searchQuery.toLowerCase()));
             const isClass = node.kind === "class";
+
+            // 4 Figma connector handle positions (top, right, bottom, left)
+            const handles = [
+              { id: "top", cx: 0, cy: -node.h / 2, dx: 0, dy: -node.h / 2 },
+              { id: "right", cx: node.w / 2, cy: 0, dx: node.w / 2, dy: 0 },
+              { id: "bottom", cx: 0, cy: node.h / 2, dx: 0, dy: node.h / 2 },
+              { id: "left", cx: -node.w / 2, cy: 0, dx: -node.w / 2, dy: 0 },
+            ];
 
             return (
               <g
                 key={node.id}
-                className={`d3-node-group cursor-pointer transition-opacity duration-200 ${dimmed ? "opacity-25" : "opacity-100"}`}
+                className={`d3-node-group cursor-grab active:cursor-grabbing transition-opacity duration-200 ${
+                  dimmed ? "opacity-25" : "opacity-100"
+                }`}
                 onPointerDown={(e) => handleNodePointerDown(e, node)}
                 onClick={(e) => {
                   e.stopPropagation();
                   onSelect({ kind: "node", id: node.id });
                 }}
+                onMouseEnter={() => setHoveredNodeId(node.id)}
+                onMouseLeave={() => setHoveredNodeId(null)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const world = screenToWorld(e.clientX, e.clientY);
+                  onOpenContextMenu(e, "node", node.id, world, {
+                    kind: node.kind,
+                    label: node.label,
+                  });
+                }}
               >
+                {/* Magnetic Snap Target Halo (when dragging connection) */}
+                {isSnapTarget && (
+                  <rect
+                    x={-node.w / 2 - 6}
+                    y={-node.h / 2 - 6}
+                    width={node.w + 12}
+                    height={node.h + 12}
+                    rx={18}
+                    className="fill-none stroke-amber-400 stroke-2 animate-pulse pointer-events-none"
+                  />
+                )}
+
                 {/* Node Box */}
                 <rect
                   x={-node.w / 2}
                   y={-node.h / 2}
                   width={node.w}
                   height={node.h}
-                  rx={12}
+                  rx={14}
                   className={`transition-colors duration-150 ${
                     isClass
                       ? isSelected
                         ? "fill-sky-950 stroke-sky-400 stroke-2"
-                        : "fill-slate-900/90 stroke-slate-700/80 stroke-1 hover:stroke-slate-500"
+                        : "fill-surface-deep stroke-slate-700 stroke-1 hover:stroke-slate-500"
                       : isSelected
                         ? "fill-amber-950 stroke-amber-400 stroke-2"
                         : "fill-card stroke-slate-800 stroke-1 hover:stroke-slate-600"
                   }`}
                 />
 
-                {/* Node Label */}
+                {/* Node Type Pill indicator on Class */}
+                {isClass && (
+                  <text
+                    x={-node.w / 2 + 14}
+                    y={-node.h / 2 + 14}
+                    className="text-[9px] uppercase tracking-wider font-mono fill-sky-400 font-semibold pointer-events-none select-none"
+                  >
+                    Clase
+                  </text>
+                )}
+
+                {/* Node Label Text */}
                 <text
                   x={-node.w / 2 + 14}
-                  y={4}
+                  y={isClass ? 8 : 4}
                   className={`text-xs select-none pointer-events-none font-medium ${
-                    isClass ? "fill-sky-200 font-semibold" : "fill-slate-200"
+                    isClass ? "fill-sky-100 font-semibold" : "fill-slate-100"
                   }`}
                 >
-                  {truncate(node.label, isClass ? 22 : 18)}
+                  {truncate(node.label, isClass ? 24 : 20)}
                 </text>
 
-                {/* Connection Handle (Anchor pill on right side) */}
-                <circle
-                  cx={node.w / 2 - 2}
-                  cy={0}
-                  r={7}
-                  className="fill-sky-500/80 hover:fill-amber-400 transition-colors cursor-crosshair stroke-paper stroke-2"
-                  onPointerDown={(e) => handleConnectorStart(e, node.id)}
-                >
-                  <title>Arrastra para conectar con otro nodo</title>
-                </circle>
+                {/* 4 Figma-Style Connection Anchors (Top, Right, Bottom, Left) */}
+                {(isHovered || connectingFrom === node.id || isSelected) && (
+                  <g className="figma-connection-anchors">
+                    {handles.map((h) => (
+                      <circle
+                        key={h.id}
+                        cx={h.cx}
+                        cy={h.cy}
+                        r={6}
+                        className="fill-sky-400 hover:fill-amber-400 stroke-paper stroke-2 cursor-crosshair transition-transform hover:scale-125"
+                        onPointerDown={(e) =>
+                          handleConnectorStart(e, node.id, { dx: h.dx, dy: h.dy })
+                        }
+                      >
+                        <title>Arrastra para conectar con otro nodo (estilo Figma)</title>
+                      </circle>
+                    ))}
+                  </g>
+                )}
               </g>
             );
           })}
         </g>
       </svg>
 
-      {/* Floating relation modal when connection is dropped */}
+      {/* Floating Relation Creator Modal when connection is dropped */}
       {pendingRelation && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
-          <div className="w-full max-w-sm p-4 rounded-xl bg-surface-deep border border-slate-700 shadow-xl space-y-3">
-            <h4 className="text-sm font-semibold text-slate-100">
-              Conectar conocimiento
-            </h4>
+        <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="w-full max-w-sm p-4 rounded-xl bg-surface-deep border border-slate-700 shadow-2xl space-y-3 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-slate-100 flex items-center gap-1.5">
+                <IconLink /> Relacionar conceptos
+              </h4>
+              <button
+                type="button"
+                className="text-slate-400 hover:text-slate-200"
+                onClick={() => setPendingRelation(null)}
+              >
+                <IconClose />
+              </button>
+            </div>
             <p className="text-xs text-slate-400">
-              ¿Cómo se relacionan estas dos ideas?
+              ¿Por qué se conectan estas dos ideas? Escribe su relación:
             </p>
             <input
               autoFocus
-              className="w-full p-2 text-xs rounded bg-input text-slate-200 border border-slate-700"
+              className="w-full p-2 text-xs rounded bg-input text-slate-100 border border-slate-700"
               value={relationLabel}
-              placeholder="Ej. causa, es parte de, contrasta con…"
+              placeholder="Ej. causa, deriva de, es parte de, contrasta con…"
               onChange={(e) => setRelationLabel(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleConfirmPendingRelation()}
             />
@@ -513,7 +800,7 @@ export function GraphCanvasD3({
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
               <button
                 type="button"
-                className="btn-quiet text-xs"
+                className="btn-quiet text-xs py-1 px-3"
                 onClick={() => setPendingRelation(null)}
                 disabled={creating}
               >
@@ -521,7 +808,7 @@ export function GraphCanvasD3({
               </button>
               <button
                 type="button"
-                className="btn-primary text-xs"
+                className="btn-primary text-xs py-1 px-3"
                 onClick={handleConfirmPendingRelation}
                 disabled={creating || !relationLabel.trim()}
               >
