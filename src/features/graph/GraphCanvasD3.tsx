@@ -284,21 +284,23 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
       nodesRef.current = d3Nodes;
       linksRef.current = d3Links;
 
-      // 3. Initialize Force Simulation with gentle decay
+      // 3. Initialize Force Simulation with calm fluid damping & zero-torque centering
       const sim = d3
         .forceSimulation<D3Node>(d3Nodes)
+        .velocityDecay(0.65) // High damping prevents angular swing/orbiting
         .force(
           "link",
           d3
             .forceLink<D3Node, D3Link>(d3Links)
             .id((d) => d.id)
-            .distance((d) => (d.label ? 190 : 100))
-            .strength((d) => (d.label ? 0.6 : 0.8)),
+            .distance((d) => (d.label ? 180 : 110))
+            .strength((d) => (d.label ? 0.45 : 0.35)),
         )
-        .force("charge", d3.forceManyBody().strength(-450))
-        .force("collide", d3.forceCollide().radius(80).strength(0.8))
-        .force("center", d3.forceCenter(width / 2, height / 2).strength(0.04))
-        .alphaDecay(0.035);
+        .force("charge", d3.forceManyBody().strength(-350).distanceMax(550))
+        .force("collide", d3.forceCollide().radius(78).strength(0.85))
+        .force("x", d3.forceX(width / 2).strength(0.03)) // Zero-curl orthogonal X centering
+        .force("y", d3.forceY(height / 2).strength(0.03)) // Zero-curl orthogonal Y centering
+        .alphaDecay(0.04);
 
       simRef.current = sim;
 
@@ -463,31 +465,41 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
       };
     };
 
-    // Node Drag handlers (D3 force drag)
+    // Node Drag handlers (D3 force drag with movement-threshold to avoid hold-spin)
     const handleNodePointerDown = (e: React.PointerEvent, node: D3Node) => {
       if (e.button !== 0 || connectingFrom) return;
       e.stopPropagation();
-      const sim = simRef.current;
-      if (!sim) return;
 
-      (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-      sim.alphaTarget(0.3).restart();
-      node.fx = node.x;
-      node.fy = node.y;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      let isDragging = false;
+      const capturedTarget = e.currentTarget as HTMLElement;
 
       const handlePointerMove = (moveEvent: PointerEvent) => {
+        const dist = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
+        // Only start drag if movement exceeds threshold (prevent hold from activating forces)
+        if (!isDragging && dist < 4) return;
+
+        if (!isDragging) {
+          isDragging = true;
+          capturedTarget.setPointerCapture?.(e.pointerId);
+          simRef.current?.alphaTarget(0.12).restart();
+        }
+
         const world = screenToWorld(moveEvent.clientX, moveEvent.clientY);
         node.fx = world.x;
         node.fy = world.y;
       };
 
       const handlePointerUp = (upEvent: PointerEvent) => {
-        (upEvent.target as HTMLElement).releasePointerCapture?.(upEvent.pointerId);
         window.removeEventListener("pointermove", handlePointerMove);
         window.removeEventListener("pointerup", handlePointerUp);
-        sim.alphaTarget(0);
-        node.fx = null;
-        node.fy = null;
+        if (isDragging) {
+          capturedTarget.releasePointerCapture?.(upEvent.pointerId);
+          simRef.current?.alphaTarget(0);
+          node.fx = null;
+          node.fy = null;
+        }
       };
 
       window.addEventListener("pointermove", handlePointerMove);
@@ -909,7 +921,7 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
                         : isHovered
                           ? "drop-shadow(0 4px 12px rgba(0, 0, 0, 0.35))"
                           : undefined,
-                      transition: "all 0.15s ease",
+                      transition: "stroke 0.15s ease, filter 0.15s ease",
                     }}
                   />
 
