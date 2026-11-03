@@ -8,9 +8,75 @@ const OPTION_LENGTH_TOLERANCE: f64 = 0.25;
 const OPTION_LENGTH_MIN_ABS_DIFF: usize = 25;
 
 /// Pure length-bias rule over option character counts.
-fn options_are_length_biased(min_len: usize, max_len: usize) -> bool {
+pub fn options_are_length_biased(min_len: usize, max_len: usize) -> bool {
     let diff = max_len.saturating_sub(min_len);
     max_len > 0 && diff as f64 / max_len as f64 > OPTION_LENGTH_TOLERANCE && diff > OPTION_LENGTH_MIN_ABS_DIFF
+}
+
+/// Severity levels for adaptive slack in pedagogical assertions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
+pub enum ValidationSeverity {
+    Optimal,
+    Warning,
+    Critical,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ValidationFinding {
+    pub field: String,
+    pub message: String,
+    pub severity: ValidationSeverity,
+    pub can_surgical_repair: bool,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ValidationReport {
+    pub findings: Vec<ValidationFinding>,
+}
+
+impl ValidationReport {
+    pub fn is_acceptable(&self) -> bool {
+        !self.findings.iter().any(|f| f.severity == ValidationSeverity::Critical)
+    }
+
+    pub fn warnings(&self) -> Vec<&ValidationFinding> {
+        self.findings.iter().filter(|f| f.severity == ValidationSeverity::Warning).collect()
+    }
+
+    pub fn criticals(&self) -> Vec<&ValidationFinding> {
+        self.findings.iter().filter(|f| f.severity == ValidationSeverity::Critical).collect()
+    }
+}
+
+pub fn count_words(text: &str) -> usize {
+    text.split_whitespace().count()
+}
+
+/// Evaluates option set length using adaptive slack (Tier 1 Optimal, Tier 2 Warning/Slack, Tier 3 Critical).
+pub fn evaluate_options_length_slack(options: &[String]) -> ValidationSeverity {
+    if options.len() < 2 {
+        return ValidationSeverity::Optimal;
+    }
+    let char_lens: Vec<usize> = options.iter().map(|o| o.chars().count()).collect();
+
+    let min_chars = *char_lens.iter().min().unwrap_or(&0);
+    let max_chars = *char_lens.iter().max().unwrap_or(&0);
+
+    let char_diff = max_chars.saturating_sub(min_chars);
+    let rel_char_diff = if max_chars > 0 { char_diff as f64 / max_chars as f64 } else { 0.0 };
+
+    // Critical length bias: relative difference > 25% AND absolute difference > 25 characters
+    if options_are_length_biased(min_chars, max_chars) {
+        return ValidationSeverity::Critical;
+    }
+
+    // Tier 1: Optimal (variation <= 15% and absolute diff <= 15 chars)
+    if rel_char_diff <= 0.15 && char_diff <= 15 {
+        return ValidationSeverity::Optimal;
+    }
+
+    // Tier 2: Adaptive Slack (variation between 15% and 25%, or absolute gap <= 25 chars)
+    ValidationSeverity::Warning
 }
 
 const JUSTIFICATION_CONNECTORS: [&str; 6] = ["porque", "ya que", "debido a", "puesto que", "lo cual significa", "es decir que"];
@@ -224,6 +290,48 @@ fn visual_violations(visual: &StaticVisualSpec, field: &str) -> Vec<String> {
             }
         }
         StaticVisualSpec::ConceptualMatrix { contrast_focus, .. } => scan_text(&format!("{field}.contrastFocus"), contrast_focus, &mut v),
+        StaticVisualSpec::InteractiveModule { spec, challenge, caption } => {
+            use crate::domain::notebook::InteractiveModuleSpec as M;
+            if let Some(c) = caption {
+                scan_text(&format!("{field}.caption"), c, &mut v);
+            }
+            if let Some(ch) = challenge {
+                scan_text(&format!("{field}.challenge.prompt"), &ch.prompt, &mut v);
+            }
+            match spec {
+                M::RelationExplorer { output, variables } => {
+                    scan_text(&format!("{field}.output.label"), &output.label, &mut v);
+                    variables.iter().for_each(|x| scan_text(&format!("{field}.variables.{}", x.sym), &x.label, &mut v));
+                }
+                M::FunctionPlot { params, .. } => params.iter().for_each(|x| scan_text(&format!("{field}.params.{}", x.sym), &x.label, &mut v)),
+                M::VectorSum { vectors, .. } => vectors.iter().for_each(|x| scan_text(&format!("{field}.vectors"), &x.label, &mut v)),
+                M::ParticleGradient { high_label, low_label, .. } => {
+                    scan_text(&format!("{field}.highLabel"), high_label, &mut v);
+                    scan_text(&format!("{field}.lowLabel"), low_label, &mut v);
+                }
+                M::Timeline { events } => events.iter().for_each(|e| {
+                    scan_text(&format!("{field}.events.label"), &e.label, &mut v);
+                    scan_text(&format!("{field}.events.detail"), &e.detail, &mut v);
+                }),
+            }
+        }
+        StaticVisualSpec::DiagramSpec { caption, title, nodes, .. } => {
+            if let Some(c) = caption {
+                scan_text(&format!("{field}.caption"), c, &mut v);
+            }
+            if let Some(t) = title {
+                scan_text(&format!("{field}.title"), t, &mut v);
+            }
+            for (idx, node) in nodes.iter().enumerate() {
+                scan_text(&format!("{field}.nodes[{idx}].label"), &node.label, &mut v);
+                if let Some(sub) = &node.subtext {
+                    scan_text(&format!("{field}.nodes[{idx}].subtext"), sub, &mut v);
+                }
+                if let Some(note) = &node.explanation {
+                    scan_text(&format!("{field}.nodes[{idx}].explanation"), note, &mut v);
+                }
+            }
+        }
     }
     v
 }
@@ -546,5 +654,23 @@ mod tests {
         assert!(block_guardrail_violations(&mission(true, hint.clone())).iter().any(|m| m.contains("transferencia")));
         assert!(block_guardrail_violations(&mission(true, vec![])).iter().all(|m| !m.contains("transferencia")));
         assert!(block_guardrail_violations(&mission(false, hint)).iter().all(|m| !m.contains("transferencia")));
+    }
+
+    #[test]
+    fn test_evaluate_options_length_slack_tiers() {
+        // Tier 1: Optimal (exact or <= 15%)
+        let opt1 = vec!["Diez palabras para la primera opción de respuesta corta".to_string(), "Diez palabras para la segunda opción de respuesta corta".to_string()];
+        assert_eq!(evaluate_options_length_slack(&opt1), ValidationSeverity::Optimal);
+
+        // Tier 2: Warning with Slack (51 vs 61 chars, 16.4% relative diff > 15%, but diff 10 <= 25 chars)
+        let opt2 = vec![
+            "Esta opción cuenta con exactamente cincuenta y un c".to_string(),
+            "Esta otra alternativa posee sesenta y un caracteres en total.".to_string(),
+        ];
+        assert_eq!(evaluate_options_length_slack(&opt2), ValidationSeverity::Warning);
+
+        // Tier 3: Critical (20 chars vs 100 chars, severe bias)
+        let opt3 = vec!["a".repeat(20), "b".repeat(100)];
+        assert_eq!(evaluate_options_length_slack(&opt3), ValidationSeverity::Critical);
     }
 }

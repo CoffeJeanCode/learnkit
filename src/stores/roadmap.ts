@@ -207,6 +207,9 @@ interface RoadmapState {
   setRestoreHistory: (on: boolean) => void;
 }
 
+let activeOpeningPromise: Promise<void> | null = null;
+let openingSessionId: string | null = null;
+
 export const useRoadmap = create<RoadmapState>((set, get) => {
   /** Applies a successful turn: session swap + assistant bubble (skipped when
    *  the turn legitimately produced no text, e.g. a mid-battery answer). */
@@ -511,8 +514,12 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
     },
 
     openSession: async (id) => {
+      if (get().opening && openingSessionId === id && activeOpeningPromise) {
+        return activeOpeningPromise;
+      }
       if (get().sending || get().opening) return;
       const epoch = get().epoch + 1;
+      openingSessionId = id;
       set({
         session: null,
         messages: [],
@@ -527,36 +534,42 @@ export const useRoadmap = create<RoadmapState>((set, get) => {
         opening: true,
         epoch,
       });
-      try {
-        const loaded = await getRoadmapSession(id);
-        // A session sealed before the SQLite import existed carries no course
-        // ids — the header's Plan/Clases sections need them, so backfill here
-        // (idempotent: it no-ops once the ids are set). No-op for everything
-        // else, including non-sealed sessions (it requires a sealed syllabus).
-        const session =
-          loaded.status === "sealed" && (!loaded.imported_course_id || !loaded.first_class_id)
-            ? await ensureCourseImported(id).catch(() => loaded)
-            : loaded;
-        if (get().epoch !== epoch) return;
-        // The persisted log restores the conversation; the filter (a UI
-        // choice, persisted) mutes the restore without touching the disk copy.
-        writeActiveSessionId(id);
-        set({ session, messages: get().restoreHistory ? toChatMessages(session.messages) : [], opening: false });
-        // The header's sections belong to the session now open: load ITS
-        // classes so Plan/Clases stop showing the previous session's course.
-        if (session.imported_course_id) {
-          useNotebookNav.getState().openCourse(session.imported_course_id).catch(() => useNotebookNav.getState().clear());
-        } else {
-          useNotebookNav.getState().clear();
+      activeOpeningPromise = (async () => {
+        try {
+          const loaded = await getRoadmapSession(id);
+          // A session sealed before the SQLite import existed carries no course
+          // ids — the header's Plan/Clases sections need them, so backfill here
+          // (idempotent: it no-ops once the ids are set). No-op for everything
+          // else, including non-sealed sessions (it requires a sealed syllabus).
+          const session =
+            loaded.status === "sealed" && (!loaded.imported_course_id || !loaded.first_class_id)
+              ? await ensureCourseImported(id).catch(() => loaded)
+              : loaded;
+          if (get().epoch !== epoch) return;
+          // The persisted log restores the conversation; the filter (a UI
+          // choice, persisted) mutes the restore without touching the disk copy.
+          writeActiveSessionId(id);
+          set({ session, messages: get().restoreHistory ? toChatMessages(session.messages) : [], opening: false });
+          // The header's sections belong to the session now open: load ITS
+          // classes so Plan/Clases stop showing the previous session's course.
+          if (session.imported_course_id) {
+            useNotebookNav.getState().openCourse(session.imported_course_id).catch(() => useNotebookNav.getState().clear());
+          } else {
+            useNotebookNav.getState().clear();
+          }
+        } catch (e) {
+          if (get().epoch !== epoch) return;
+          // The persisted id pointed at a session that no longer exists (it
+          // was deleted from another window/session) — forget it so the next
+          // launch doesn't fail the same way.
+          if (readActiveSessionId() === id) writeActiveSessionId(null);
+          set({ error: tauriError(e).message, opening: false });
+        } finally {
+          activeOpeningPromise = null;
+          openingSessionId = null;
         }
-      } catch (e) {
-        if (get().epoch !== epoch) return;
-        // The persisted id pointed at a session that no longer exists (it
-        // was deleted from another window/session) — forget it so the next
-        // launch doesn't fail the same way.
-        if (readActiveSessionId() === id) writeActiveSessionId(null);
-        set({ error: tauriError(e).message, opening: false });
-      }
+      })();
+      return activeOpeningPromise;
     },
 
     setRestoreHistory: (on) => {

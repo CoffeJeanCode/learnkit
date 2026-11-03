@@ -84,7 +84,7 @@ Para cualquier otro nivel: llama
 Una pregunta que se puede responder por descarte estadístico, sin evaluar el modelo mental real,
 está mal escrita. Prohibido redactar preguntas de examen memorístico. Toda pregunta debe cumplir:
 1. **Simetría textual**: las opciones (2-4) deben tener longitudes de texto SIMILARES entre sí
-   (variación menor al 15% de caracteres) — la opción correcta NUNCA más larga ni más explicada
+   (extensión y nivel de detalle similares, sin sesgo de longitud) — la opción correcta NUNCA más larga ni más explicada
    que las demás. Redacta primero todas las opciones, luego revisa que ninguna delate la respuesta
    por su tamaño.
 2. **Cero justificación dentro de la opción**: el texto de una opción es solo la afirmación —

@@ -77,3 +77,58 @@ export function drawPiece(ctx: CanvasRenderingContext2D, piece: Piece, lifted: b
   ctx.restore();
   ctx.restore();
 }
+
+/** Draws a translucent ghost preview showing where a brick will snap on drop. */
+export function drawSnapGhost(ctx: CanvasRenderingContext2D, piece: Piece): void {
+  const { w, h } = pieceSize(piece);
+  const base = TONE_COLOR[piece.tone];
+  const stud = BRICK_UNIT * 0.5;
+
+  ctx.save();
+  ctx.shadowColor = base;
+  ctx.shadowBlur = 12;
+
+  // Ghost body
+  ctx.fillStyle = shade(base, 0.1);
+  ctx.globalAlpha = 0.38;
+  ctx.beginPath();
+  ctx.roundRect(-w / 2, -h / 2, w, h, 4);
+  ctx.fill();
+
+  // Ghost studs on top
+  for (let i = 0; i < piece.cols; i++) {
+    const cx = -w / 2 + BRICK_UNIT * (i + 0.5);
+    ctx.beginPath();
+    ctx.roundRect(cx - stud / 2, -h / 2 - 5, stud, 8, 2);
+    ctx.fill();
+  }
+
+  // Dashed outline
+  ctx.globalAlpha = 0.85;
+  ctx.lineWidth = 1.8;
+  ctx.strokeStyle = "#ffffff";
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.roundRect(-w / 2, -h / 2, w, h, 4);
+  ctx.stroke();
+
+  for (let i = 0; i < piece.cols; i++) {
+    const cx = -w / 2 + BRICK_UNIT * (i + 0.5);
+    ctx.beginPath();
+    ctx.roundRect(cx - stud / 2, -h / 2 - 5, stud, 8, 2);
+    ctx.stroke();
+  }
+
+  // Interlocking alignment dots at bottom
+  ctx.setLineDash([]);
+  ctx.fillStyle = "#ffffff";
+  ctx.globalAlpha = 0.9;
+  for (let i = 0; i < piece.cols; i++) {
+    const cx = -w / 2 + BRICK_UNIT * (i + 0.5);
+    ctx.beginPath();
+    ctx.arc(cx, h / 2 - 2, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}

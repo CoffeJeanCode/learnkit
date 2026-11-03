@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::domain::agent::AgentDefinition;
-use crate::domain::provider::ProviderConfig;
+use crate::domain::provider::{ModelTierConfig, ProviderConfig};
 use crate::domain::roadmap::RoadmapSession;
 use crate::error::{AppError, AppResult};
 
@@ -45,6 +45,19 @@ impl FileStore {
     pub fn load_active_provider(&self) -> Option<String> {
         let raw = std::fs::read_to_string(self.active_provider_path()).ok()?;
         serde_json::from_str::<Option<String>>(&raw).ok().flatten()
+    }
+
+    fn model_tiers_path(&self) -> PathBuf {
+        self.dir.join("model_tiers.json")
+    }
+
+    pub fn save_model_tiers(&self, config: &ModelTierConfig) -> AppResult<()> {
+        Self::write_json(&self.model_tiers_path(), config)
+    }
+
+    pub fn load_model_tiers(&self) -> Option<ModelTierConfig> {
+        let raw = std::fs::read_to_string(self.model_tiers_path()).ok()?;
+        serde_json::from_str::<ModelTierConfig>(&raw).ok()
     }
 
     pub fn save_agents(&self, defs: &[AgentDefinition]) -> AppResult<()> {

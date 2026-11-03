@@ -310,6 +310,7 @@ mod tests {
             content_json: serde_json::json!({ "title": format!("t{i}") }),
             order_index: i,
             status,
+            concept_node_id: None,
             attempt_count: attempts,
             last_feedback: None,
         }

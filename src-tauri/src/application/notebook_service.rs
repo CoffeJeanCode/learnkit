@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::domain::learner_memory::{LearnerCognitiveMemory, RetrievalOutcome, LOCAL_LEARNER_ID};
-use crate::domain::notebook::{BlockUpdate, ClassRecord, Concept, ConceptGraph, ConceptLink, Course, DiagnosticBatteryState, DynamicBlockType, NotebookBlock};
+use crate::domain::notebook::{BlockUpdate, ClassRecord, Concept, ConceptGraph, ConceptLink, Course, DiagnosticBatteryState, DynamicBlockType, NotebookBlock, NotebookComment};
 use crate::domain::capability_map::{self, CapabilityMap};
 use crate::domain::study::{self, StudyEventKind, StudyReport, StudySettings, VariantMode};
 use crate::domain::skill_status::{self, SkillStatus};
@@ -38,16 +38,26 @@ pub struct NotebookService {
     /// the background, replacing the block in place if it rejects it. `false`
     /// keeps the critic on the blocking path (tests that pin that behavior).
     defer_critic: bool,
+    /// When `true`, displaying a gate triggers speculative prefetching of the
+    /// following block in the background. Enabled via `LEARNKIT_PREFETCH=1`.
+    prefetch: bool,
 }
 
 impl NotebookService {
     pub fn new(store: NotebookStore, orchestrator: Arc<Orchestrator>) -> Self {
-        Self { store, orchestrator, defer_critic: true }
+        let prefetch = std::env::var("LEARNKIT_PREFETCH").map_or(false, |v| v == "1" || v.eq_ignore_ascii_case("true"));
+        Self { store, orchestrator, defer_critic: true, prefetch }
     }
 
     /// Keeps the LLM critic on the blocking generate→critique→retry path.
     pub fn with_blocking_critic(mut self) -> Self {
         self.defer_critic = false;
+        self
+    }
+
+    /// Configures speculative prefetching for gates.
+    pub fn with_prefetch(mut self, enabled: bool) -> Self {
+        self.prefetch = enabled;
         self
     }
 
@@ -200,6 +210,22 @@ impl NotebookService {
     /// screen renders, `None` if this course has no battery on record.
     /// The curated web resources of one class (none until its course's research
     /// has run, or when nothing was found).
+    pub fn upsert_comment(&self, comment: &NotebookComment) -> AppResult<NotebookComment> {
+        self.store.upsert_comment(comment)
+    }
+
+    pub fn list_comments_by_notebook(&self, notebook_id: &str) -> AppResult<Vec<NotebookComment>> {
+        self.store.list_comments_by_notebook(notebook_id)
+    }
+
+    pub fn list_comments_by_course(&self, course_id: &str) -> AppResult<Vec<NotebookComment>> {
+        self.store.list_comments_by_course(course_id)
+    }
+
+    pub fn delete_comment(&self, comment_id: &str) -> AppResult<bool> {
+        self.store.delete_comment(comment_id)
+    }
+
     pub fn get_class_resources(&self, class_id: &str) -> AppResult<Vec<crate::domain::resources::ClassResource>> {
         self.store.get_class_resources(class_id)
     }

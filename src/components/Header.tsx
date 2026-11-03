@@ -6,20 +6,17 @@ import { displaySessionTitle, useRoadmap } from "../stores/roadmap";
 import { useUi } from "../stores/ui";
 import { useUpdater } from "../stores/updater";
 import { SessionsDrawer } from "./SessionsDrawer";
+import {
+  IconArrowLeft,
+  IconGallery,
+  IconGear,
+  IconGraph,
+  IconMenu,
+  IconPencil,
+  IconRefresh,
+  IconWrench,
+} from "./Icons";
 
-// Top bar replacing the old sidebar: brand + the ACTIVE SESSION's two
-// sections (Sesión | Clases) on the left, session + settings actions on the
-// right. "Sesión" is the merged Conversación/Plan section — its internal
-// Conversación|Plan filter lives inside `SessionView`, not here. The session
-// is the container: its chip names it, and the tabs only exist for sections
-// that session actually has — "Clases" only once it owns a course (i.e. it's
-// sealed), so a deleted session can't leave a tab pointing at classes that
-// are already gone.
-//
-// "Nueva sesión" only RESETS the draft state and goes home — it never
-// persists anything (a session is created in the DB when the first message
-// actually sends). The old second button ("Nueva clase") did exactly the
-// same thing under a different label, so it's gone.
 export function Header() {
   const { view, lastMainView, setView } = useUi();
   const reset = useRoadmap((s) => s.reset);
@@ -33,62 +30,43 @@ export function Header() {
   const setDevOpen = useDev((s) => s.setPanelOpen);
   const inSettings = view === "providers";
   const inGraph = view === "graph";
-  // Settings and the knowledge graph are full-screen overlays over the active
-  // session — neither shows the session chip/tabs.
-  const inOverlay = inSettings || inGraph;
-  // One merged tab for both session sections: the Conversación|Plan filter
-  // now lives INSIDE `SessionView`, so the header only tracks whether we're
-  // in the session view at all.
+  const inGallery = view === "gallery";
+  // Settings, graph, and gallery are full-screen overlays
+  const inOverlay = inSettings || inGraph || inGallery;
   const inSession = view === "roadmap" || view === "plan";
   const inNotebook = view === "notebook";
   const hasSession = session !== null;
   const courseId = session?.imported_course_id ?? null;
-  // The course is created the moment the session seals, so it's a reliable
-  // "this session has classes" signal even before they're loaded.
   const hasClasses = courseId !== null;
   const chipTitle = displaySessionTitle(session);
 
-  // Update "menu": idle → looks for a new version; ready → installs it.
+  // Update checking
   const updaterStatus = useUpdater((s) => s.status);
   const update = useUpdater((s) => s.update);
   const updaterError = useUpdater((s) => s.error);
   const checkNow = useUpdater((s) => s.checkNow);
   const install = useUpdater((s) => s.install);
   const updaterBusy = updaterStatus === "checking" || updaterStatus === "installing";
-  const updateLabel =
-    updaterStatus === "available" && update
-      ? `⬆ Actualizar v${update.version}`
-      : updaterStatus === "checking"
-        ? "Buscando…"
-        : updaterStatus === "installing"
-          ? "Instalando…"
-          : "🔄 Actualizaciones";
+  const hasUpdate = updaterStatus === "available" && !!update;
   const updateTitle =
     updaterStatus === "error" && updaterError
       ? `No se pudo comprobar la versión: ${updaterError}`
-      : updaterStatus === "available" && update
+      : hasUpdate
         ? (update.body ?? `Hay una versión nueva: ${update.version}`)
-        : "Busca si hay una versión nueva de LearnKit";
+        : "Comprobar actualizaciones de LearnKit";
 
   const openSession = () => {
-    // Already inside the session view → keep whichever filter is showing;
-    // from anywhere else (Clases, ajustes) resume the last session section.
     if (inSession) return;
     setView(lastMainView === "plan" ? "plan" : "roadmap");
   };
+
   const openClasses = async () => {
     if (!courseId || openingClasses) return;
     setOpeningClasses(true);
     try {
-      // Loads (or reloads) this session's classes and resumes the last one
-      // read — the store already handles the stale-class fallback.
       await openCourse(courseId);
-      // Back to the block where the student stopped reading, not the top of the class.
       if (session) queueBlockResume(session.session_id);
       setView("notebook");
-    } catch {
-      // Leave the student where they are rather than landing on an empty
-      // notebook; the Sesión tab stays usable.
     } finally {
       setOpeningClasses(false);
     }
@@ -99,8 +77,13 @@ export function Header() {
       <header className="topbar">
         <div className="topbar-left">
           {!inOverlay && (
-            <button className="drawer-toggle" onClick={() => setDrawerOpen(true)} title="Ver sesiones guardadas">
-              ☰
+            <button
+              className="drawer-toggle"
+              onClick={() => setDrawerOpen(true)}
+              title="Ver sesiones guardadas"
+              aria-label="Abrir menú de sesiones"
+            >
+              <IconMenu />
             </button>
           )}
           <div className="brand">LearnKit</div>
@@ -131,31 +114,82 @@ export function Header() {
             </nav>
           )}
         </div>
+
         <div className="topbar-actions">
           {!inOverlay && (
-            <button onClick={() => { reset(); setView("roadmap"); }} title="Empieza una conversación nueva">
-              Nueva sesión
+            <button
+              className="topbar-action-btn"
+              onClick={() => { reset(); setView("roadmap"); }}
+              title="Empieza una conversación nueva"
+            >
+              <IconPencil />
+              <span>Nueva sesión</span>
             </button>
           )}
-          <button
-            className={updaterStatus === "available" ? "update-ready" : undefined}
-            onClick={() => void (updaterStatus === "available" ? install() : checkNow())}
-            disabled={updaterBusy}
-            title={updateTitle}
-          >
-            {updateLabel}
-          </button>
+
+          {/* Dev Mode Actions: only rendered when dev mode is explicitly enabled */}
           {devEnabled && (
-            <button onClick={() => setDevOpen(!devOpen)} title="Inspector de generación (modo desarrollador)">
-              {devOpen ? "🛠 Ocultar dev" : "🛠 Dev"}
+            <>
+              <button
+                className={`topbar-action-btn ${devOpen ? "active" : ""}`}
+                onClick={() => setDevOpen(!devOpen)}
+                title="Inspector de generación y telemetría"
+              >
+                <IconWrench />
+                <span>Dev</span>
+              </button>
+              <button
+                className={`topbar-action-btn ${inGallery ? "active" : ""}`}
+                onClick={() => setView(inGallery ? lastMainView : "gallery")}
+                title="Galería de todos los bloques pedagógicos"
+              >
+                {inGallery ? <IconArrowLeft /> : <IconGallery />}
+                <span>{inGallery ? "Volver" : "Galería"}</span>
+              </button>
+            </>
+          )}
+
+          {/* Core student tools */}
+          <button
+            className={`topbar-action-btn ${inGraph ? "active" : ""}`}
+            onClick={() => setView(inGraph ? lastMainView : "graph")}
+            title="Tu mapa de ideas: conecta lo que aprendes con tus propias palabras"
+          >
+            {inGraph ? <IconArrowLeft /> : <IconGraph />}
+            <span>{inGraph ? "Volver" : "Grafo"}</span>
+          </button>
+
+          <button
+            className={`topbar-action-btn ${inSettings ? "active" : ""}`}
+            onClick={() => setView(inSettings ? lastMainView : "providers")}
+            title="Configuración de modelos y claves"
+          >
+            {inSettings ? <IconArrowLeft /> : <IconGear />}
+            <span>{inSettings ? "Volver" : "Configuración"}</span>
+          </button>
+
+          {/* Subtle updater indicator */}
+          {hasUpdate ? (
+            <button
+              className="topbar-action-btn update-ready"
+              onClick={() => void install()}
+              disabled={updaterBusy}
+              title={updateTitle}
+            >
+              <IconRefresh />
+              <span>Actualizar v{update?.version}</span>
+            </button>
+          ) : (
+            <button
+              className="topbar-action-icon"
+              onClick={() => void checkNow()}
+              disabled={updaterBusy}
+              title={updateTitle}
+              aria-label="Comprobar actualizaciones"
+            >
+              <IconRefresh className={updaterBusy ? "spin" : ""} />
             </button>
           )}
-          <button onClick={() => setView(inGraph ? lastMainView : "graph")} title="Tu mapa de ideas: conecta lo que aprendes con tus propias palabras">
-            {inGraph ? "← Volver" : "🕸 Grafo"}
-          </button>
-          <button onClick={() => setView(inSettings ? lastMainView : "providers")}>
-            {inSettings ? "← Volver" : "⚙ Proveedores"}
-          </button>
         </div>
       </header>
       <SessionsDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} />

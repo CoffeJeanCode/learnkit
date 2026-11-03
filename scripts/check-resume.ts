@@ -11,7 +11,7 @@ assert.deepEqual(landing(null, null), { view: "roadmap" }, "no session: the land
 assert.deepEqual(landing(building, { view: "notebook", classId: "c1" }), { view: "roadmap" }, "a session still being built opens on its conversation");
 assert.deepEqual(landing(sealed, null), { view: "plan" }, "sealed with nothing saved: the plan that is waiting");
 assert.deepEqual(landing(sealed, { view: "plan" }), { view: "plan" });
-assert.deepEqual(landing(sealed, { view: "roadmap" }), { view: "roadmap" }, "left on the conversation: back to it");
+assert.deepEqual(landing(sealed, { view: "roadmap" }), { view: "roadmap" }, "left on the conversation without class: back to roadmap");
 assert.deepEqual(
   landing(sealed, { view: "notebook", classId: "c2", blockId: "b7", blockClassId: "c2" }),
   { view: "notebook", courseId: "course1", classId: "c2", blockId: "b7" },
@@ -35,6 +35,28 @@ assert.deepEqual(loadResume(store, "s1"), { view: "notebook", classId: "c1", blo
 saveResume(store, "s1", { view: "plan" });
 assert.equal(loadResume(store, "s1")?.classId, "c1", "leaving the notebook keeps the class and block for the way back");
 assert.equal(loadResume(store, "s2"), null, "each session has its own position");
+
+// ---- Continuous Learning Position Tracking ----------------------------------------------------
+// Re-entering notebook at class c2, block b5 updates both the class and block
+saveResume(store, "s1", { view: "notebook", classId: "c2", blockId: "b5", blockClassId: "c2" });
+const updated = loadResume(store, "s1");
+assert.equal(updated?.view, "notebook");
+assert.equal(updated?.classId, "c2");
+assert.equal(updated?.blockId, "b5");
+assert.equal(updated?.blockClassId, "c2");
+
+// Landing accurately directs back to class c2 and block b5
+assert.deepEqual(
+  landing(sealed, updated),
+  { view: "notebook", courseId: "course1", classId: "c2", blockId: "b5" },
+  "reopening session resumes at last class and block",
+);
+
+// If the session is sealed and user had viewed roadmap, saved class/block is preserved
+saveResume(store, "s1", { view: "roadmap" });
+const preserved = loadResume(store, "s1");
+assert.equal(preserved?.classId, "c2", "class is preserved across roadmap view");
+assert.equal(preserved?.blockId, "b5", "block is preserved across roadmap view");
 
 memory.set(resumeKey("s1"), "not json");
 assert.equal(loadResume(store, "s1"), null, "bad JSON gives nothing");

@@ -23,6 +23,30 @@
     }
 
     #[test]
+    fn reasoning_policy_disables_thinking_per_provider() {
+        let xiaomi = reasoning_off_params(&ProviderKind::Xiaomi, "mimo-v2.6-pro").expect("xiaomi params");
+        assert_eq!(xiaomi["thinking"]["type"], "disabled");
+
+        let deepseek = reasoning_off_params(&ProviderKind::DeepSeek, "deepseek-chat").expect("deepseek params");
+        assert_eq!(deepseek["thinking"]["type"], "disabled");
+
+        let o1 = reasoning_off_params(&ProviderKind::OpenAI, "o1-mini").expect("openai o1 params");
+        assert_eq!(o1["reasoning_effort"], "low");
+
+        let gpt4 = reasoning_off_params(&ProviderKind::OpenAI, "gpt-4o");
+        assert!(gpt4.is_none(), "standard openai models don't take reasoning_effort");
+
+        let gemini = reasoning_off_params(&ProviderKind::Gemini, "gemini-2.0-flash").expect("gemini params");
+        assert_eq!(gemini["generationConfig"]["thinkingConfig"]["thinkingBudget"], 0);
+
+        let openrouter = reasoning_off_params(&ProviderKind::OpenRouter, "anthropic/claude-3.5-sonnet").expect("openrouter params");
+        assert_eq!(openrouter["reasoning"]["enabled"], false);
+
+        let anthropic = reasoning_off_params(&ProviderKind::Anthropic, "claude-3-5-sonnet-20241022");
+        assert!(anthropic.is_none(), "anthropic defaults to thinking off");
+    }
+
+    #[test]
     fn prompt_timeout_parses_clamps_and_falls_back() {
         assert_eq!(parse_prompt_timeout(None), 200);
         assert_eq!(parse_prompt_timeout(Some("abc")), 200);
@@ -88,7 +112,7 @@
 
         async fn run(model: MockCompletionModel, capture: NotebookBlockCapture, sink: BlockStreamSink) -> AppResult<PromptOutput> {
             let agent = Builder::new(model).tool(PublishNotebookBlockTool(capture.clone())).build();
-            ProviderFactory::stream_notebook_block(&agent, "go", stop_when_some(capture), sink, BlockCallParams::resolve(None, Some("6"), None)).await
+            ProviderFactory::stream_notebook_block(&agent, "go", stop_when_some(capture.clone()), sink, BlockCallParams::resolve(None, Some("6"), None), capture).await
         }
 
         #[tokio::test]
@@ -207,7 +231,7 @@
     #[test]
     fn block_call_params_default_and_clamp() {
         let d = BlockCallParams::resolve(None, None, None);
-        assert_eq!((d.max_turns, d.timeout_secs, d.require_tool), (3, 420, true));
+        assert_eq!((d.max_turns, d.timeout_secs, d.require_tool), (6, 420, true));
         let o = BlockCallParams::resolve(Some("600"), Some("50"), Some(" auto "));
         assert_eq!((o.max_turns, o.timeout_secs, o.require_tool), (10, 600, false));
         let bad = BlockCallParams::resolve(Some("x"), Some("0"), Some("required"));

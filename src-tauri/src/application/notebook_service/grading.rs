@@ -18,7 +18,7 @@ use crate::domain::skill_evidence::RubricCriterion;
 use crate::domain::notebook::{BlockStatus, DynamicBlockType, NotebookBlock};
 use crate::error::{AppError, AppResult};
 use crate::orchestration::Orchestrator;
-use crate::tools::{ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture};
+use crate::tools::{ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult};
 
 use super::render;
 
@@ -182,6 +182,24 @@ pub(super) struct ModelGrade {
     pub criteria: Vec<RubricCriterion>,
 }
 
+/// Fast-path for clearly-invalid free-text submissions (empty after trim,
+/// identical to the template, or shorter than 10 chars). These never deserve
+/// a model round trip and are the majority of accidental clicks.
+pub(super) fn fast_path_reject(submission_text: &str, block: &NotebookBlock) -> Option<ModelGrade> {
+    let trimmed = submission_text.trim();
+    if trimmed.is_empty() || trimmed.len() < 10 {
+        return Some(ModelGrade { passed: false, scaffold_feedback: Some("Escribe algo más sustancial antes de enviar.".to_string()), criteria: vec![] });
+    }
+    // If the student pasted the template unchanged (the cloze with ___ still there),
+    // it's not a real attempt.
+    if let Some(tpl) = block.content_json.get("workedTemplate").and_then(|v| v.as_str()) {
+        if trimmed == tpl.trim() || trimmed.contains("___") && trimmed.split("___").count() > 1 {
+            return Some(ModelGrade { passed: false, scaffold_feedback: Some("Modifica los huecos antes de enviar; no envíes la plantilla sin completar.".to_string()), criteria: vec![] });
+        }
+    }
+    None
+}
+
 /// Grades a free-text submission (`heuristic_error_audit`'s diagnosis,
 /// `hands_on_mission`'s solution) via `notebook_gate_grader`.
 pub(super) async fn grade_with_model(
@@ -214,14 +232,31 @@ async fn run_gate_grader(orchestrator: &Orchestrator, app: Option<&AppHandle>, b
         let capture: GateGradingCapture = Arc::new(Mutex::new(None));
         let input = format!("{base_input}{note}");
         match orchestrator.run_gate_grading_agent(app, NOTEBOOK_GATE_GRADER_AGENT_ID, &input, capture.clone()).await {
-            Ok(_) => {
+            Ok(output) => {
                 let result = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
-                return match result {
-                    Some(r) => Ok(ModelGrade { passed: r.passed, scaffold_feedback: r.scaffold.map(|s| s.content), criteria: r.criteria }),
-                    None => Err(AppError::AgentExecutionFailed(
-                        "el calificador no llamó a grade_gate_submission".to_string(),
-                    )),
-                };
+                if let Some(r) = result {
+                    return Ok(ModelGrade { passed: r.passed, scaffold_feedback: r.scaffold.map(|s| s.content), criteria: r.criteria });
+                }
+
+                // Fallback 1: Parse JSON verdict directly from the model's text response
+                if let Some(r) = parse_gate_grade_from_text(&output.text) {
+                    tracing::info!("recovered gate grading result directly from model text output");
+                    return Ok(ModelGrade { passed: r.passed, scaffold_feedback: r.scaffold.map(|s| s.content), criteria: r.criteria });
+                }
+
+                // Fallback 2: Retry with assertive system note if attempts remain
+                if attempt + 1 < MAX_GRADING_ATTEMPTS {
+                    tracing::warn!("grader returned without calling grade_gate_submission, retrying with explicit reminder");
+                    note = "
+
+NOTA_DEL_SISTEMA: No llamaste a la herramienta obligatoria grade_gate_submission.                             DEBES invocar la herramienta grade_gate_submission con los campos:                             passed (boolean), rationale (string) y scaffold (opcional).                             Ejecútala ahora."
+                        .to_string();
+                    continue;
+                }
+
+                return Err(AppError::AgentExecutionFailed(
+                    "el calificador no llamó a grade_gate_submission".to_string(),
+                ));
             }
             Err(e) if e.is_output_budget_exhausted() && attempt + 1 < MAX_GRADING_ATTEMPTS => {
                 tracing::warn!(error = %e, "gate grading ran out of output budget, retrying more concisely");
@@ -306,6 +341,7 @@ mod tests {
             content_json: content,
             order_index: 0,
             status,
+            concept_node_id: None,
             attempt_count: 0,
             last_feedback: None,
         }
@@ -387,4 +423,73 @@ mod tests {
         let passed = redact_block(&block(DynamicBlockType::HeuristicErrorAudit, BlockStatus::Passed, audit_content)).content_json;
         assert_eq!(passed["faultyLineNumber"], 2, "revealed once the gate is passed");
     }
+}
+
+
+fn parse_gate_grade_from_text(text: &str) -> Option<GateGradingResult> {
+    if let Some(start) = text.find("```json") {
+        if let Some(end) = text[start + 7..].find("```") {
+            let json_str = text[start + 7..start + 7 + end].trim();
+            if let Ok(res) = serde_json::from_str::<GateGradingResult>(json_str) {
+                return Some(res);
+            }
+        }
+    }
+    if let Some(start) = text.find('{') {
+        if let Some(end) = text.rfind('}') {
+            if end > start {
+                let candidate = &text[start..=end];
+                if let Ok(res) = serde_json::from_str::<GateGradingResult>(candidate) {
+                    return Some(res);
+                }
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(candidate) {
+                    if let Some(passed) = val.get("passed").and_then(|v| v.as_bool()) {
+                        let rationale = val.get("rationale").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                        return Some(GateGradingResult {
+                            passed,
+                            rationale,
+                            criteria: Vec::new(),
+                            scaffold: None,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    let lower = text.to_lowercase();
+    let indicates_pass = lower.contains(r#""passed": true"#)
+        || lower.contains("passed: true")
+        || lower.contains("es correcta")
+        || lower.contains("aprobado")
+        || lower.contains("cumple con los requisitos")
+        || lower.contains("solución correcta");
+
+    let indicates_fail = lower.contains(r#""passed": false"#)
+        || lower.contains("passed: false")
+        || lower.contains("es incorrecta")
+        || lower.contains("no cumple")
+        || lower.contains("reprobado")
+        || lower.contains("faltan");
+
+    if indicates_pass && !indicates_fail {
+        return Some(GateGradingResult {
+            passed: true,
+            rationale: text.chars().take(200).collect(),
+            criteria: Vec::new(),
+            scaffold: None,
+        });
+    } else if indicates_fail && !indicates_pass {
+        return Some(GateGradingResult {
+            passed: false,
+            rationale: text.chars().take(200).collect(),
+            criteria: Vec::new(),
+            scaffold: Some(crate::tools::GateScaffold {
+                scaffold_type: crate::tools::ScaffoldType::SocraticHint,
+                content: text.chars().take(300).collect(),
+            }),
+        });
+    }
+
+    None
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import { ConnectStep } from "../../graph/ConnectStep";
+import { GateProgress, GateSubmitButton } from "./GateSubmitButton";
 import { InlineText, RichText } from "./RichText";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "metacognitive_closure" }>;
@@ -107,9 +108,13 @@ export function MetacognitiveClosureBlock({
       {passed && <ConnectStep />}
       <div className="closure-actions">
         {!approved && (
-          <button className="btn-primary" onClick={() => void requestFeedback()} disabled={!isActive || busy || !reflection.trim()}>
-            {busy ? "Calificando…" : "Obtener feedback"}
-          </button>
+          <GateSubmitButton
+            label="Obtener feedback"
+            busy={busy}
+            disabled={!isActive || !reflection.trim()}
+            disabledReason={!isActive ? "Este cierre ya no está activo." : "Escribe tu reflexión antes de pedir feedback."}
+            onClick={() => void requestFeedback()}
+          />
         )}
         {passed && (
           <button className="btn-primary" onClick={onContinue}>
@@ -117,7 +122,7 @@ export function MetacognitiveClosureBlock({
           </button>
         )}
       </div>
-      {busy && <p className="hint">Revisando tu cierre…</p>}
+      <GateProgress busy={busy} label="Revisando el cierre" />
       {error && <p className="hint hint-warn">{error}</p>}
       {!busy && shownFeedback && (
         <p className={passed ? "hint hint-ok" : "hint hint-warn"}>

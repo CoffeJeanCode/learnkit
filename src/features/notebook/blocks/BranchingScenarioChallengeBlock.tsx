@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { SubmitGate } from "./index";
+import { GateProgress } from "./GateSubmitButton";
 import { asNullableString, asStringArray, usePersistedState } from "./persist";
 import type { Annotate } from "./persist";
 import { InlineText, RichText } from "./RichText";
@@ -111,7 +112,7 @@ export function BranchingScenarioChallengeBlock({
           })}
         </ul>
       )}
-      {busy && <p className="hint">Calificando…</p>}
+      <GateProgress busy={busy} label="Evaluando la decisión" />
       {!busy && outcome && !outcome.passed && (
         <p className="hint hint-warn">{shownFeedback ? <InlineText text={shownFeedback} /> : "Esa no era la mejor opción — inténtalo de nuevo."}</p>
       )}

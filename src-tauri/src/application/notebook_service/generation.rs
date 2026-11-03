@@ -9,13 +9,15 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
 
+use crate::agents::block_generator_agent::system_prompt_for;
 use crate::agents::notebook_agent::NOTEBOOK_AGENT_ID;
 use crate::agents::pedagogical_critic_agent::PEDAGOGICAL_CRITIC_AGENT_ID;
-use crate::domain::learner_memory::{LOCAL_LEARNER_ID, iso_date_from_ms};
+use crate::domain::block_planner::{self, BlockPlan, LearnerSignals, PlanInputs, Presentation};
+use crate::domain::learner_memory::{LearnerCognitiveMemory, LOCAL_LEARNER_ID, iso_date_from_ms};
 use crate::domain::notebook::{
     BlockStatus, BlockUpdate, ClassRecord, ClosureFeedback, DynamicBlockType, GateAttempt, GateResult, GateSubmission, GeneratedSectionBlock,
     NotebookBlock, NotebookPayload,
@@ -29,7 +31,7 @@ use crate::dev_trace::{self, TraceEntry};
 use crate::error::{AppError, AppResult};
 use crate::notebook_store::{ClassGenerationContext, NotebookStore};
 use crate::orchestration::Orchestrator;
-use crate::orchestration::loop_runner::{Cause, CriticVerdict, GeneratorCriticLoop, LoopSource, run_generator_critic_loop};
+use crate::orchestration::loop_runner::{Cause, CriticVerdict, GeneratorCriticLoop, LoopReport, LoopSource, run_generator_critic_loop};
 use crate::tools::block_stream::{BLOCK_STREAM_SINK, BlockStreamSink};
 use crate::tools::{BlockAuditCapture, NotebookBlockCapture};
 
@@ -102,6 +104,8 @@ impl NotebookService {
 
         if should_auto_chain(&block) {
             self.spawn_background_next_block(app, class_id.to_string(), doc.id.clone());
+        } else if block.block_type.is_gate() && self.prefetch {
+            spawn_prefetch_next_block(self.store.clone(), Arc::clone(&self.orchestrator), app.cloned(), class_id.to_string(), doc.id.clone(), block.clone());
         }
 
         let refreshed = self.store.get_document(&doc.id)?.unwrap_or(doc);
@@ -123,6 +127,9 @@ impl NotebookService {
         self.store
             .class_generation_context(class_id)?
             .ok_or_else(|| AppError::InvalidInput(format!("class not found: {class_id}")))?;
+        if let Ok(Some(payload)) = self.store.load_notebook_by_class(class_id) {
+            discard_prefetched_for_document(&payload.document.id);
+        }
         self.store.delete_notebook_for_class(class_id)
     }
 
@@ -200,13 +207,21 @@ impl NotebookService {
                 (grading::grade_branching_scenario(&block, selected_choice)?, None, Vec::new())
             }
             GateSubmission::HeuristicErrorAudit { diagnosis_text, selected_line } => {
-                let g = grading::grade_with_model(&self.orchestrator, app, &block, diagnosis_text, block.attempt_count + 1, *selected_line).await?;
-                (g.passed, g.scaffold_feedback, g.criteria)
+                if let Some(fast) = grading::fast_path_reject(diagnosis_text, &block) {
+                    (fast.passed, fast.scaffold_feedback, Vec::new())
+                } else {
+                    let g = grading::grade_with_model(&self.orchestrator, app, &block, diagnosis_text, block.attempt_count + 1, *selected_line).await?;
+                    (g.passed, g.scaffold_feedback, g.criteria)
+                }
             }
             GateSubmission::HandsOnMission { submission_text, hints_shown } => {
                 ui_hints_shown = hints_shown.unwrap_or(0);
-                let g = grading::grade_with_model(&self.orchestrator, app, &block, submission_text, block.attempt_count + 1, None).await?;
-                (g.passed, g.scaffold_feedback, g.criteria)
+                if let Some(fast) = grading::fast_path_reject(submission_text, &block) {
+                    (fast.passed, fast.scaffold_feedback, Vec::new())
+                } else {
+                    let g = grading::grade_with_model(&self.orchestrator, app, &block, submission_text, block.attempt_count + 1, None).await?;
+                    (g.passed, g.scaffold_feedback, g.criteria)
+                }
             }
         };
 
@@ -260,12 +275,40 @@ impl NotebookService {
             // cursor backwards while it runs.
             self.store.advance_cursor_to_at_least(&document.id, block.order_index + 1)?;
 
-            // Unlike `should_auto_chain` (which judges a freshly GENERATED
-            // block, deciding whether to keep buffering), `updated` here is
-            // the gate that was JUST PASSED — by definition always a gate
-            // type (rejected above otherwise), never the closing block. The
-            // whole reason generation was paused was this exact gate; now
-            // that it's resolved, the chain always resumes.
+            if self.prefetch {
+                if let Some(candidate) = take_prefetched_block(&document.id, block_id) {
+                    dev_trace::trace_note("prefetch", "speculative_prefetch", &document.id, "prefetch_hit", &[format!("gate_id={block_id}")]);
+                    match persist_candidate_block(&self.store, &self.orchestrator, app, &document.class_id, &document.id, candidate, self.defer_critic) {
+                        Ok(Some(next_block)) => {
+                            let target = cursor_target_after_insert(next_block.order_index, next_block.block_type);
+                            if let Err(e) = self.store.advance_cursor_to_at_least(&document.id, target) {
+                                tracing::warn!(document_id = %document.id, error = %e, "cursor advance failed for prefetched block");
+                            }
+                            super::events::emit_block_ready(app, &document.id, &grading::redact_block(&next_block));
+                            if should_auto_chain(&next_block) {
+                                self.spawn_background_next_block(app, document.class_id.clone(), document.id.clone());
+                            }
+                            return Ok(GateResult {
+                                passed: true,
+                                block: grading::redact_block(&updated),
+                                feedback: None,
+                                escalation_block: None,
+                                next_block: Some(grading::redact_block(&next_block)),
+                            });
+                        }
+                        Ok(None) => {
+                            tracing::warn!(document_id = %document.id, "prefetched block count-guard mismatch; regenerating normally");
+                        }
+                        Err(e) => {
+                            tracing::warn!(document_id = %document.id, error = %e, "prefetched block persistence failed; regenerating normally");
+                        }
+                    }
+                } else {
+                    dev_trace::trace_note("prefetch", "speculative_prefetch", &document.id, "prefetch_miss", &[format!("gate_id={block_id}")]);
+                }
+            }
+
+            // Resumes chain normally when no prefetched block or prefetch disabled
             self.spawn_background_next_block(app, document.class_id.clone(), document.id.clone());
             return Ok(GateResult {
                 passed: true,
@@ -275,6 +318,8 @@ impl NotebookService {
                 next_block: None,
             });
         }
+
+        discard_prefetched_block(&document.id, block_id);
 
         // `cognitiveFrictionTolerance == low_frustration` (see
         // `domain::learner_memory`): escalate to a re-angled block after
@@ -658,10 +703,12 @@ impl NotebookService {
             // action; it keeps the critic blocking so it never loops.
             defer_critic: false,
             semantic_pending: Mutex::new(false),
-        last_candidate_json: Mutex::new(None),
+            last_candidate_json: Mutex::new(None),
+            // The slot keeps its type and, if it had one, its presentation.
+            plan: BlockPlan::fixed(required, previous_presentation(&broken.content_json).unwrap_or(block_planner::presentation_for(LearnerSignals::default(), scaffolding::Momentum::Steady))),
         };
         let report = run_generator_critic_loop(&job, MAX_ATTEMPTS, RETRY_BACKOFF_BASE).await?;
-        let content_json = serde_json::to_value(&report.value).map_err(|e| AppError::Persistence(e.to_string()))?;
+        let content_json = content_with_presentation(&report.value, job.plan.presentation)?;
         let replaced = self.store.replace_block_payload(&broken.id, report.value.block_type(), &content_json)?;
         super::events::emit_block_ready(app, &broken.document_id, &grading::redact_block(&replaced));
 
@@ -682,7 +729,7 @@ impl NotebookService {
         let store = self.store.clone();
         let orchestrator = Arc::clone(&self.orchestrator);
         let app_owned = app.cloned();
-        tokio::spawn(run_background_chain(store, orchestrator, app_owned, class_id, document_id, self.defer_critic));
+        tokio::spawn(run_background_chain(store, orchestrator, app_owned, class_id, document_id, self.defer_critic, self.prefetch));
     }
 }
 
@@ -690,6 +737,160 @@ impl NotebookService {
 /// waiting for a student action. `false` for a gate (must wait for
 /// `submit_gate_response`) and for `metacognitive_closure` (the notebook is
 /// done — nothing generates past the closing block).
+
+/// Speculative prefetch of the block following a gate:
+/// When a gate is displayed, the system generates the candidate following block
+/// in the background assuming the student will pass. Cached in memory (NOT in DB)
+/// keyed by `(document_id, gate_block_id)`.
+pub struct GeneratedBlockCandidate {
+    pub report: LoopReport<GeneratedSectionBlock>,
+    pub presentation: Presentation,
+    pub expected_block_count: u32,
+    pub elapsed: Duration,
+    pub owes_review: bool,
+    pub review_context: Option<PendingReviewContext>,
+}
+
+pub struct PendingReviewContext {
+    pub ctx: ClassGenerationContext,
+    pub existing_blocks: Vec<NotebookBlock>,
+}
+
+struct PrefetchedEntry {
+    candidate: GeneratedBlockCandidate,
+    created_at: Instant,
+}
+
+static PREFETCH_CACHE: OnceLock<Mutex<HashMap<(String, String), PrefetchedEntry>>> = OnceLock::new();
+
+fn prefetch_cache() -> &'static Mutex<HashMap<(String, String), PrefetchedEntry>> {
+    PREFETCH_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn prefetch_enabled() -> bool {
+    std::env::var("LEARNKIT_PREFETCH").map_or(false, |v| v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+pub(crate) fn prefetch_cache_len() -> usize {
+    prefetch_cache().lock().unwrap_or_else(|e| e.into_inner()).len()
+}
+
+pub(crate) fn clear_prefetch_cache() {
+    prefetch_cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
+
+fn store_prefetched_block(document_id: &str, gate_block_id: &str, candidate: GeneratedBlockCandidate) {
+    let mut cache = prefetch_cache().lock().unwrap_or_else(|e| e.into_inner());
+    cache.insert(
+        (document_id.to_string(), gate_block_id.to_string()),
+        PrefetchedEntry { candidate, created_at: Instant::now() },
+    );
+}
+
+fn take_prefetched_block(document_id: &str, gate_block_id: &str) -> Option<GeneratedBlockCandidate> {
+    let mut cache = prefetch_cache().lock().unwrap_or_else(|e| e.into_inner());
+    let entry = cache.remove(&(document_id.to_string(), gate_block_id.to_string()))?;
+    if entry.created_at.elapsed() > Duration::from_secs(600) {
+        None
+    } else {
+        Some(entry.candidate)
+    }
+}
+
+fn discard_prefetched_block(document_id: &str, gate_block_id: &str) {
+    let mut cache = prefetch_cache().lock().unwrap_or_else(|e| e.into_inner());
+    cache.remove(&(document_id.to_string(), gate_block_id.to_string()));
+}
+
+pub(crate) fn discard_prefetched_for_document(document_id: &str) {
+    let mut cache = prefetch_cache().lock().unwrap_or_else(|e| e.into_inner());
+    cache.retain(|(doc, _), _| doc != document_id);
+}
+
+static IN_FLIGHT_PREFETCH: OnceLock<Mutex<HashSet<(String, String)>>> = OnceLock::new();
+
+fn in_flight_prefetch() -> &'static Mutex<HashSet<(String, String)>> {
+    IN_FLIGHT_PREFETCH.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn try_acquire_prefetch(document_id: &str, gate_block_id: &str) -> bool {
+    in_flight_prefetch().lock().unwrap_or_else(|e| e.into_inner()).insert((document_id.to_string(), gate_block_id.to_string()))
+}
+
+fn release_prefetch(document_id: &str, gate_block_id: &str) {
+    in_flight_prefetch().lock().unwrap_or_else(|e| e.into_inner()).remove(&(document_id.to_string(), gate_block_id.to_string()));
+}
+
+fn spawn_prefetch_next_block(
+    store: NotebookStore,
+    orchestrator: Arc<Orchestrator>,
+    app: Option<AppHandle>,
+    class_id: String,
+    document_id: String,
+    gate_block: NotebookBlock,
+) {
+    if !try_acquire_prefetch(&document_id, &gate_block.id) {
+        return;
+    }
+    tokio::spawn(async move {
+        struct PrefetchGuard(String, String);
+        impl Drop for PrefetchGuard {
+            fn drop(&mut self) {
+                release_prefetch(&self.0, &self.1);
+            }
+        }
+        let _guard = PrefetchGuard(document_id.clone(), gate_block.id.clone());
+
+        let Ok(Some(existing)) = store.load_notebook_by_class(&class_id) else { return; };
+        let mut speculative_blocks = existing.blocks;
+        for b in speculative_blocks.iter_mut() {
+            if b.id == gate_block.id {
+                b.status = BlockStatus::Passed;
+                b.attempt_count = 1;
+                b.last_feedback = None;
+            }
+        }
+
+        tracing::info!(document_id = %document_id, gate_id = %gate_block.id, "running speculative prefetch for next block");
+        dev_trace::trace_note("prefetch", "speculative_prefetch", &document_id, "prefetch_started", &[format!("gate_id={}", gate_block.id)]);
+
+        match generate_candidate_block(
+            &store,
+            &orchestrator,
+            app.as_ref(),
+            &class_id,
+            &document_id,
+            None,
+            Some(speculative_blocks),
+            true,
+        )
+        .await
+        {
+            Ok(candidate) => {
+                if let Ok(Some(current_gate)) = store.get_block(&gate_block.id) {
+                    if current_gate.status == BlockStatus::Ready {
+                        tracing::info!(document_id = %document_id, gate_id = %gate_block.id, "speculative prefetch ready in cache");
+                        dev_trace::trace_note(
+                            "prefetch",
+                            "speculative_prefetch",
+                            &document_id,
+                            "prefetch_cached",
+                            &[format!("gate_id={}", gate_block.id), format!("block_type={}", candidate.report.value.block_type().as_str())],
+                        );
+                        store_prefetched_block(&document_id, &gate_block.id, candidate);
+                    } else {
+                        tracing::info!(document_id = %document_id, gate_id = %gate_block.id, "gate resolved while prefetching; candidate discarded");
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(document_id = %document_id, error = %e, "speculative prefetch failed (non-fatal)");
+            }
+        }
+    });
+}
+
+
 fn should_auto_chain(block: &NotebookBlock) -> bool {
     !block.block_type.is_gate() && block.block_type != DynamicBlockType::MetacognitiveClosure
 }
@@ -739,6 +940,7 @@ async fn run_background_chain(
     class_id: String,
     document_id: String,
     defer_critic: bool,
+    prefetch: bool,
 ) {
     if !try_acquire_chain(&document_id) {
         tracing::info!(document_id = %document_id, "generation chain already in flight for this document; skipping duplicate invoke");
@@ -767,6 +969,9 @@ async fn run_background_chain(
                 }
                 super::events::emit_block_ready(app.as_ref(), &document_id, &grading::redact_block(&block));
                 if !should_auto_chain(&block) {
+                    if block.block_type.is_gate() && prefetch {
+                        spawn_prefetch_next_block(store.clone(), Arc::clone(&orchestrator), app.clone(), class_id.clone(), document_id.clone(), block.clone());
+                    }
                     return;
                 }
                 // Non-gate, non-closing: loop again to buffer the next one.
@@ -894,37 +1099,33 @@ fn misconception_pattern_from_submission(block: &NotebookBlock, submission: &Gat
 /// Returns `Ok(None)` when the count-guarded insert detects another writer
 /// inserted first (concurrent starter or parallel chain) — the caller must
 /// treat that as "lost the race": no cursor advance, no chain spawn.
-async fn generate_and_persist_block(
+#[allow(clippy::too_many_arguments)]
+async fn generate_candidate_block(
     store: &NotebookStore,
     orchestrator: &Arc<Orchestrator>,
     app: Option<&AppHandle>,
     class_id: &str,
     document_id: &str,
     escalation: Option<EscalationInput>,
+    override_existing: Option<Vec<NotebookBlock>>,
     defer_critic: bool,
-) -> AppResult<Option<NotebookBlock>> {
+) -> AppResult<GeneratedBlockCandidate> {
     let ctx = store
         .class_generation_context(class_id)?
         .ok_or_else(|| AppError::InvalidInput(format!("class not found: {class_id}")))?;
-    let existing_blocks = store.load_notebook_by_class(class_id)?.map(|p| p.blocks).unwrap_or_default();
+    let existing_blocks = match override_existing {
+        Some(blocks) => blocks,
+        None => store.load_notebook_by_class(class_id)?.map(|p| p.blocks).unwrap_or_default(),
+    };
     let diagnostic_profile = store.get_course_diagnostic_profile(&ctx.course.id)?;
     let block_type_usage = store.block_type_usage_for_course(&ctx.course.id, class_id)?;
     let learner_memory = store.get_learner_memory_for_course(LOCAL_LEARNER_ID, &ctx.course.id)?;
     let resources = store.get_class_resources(class_id)?;
     let now = now_ms();
-    // The exact concept ids shown to the model as `learnerMemory.dueRetrieval`
-    // — captured now so a successful `spaced_interleaved_retrieval` block can
-    // reactivate exactly these (never re-derived after the fact, since the
-    // due set could shift between now and persistence).
     let due_ids: Vec<String> = learner_memory.due_retrieval_items(now).iter().map(|i| i.concept_id.clone()).collect();
-    // Only meaningful for the class's very FIRST block — see
-    // `grounding::single_block_violations`'s hard rule.
     let has_due_retrieval = existing_blocks.is_empty() && !due_ids.is_empty();
 
     let is_escalation = escalation.is_some();
-    // Safety valve only — see `grounding::MAX_TOTAL_BLOCKS`. Never true for
-    // an escalation call (abandoning a student mid-re-approach would be
-    // worse than a small overshoot past the ceiling).
     let force_close = !is_escalation && existing_blocks.len() >= grounding::MAX_TOTAL_BLOCKS;
     let mastery = mastery_progress(&existing_blocks);
 
@@ -955,11 +1156,21 @@ async fn generate_and_persist_block(
         }
     };
 
-    // Snapshot BEFORE `existing_blocks` moves into the job — the insert
-    // below is only allowed to append at exactly this position; if the
-    // count moved while the model was generating, another writer won and
-    // this candidate is discarded (`Ok(None)`).
+    let plan = plan_block(&ctx, &existing_blocks, mastery, &block_type_usage, diagnostic_profile.as_ref(), &learner_memory, has_due_retrieval, is_escalation, force_close);
+    dev_trace::trace_note(
+        "plan",
+        "block_plan",
+        class_id,
+        plan.reason,
+        &[format!("planned_type={}", plan.block_type.map_or("model", |t| t.as_str())), format!("position={}", existing_blocks.len())],
+    );
+    let mut base_input = base_input;
+    if let Some(hint) = plan.to_hint_json() {
+        base_input.push_str(&format!("\n\nPLAN_DEL_SISTEMA: {hint}"));
+    }
+
     let expected_block_count = existing_blocks.len() as u32;
+    let presentation = plan.presentation;
 
     let job = BlockGenerationJob {
         orchestrator: &**orchestrator,
@@ -972,9 +1183,6 @@ async fn generate_and_persist_block(
         mastery,
         is_escalation,
         force_close,
-        // An escalation call never needs the due-retrieval rule: it's a
-        // re-approach for an already-in-progress class, never the class's
-        // first block.
         has_due_retrieval: has_due_retrieval && !is_escalation,
         required_block_type: None,
         is_regeneration: false,
@@ -985,36 +1193,117 @@ async fn generate_and_persist_block(
         defer_critic,
         semantic_pending: Mutex::new(false),
         last_candidate_json: Mutex::new(None),
+        plan,
     };
     let started = std::time::Instant::now();
     let report = run_generator_critic_loop(&job, MAX_ATTEMPTS, RETRY_BACKOFF_BASE).await?;
-    let block_type = report.value.block_type();
-    let content_json = serde_json::to_value(&report.value).map_err(|e| AppError::Persistence(e.to_string()))?;
-    let inserted = store.insert_block_if_count(document_id, block_type, &content_json, BlockStatus::Ready, Some(expected_block_count))?;
-    log_block_timing(class_id, expected_block_count, block_type, &report, started.elapsed(), defer_critic);
-
-    // The block is already visible to the caller; the LLM critic (skipped on
-    // the blocking path) now reviews it off the critical path. Only a
-    // model-sourced candidate owes a review — a backstop one already burned
-    // its whole budget.
+    let elapsed = started.elapsed();
     let owes_review = *job.semantic_pending.lock().unwrap_or_else(|e| e.into_inner()) && report.source == LoopSource::Model;
-    if let (true, Some(block)) = (owes_review, inserted.as_ref()) {
+    let review_context = if owes_review {
+        Some(PendingReviewContext { ctx: job.ctx, existing_blocks: job.existing_blocks })
+    } else {
+        None
+    };
+
+    Ok(GeneratedBlockCandidate {
+        report,
+        presentation,
+        expected_block_count,
+        elapsed,
+        owes_review,
+        review_context,
+    })
+}
+
+fn persist_candidate_block(
+    store: &NotebookStore,
+    orchestrator: &Arc<Orchestrator>,
+    app: Option<&AppHandle>,
+    class_id: &str,
+    document_id: &str,
+    candidate: GeneratedBlockCandidate,
+    defer_critic: bool,
+) -> AppResult<Option<NotebookBlock>> {
+    let block_type = candidate.report.value.block_type();
+    let content_json = content_with_presentation(&candidate.report.value, candidate.presentation)?;
+    let inserted = store.insert_block_if_count(document_id, block_type, &content_json, BlockStatus::Ready, Some(candidate.expected_block_count))?;
+    log_block_timing(class_id, candidate.expected_block_count, block_type, &candidate.report, candidate.elapsed, defer_critic);
+
+    if let (true, Some(block), Some(rc)) = (candidate.owes_review, inserted.as_ref(), candidate.review_context) {
         tokio::spawn(review_block_in_background(
             store.clone(),
             Arc::clone(orchestrator),
             app.cloned(),
-            job.ctx.clone(),
-            job.existing_blocks.clone(),
-            report.value.clone(),
+            rc.ctx,
+            rc.existing_blocks,
+            candidate.report.value.clone(),
             block.clone(),
         ));
     }
-
-    // Showing a `spaced_interleaved_retrieval` block is exposure, not
-    // evidence: mastery only moves once the student reports an outcome
-    // (`NotebookService::record_retrieval_result`).
-
     Ok(inserted)
+}
+
+async fn generate_and_persist_block(
+    store: &NotebookStore,
+    orchestrator: &Arc<Orchestrator>,
+    app: Option<&AppHandle>,
+    class_id: &str,
+    document_id: &str,
+    escalation: Option<EscalationInput>,
+    defer_critic: bool,
+) -> AppResult<Option<NotebookBlock>> {
+    let candidate = generate_candidate_block(store, orchestrator, app, class_id, document_id, escalation, None, defer_critic).await?;
+    persist_candidate_block(store, orchestrator, app, class_id, document_id, candidate, defer_critic)
+}
+
+/// The system's plan for the next block: a pure function of state the service
+/// already loaded (see `domain::block_planner`).
+#[allow(clippy::too_many_arguments)]
+fn plan_block(
+    ctx: &ClassGenerationContext,
+    existing: &[NotebookBlock],
+    mastery: MasteryProgress,
+    usage: &(HashMap<String, i64>, i64),
+    diagnostic_profile: Option<&serde_json::Value>,
+    memory: &LearnerCognitiveMemory,
+    has_due_retrieval: bool,
+    is_escalation: bool,
+    force_close: bool,
+) -> BlockPlan {
+    let suggestion = render::composition_suggestion(ctx, existing, mastery, usage);
+    let scaffolding_plan = scaffolding::plan(existing, memory.needs_heavy_scaffolding());
+    let intuition_weak = diagnostic_profile
+        .and_then(|p| p.get("weakPoints"))
+        .and_then(|w| w.as_array())
+        .is_some_and(|points| points.iter().any(|w| w.get("dimension").and_then(|d| d.as_str()) == Some("intuition")));
+    block_planner::plan_next(&PlanInputs {
+        existing,
+        has_passed_conceptual: mastery.has_passed_conceptual,
+        has_passed_practice: mastery.has_passed_practice,
+        has_due_retrieval: has_due_retrieval && !is_escalation,
+        is_escalation,
+        force_close,
+        suggested: suggestion.as_ref().and_then(|(_, _, s)| *s),
+        profile: suggestion.as_ref().map(|(p, _, _)| *p),
+        scaffolding: &scaffolding_plan,
+        learner: LearnerSignals { heavy_scaffolding: memory.needs_heavy_scaffolding(), friction_low: memory.friction_is_low(), intuition_weak },
+    })
+}
+
+/// The block as persisted: its own payload plus the presentation the UI should
+/// use for it (density / emphasis / layout — decided by the system, never by
+/// the model, so it costs no output tokens and stays consistent).
+fn content_with_presentation(block: &GeneratedSectionBlock, presentation: Presentation) -> AppResult<serde_json::Value> {
+    let mut content = serde_json::to_value(block).map_err(|e| AppError::Persistence(e.to_string()))?;
+    if let (Some(obj), Ok(p)) = (content.as_object_mut(), serde_json::to_value(presentation)) {
+        obj.insert("presentation".to_string(), p);
+    }
+    Ok(content)
+}
+
+/// The presentation an already-persisted block carried, if any.
+fn previous_presentation(content: &serde_json::Value) -> Option<Presentation> {
+    content.get("presentation").and_then(|p| serde_json::from_value(p.clone()).ok())
 }
 
 /// One block-generation job wired into the shared generator-critic loop
@@ -1075,6 +1364,10 @@ struct BlockGenerationJob<'a> {
     /// Checkpoint: the candidate under review, serialized. A rejection quotes it
     /// back so the retry EDITS it instead of regenerating the block from zero.
     last_candidate_json: Mutex<Option<String>>,
+    /// What the system decided about this block (`domain::block_planner`): when
+    /// the type is fixed, the FIRST attempt runs with the short type-specific
+    /// prompt; any retry falls back to the full one.
+    plan: BlockPlan,
 }
 
 #[async_trait::async_trait]
@@ -1087,7 +1380,11 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
         let attempt = self.attempts_started.fetch_add(1, Ordering::Relaxed).saturating_add(1);
         // The orchestrator salvages a populated capture on error, so an Err
         // reaching here means the turn cap fired with NOTHING published.
-        let run = self.orchestrator.run_notebook_block_agent(self.app, NOTEBOOK_AGENT_ID, &turn_input, capture.clone());
+        // First attempt with a planned type: the short prompt for that type.
+        // A retry means something about the plan or the content was wrong, so
+        // it gets the full prompt (and the model's own judgment) back.
+        let lean_prompt = if attempt == 1 { self.plan.block_type.map(|t| system_prompt_for(Some(t))) } else { None };
+        let run = self.orchestrator.run_notebook_block_agent_with(self.app, NOTEBOOK_AGENT_ID, lean_prompt.as_deref(), &turn_input, capture.clone());
         // Live progress is only scoped when there is a UI to show it on; the
         // provider factory reads the sink and streams, otherwise it blocks.
         let run_result = match self.progress_sink(attempt) {
@@ -1100,7 +1397,21 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
         let mechanical = published.as_ref().is_some_and(|p| p.mechanical_template);
         *self.mechanical_template.lock().unwrap_or_else(|e| e.into_inner()) = mechanical;
         if let Some(published) = published {
-            return Ok(Some(published.block));
+            // Mechanical defects (kebab-case props, text without its pill, a diagram id
+            // with a space, a slider whose start is out of range…) are fixed here, in
+            // microseconds, instead of costing a whole regeneration.
+            let mut block = published.block;
+            let fixes = crate::domain::visual_repair::repair_block(&mut block);
+            if fixes > 0 {
+                tracing::info!(class_id = %self.class_id, attempt, fixes, "repaired the generated visual deterministically");
+                dev_trace::trace_note("repair", "visual_repair", &self.class_id, "visual_repaired", &[format!("fixes={fixes}"), format!("block_type={}", block.block_type().as_str())]);
+            }
+            let content_fixes = crate::domain::content_repair::repair_block_content(&mut block);
+            if content_fixes > 0 {
+                tracing::info!(class_id = %self.class_id, attempt, content_fixes, "repaired block content deterministically");
+                dev_trace::trace_note("repair", "content_repair", &self.class_id, "content_repaired", &[format!("fixes={content_fixes}"), format!("block_type={}", block.block_type().as_str())]);
+            }
+            return Ok(Some(block));
         }
         match run_result {
             // The model burned every turn without ever calling
@@ -1110,13 +1421,22 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
             Err(e) if e.is_agent_turn_limit() => {
                 tracing::warn!(
                     class_id = %self.class_id,
+                    attempt = attempt,
                     error = %e,
                     "notebook agent burned its turn budget without publishing; feeding corrective feedback"
                 );
                 Ok(None)
             }
             Err(e) => Err(e),
-            Ok(_) => Ok(None),
+            Ok(out) => {
+                tracing::warn!(
+                    class_id = %self.class_id,
+                    attempt = attempt,
+                    text_chars = out.text.len(),
+                    "empty attempt: model finished without publishing a block; feeding corrective feedback"
+                );
+                Ok(None)
+            }
         }
     }
 
@@ -1405,6 +1725,7 @@ mod tests {
             content_json: serde_json::json!({}),
             order_index,
             status,
+            concept_node_id: None,
             attempt_count: 0,
             last_feedback: None,
         }
@@ -1483,4 +1804,77 @@ mod tests {
         assert_eq!(reconciled_cursor(&gap), 1, "a gap stops the walk");
         assert_eq!(reconciled_cursor(&[]), 0);
     }
+
+    #[test]
+    fn prefetch_guard_deduplicates_per_gate() {
+        let doc = "prefetch-doc";
+        let gate = "gate-1";
+        assert!(try_acquire_prefetch(doc, gate));
+        assert!(!try_acquire_prefetch(doc, gate), "duplicate prefetch for same gate refused");
+        // Different gate on same doc is allowed
+        assert!(try_acquire_prefetch(doc, "gate-2"));
+        release_prefetch(doc, gate);
+        release_prefetch(doc, "gate-2");
+        assert!(try_acquire_prefetch(doc, gate), "re-acquired after release");
+        release_prefetch(doc, gate);
+    }
+
+    #[test]
+    fn prefetch_cache_roundtrip_and_discard() {
+        let doc = "prefetch-cache-doc";
+        let gate = "gate-cache-1";
+        clear_prefetch_cache();
+        assert_eq!(prefetch_cache_len(), 0);
+
+        let candidate = GeneratedBlockCandidate {
+            report: crate::orchestration::loop_runner::LoopReport {
+                value: GeneratedSectionBlock::AnchoredMicroTheory {
+                    title: "t".into(),
+                    intuitive_hook: "h".into(),
+                    analogy_boundary: None,
+                    system_rule: "s".into(),
+                    frequent_error: "f".into(),
+                },
+                source: LoopSource::Model,
+                attempts: 1,
+            },
+            presentation: crate::domain::block_planner::Presentation::default(),
+            expected_block_count: 2,
+            elapsed: Duration::from_millis(50),
+            owes_review: false,
+            review_context: None,
+        };
+
+        store_prefetched_block(doc, gate, candidate);
+        assert_eq!(prefetch_cache_len(), 1);
+
+        let taken = take_prefetched_block(doc, gate);
+        assert!(taken.is_some());
+        assert_eq!(prefetch_cache_len(), 0);
+        assert!(take_prefetched_block(doc, gate).is_none(), "take is destructive");
+
+        // Discard
+        let candidate2 = GeneratedBlockCandidate {
+            report: crate::orchestration::loop_runner::LoopReport {
+                value: GeneratedSectionBlock::AnchoredMicroTheory {
+                    title: "t".into(),
+                    intuitive_hook: "h".into(),
+                    analogy_boundary: None,
+                    system_rule: "s".into(),
+                    frequent_error: "f".into(),
+                },
+                source: LoopSource::Model,
+                attempts: 1,
+            },
+            presentation: crate::domain::block_planner::Presentation::default(),
+            expected_block_count: 3,
+            elapsed: Duration::from_millis(50),
+            owes_review: false,
+            review_context: None,
+        };
+        store_prefetched_block(doc, gate, candidate2);
+        discard_prefetched_block(doc, gate);
+        assert_eq!(prefetch_cache_len(), 0);
+    }
+
 }

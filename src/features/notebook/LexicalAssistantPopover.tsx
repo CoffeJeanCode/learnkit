@@ -4,6 +4,8 @@ import { askLexicalAssistant, tauriError } from "../../lib/tauri";
 import type { LexicalTurn } from "../../lib/tauri";
 import { useMarginCommentPosition, useTextSelectionPopover, type SelectionAnchor } from "./useTextSelectionPopover";
 import { RichText } from "./blocks/RichText";
+import { useCommentsStore } from "./commentsStore";
+import type { NotebookComment } from "../../lib/schemas";
 
 const MAX_HISTORY_TURNS = 4;
 
@@ -138,21 +140,18 @@ export function TheorySelectionAssistant({
   fragmentContext,
   keyConcepts,
   answerBearingStrings,
+  blockId,
   children,
 }: {
-  /** `section.notebook-block-wrapper` — anchors the margin slot (`right`)
-   *  and the button mode's `y` (block top). */
   blockRef: RefObject<HTMLElement | null>;
-  /** The ¿Dudas? button — outside-click exemption + narrow fallback. */
   triggerRef: RefObject<HTMLButtonElement | null>;
   buttonOpen: boolean;
   onButtonOpenChange: (open: boolean) => void;
-  /** Block-scoped term used when the button opens the slot (the selection
-   *  mode derives its own term from the selected text). */
   buttonTerm: string;
   fragmentContext: string | null;
   keyConcepts: string[];
   answerBearingStrings: string[];
+  blockId?: string;
   children: ReactNode;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -214,6 +213,7 @@ export function TheorySelectionAssistant({
         initialHistory={initialHistory}
         onHistoryChange={onHistoryChange}
         onClose={selection ? closeSelection : closeButton}
+        blockId={blockId}
       />
     ) : null;
 
@@ -248,9 +248,9 @@ function LexicalMarginComment({
   initialHistory,
   onHistoryChange,
   onClose,
+  blockId,
 }: {
   selectedText: string | null;
-  /** Viewport anchor of the selection, or `null` in button mode. */
   anchor: SelectionAnchor | null;
   buttonTerm: string;
   fragmentContext: string | null;
@@ -259,12 +259,10 @@ function LexicalMarginComment({
   blockRef: RefObject<HTMLElement | null>;
   triggerRef: RefObject<HTMLButtonElement | null>;
   rootRef: RefObject<HTMLDivElement | null>;
-  /** Turns this thread starts from — non-empty only when the comment is
-   *  remounting an already-answered fragment. */
   initialHistory: LexicalTurn[];
-  /** Feeds the owner's `savedThreadRef` so the turns outlive this mount. */
   onHistoryChange: (history: LexicalTurn[]) => void;
   onClose: () => void;
+  blockId?: string;
 }) {
   const isSelection = selectedText !== null;
   const term = selectedText !== null ? selectedText.slice(0, SELECTION_TERM_MAX_CHARS) : buttonTerm;
@@ -279,6 +277,62 @@ function LexicalMarginComment({
   const { left, top, ready } = useMarginCommentPosition({ blockRef, triggerRef, popoverRef: rootRef, anchor });
   const historyRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const [activeTab, setActiveTab] = useState<"doubt" | "note">("doubt");
+  const [noteContent, setNoteContent] = useState("");
+  const [noteTags, setNoteTags] = useState("");
+  const [savedKind, setSavedKind] = useState<string | null>(null);
+
+  const handleSaveDoubt = async () => {
+    if (history.length === 0) return;
+    const store = useCommentsStore.getState();
+    const lastTurn = history[history.length - 1];
+    const newComment: NotebookComment = {
+      id: crypto.randomUUID(),
+      notebookId: store.notebookId || "",
+      classId: store.classId || "",
+      courseId: store.courseId || "",
+      blockId: blockId || "",
+      kind: "doubt",
+      selectedText: selectedText || term,
+      anchorY: anchor?.y ?? 0,
+      content: lastTurn.question,
+      aiResponse: lastTurn.answer,
+      tags: keyConcepts.slice(0, 3),
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+    };
+    await store.saveComment(newComment);
+    setSavedKind("doubt");
+    setTimeout(() => setSavedKind(null), 2000);
+  };
+
+  const handleSaveNote = async () => {
+    if (!noteContent.trim()) return;
+    const store = useCommentsStore.getState();
+    const parsedTags = noteTags
+      .split(",")
+      .map((t) => t.trim().replace(/^#/, ""))
+      .filter(Boolean);
+    const newComment: NotebookComment = {
+      id: crypto.randomUUID(),
+      notebookId: store.notebookId || "",
+      classId: store.classId || "",
+      courseId: store.courseId || "",
+      blockId: blockId || "",
+      kind: "note",
+      selectedText: selectedText || term,
+      anchorY: anchor?.y ?? 0,
+      content: noteContent.trim(),
+      aiResponse: null,
+      tags: parsedTags,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+    };
+    await store.saveComment(newComment);
+    setNoteContent("");
+    setSavedKind("note");
+    setTimeout(() => setSavedKind(null), 2000);
+  };
 
   // Button mode closes on a mousedown outside the comment — except on its
   // own trigger, so the button's click still TOGGLES it (a close on mousedown
@@ -328,62 +382,121 @@ function LexicalMarginComment({
         </p>
       )}
 
-      <div className="lexical-popover-history" ref={historyRef}>
-        {history.length === 0 && !busy && isSelection && (
-          <>
-            <p className="hint">Pregunta lo que quieras sobre esto — no te voy a dar la respuesta del ejercicio.</p>
-            <div className="row">
-              <button
-                type="button"
-                className="btn-quiet"
-                onClick={() => void ask("Explícame qué significa esto.")}
-                disabled={busy}
-              >
-                Explicar término
-              </button>
-            </div>
-          </>
-        )}
-        {history.length === 0 && !busy && !isSelection && (
-          <p className="hint">Pregunta lo que necesites aclarar sobre este bloque — no te voy a dar la respuesta del ejercicio.</p>
-        )}
-        {history.map((turn, i) => (
-          <div className="lexical-turn" key={i}>
-            <p className="lexical-turn-question">Tú: {turn.question}</p>
-            <RichText text={turn.answer} className="lexical-turn-answer" />
-          </div>
-        ))}
-        {busy && (
-          <p className="hint lexical-thinking">
-            <svg className="lex-lemniscate" viewBox="0 0 24 24" aria-hidden="true">
-              <path
-                className="lex-inf"
-                pathLength={1}
-                d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z"
-              />
-            </svg>
-            Pensando…
-          </p>
-        )}
-      </div>
-
-      {error && <div className="alert error">{error}</div>}
-
-      <div className="row lexical-popover-input">
-        <input
-          ref={inputRef}
-          value={question}
-          onChange={(e) => setQuestion(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void ask();
-          }}
-          placeholder="¿Qué quieres que te aclare?"
-          disabled={busy}
-        />
-        <button className="btn-primary" onClick={() => void ask()} disabled={busy || !question.trim()}>
-          Preguntar
+      <div className="comment-tabs">
+        <button
+          type="button"
+          className={`comment-tab-btn ${activeTab === "doubt" ? "active" : ""}`}
+          onClick={() => setActiveTab("doubt")}
+        >
+          💬 Duda con IA
+        </button>
+        <button
+          type="button"
+          className={`comment-tab-btn ${activeTab === "note" ? "active" : ""}`}
+          onClick={() => setActiveTab("note")}
+        >
+          ⭐ Nota importante
         </button>
       </div>
+
+      {activeTab === "doubt" ? (
+        <>
+          <div className="lexical-popover-history" ref={historyRef}>
+            {history.length === 0 && !busy && isSelection && (
+              <>
+                <p className="hint">Pregunta lo que quieras sobre esto — no te daré respuestas directas a los retos.</p>
+                <div className="row">
+                  <button
+                    type="button"
+                    className="btn-quiet"
+                    onClick={() => void ask("Explícame qué significa esto.")}
+                    disabled={busy}
+                  >
+                    Explicar término
+                  </button>
+                </div>
+              </>
+            )}
+            {history.length === 0 && !busy && !isSelection && (
+              <p className="hint">Pregunta lo que necesites aclarar sobre este bloque.</p>
+            )}
+            {history.map((turn, i) => (
+              <div className="lexical-turn" key={i}>
+                <p className="lexical-turn-question">Tú: {turn.question}</p>
+                <RichText text={turn.answer} className="lexical-turn-answer" />
+              </div>
+            ))}
+            {busy && (
+              <p className="hint lexical-thinking">
+                <svg className="lex-lemniscate" viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    className="lex-inf"
+                    pathLength={1}
+                    d="M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4Zm0 0c2 2.67 4 4 6 4a4 4 0 0 0 0-8c-2 0-4 1.33-6 4Z"
+                  />
+                </svg>
+                Pensando…
+              </p>
+            )}
+          </div>
+
+          {error && <div className="alert error">{error}</div>}
+
+          <div className="row lexical-popover-input">
+            <input
+              ref={inputRef}
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void ask();
+              }}
+              placeholder="¿Qué quieres que te aclare?"
+              disabled={busy}
+            />
+            <button className="btn-primary" onClick={() => void ask()} disabled={busy || !question.trim()}>
+              Preguntar
+            </button>
+          </div>
+
+          {history.length > 0 && (
+            <div className="row mt-1">
+              <button
+                type="button"
+                className="btn-secondary btn-sm w-full"
+                onClick={handleSaveDoubt}
+                disabled={Boolean(savedKind)}
+              >
+                {savedKind === "doubt" ? "✓ ¡Duda guardada en notas!" : "💾 Guardar duda en panel de notas"}
+              </button>
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="comment-note-form mt-1">
+          <textarea
+            className="comment-note-textarea"
+            placeholder="Escribe tu reflexión o nota importante..."
+            value={noteContent}
+            onChange={(e) => setNoteContent(e.target.value)}
+            rows={3}
+          />
+          <input
+            type="text"
+            className="comment-tags-input"
+            placeholder="Etiquetas separadas por coma (ej: examen, concepto_clave)"
+            value={noteTags}
+            onChange={(e) => setNoteTags(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn-primary btn-sm"
+            onClick={handleSaveNote}
+            disabled={!noteContent.trim() || Boolean(savedKind)}
+          >
+            {savedKind === "note" ? "✓ ¡Nota guardada en el panel!" : "💾 Guardar nota importante"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

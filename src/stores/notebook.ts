@@ -7,7 +7,7 @@ import { listCourseClasses } from "../lib/tauri";
 // store alone dies with the window).
 const ACTIVE_CLASS_KEY = "learnkit-active-class";
 
-function readActiveClass(): string | null {
+export function readActiveClass(): string | null {
   try {
     return window.localStorage.getItem(ACTIVE_CLASS_KEY);
   } catch {
@@ -36,7 +36,7 @@ interface NotebookNavState {
    *  header's "Clases" tab and the boot restore both go through here, so
    *  neither has to reimplement the resume rule. Throws on failure so the
    *  caller decides what the student sees. */
-  openCourse: (courseId: string) => Promise<void>;
+  openCourse: (courseId: string, preferredClassId?: string) => Promise<void>;
   setActiveClass: (classId: string) => void;
   /** Re-syncs the course's classes after a change that can flip a class to
    *  `complete` (gate resolved, reflection written) — the path's locks and
@@ -48,6 +48,8 @@ interface NotebookNavState {
   clear: () => void;
 }
 
+let courseEpoch = 0;
+
 export const useNotebookNav = create<NotebookNavState>((set, get) => ({
   classes: [],
   courseId: null,
@@ -56,11 +58,13 @@ export const useNotebookNav = create<NotebookNavState>((set, get) => ({
     writeActiveClass(classId);
     set({ classes, activeClassId: classId, courseId });
   },
-  openCourse: async (courseId) => {
+  openCourse: async (courseId, preferredClassId) => {
+    const epoch = ++courseEpoch;
     const classes = await listCourseClasses(courseId);
-    // Resume the last class the student was reading, falling back to the
-    // first when it's stale — the class may belong to another course.
-    const restored = get().activeClassId;
+    if (epoch !== courseEpoch) return;
+    // Resume the requested class or the last class the student was reading,
+    // falling back to the first when it's stale — the class may belong to another course.
+    const restored = preferredClassId ?? get().activeClassId;
     const target = classes.some((c) => c.id === restored) ? restored! : (classes[0]?.id ?? null);
     if (target) writeActiveClass(target);
     set({ classes, courseId, activeClassId: target });
@@ -71,6 +75,7 @@ export const useNotebookNav = create<NotebookNavState>((set, get) => ({
   },
   setClasses: (classes) => set({ classes }),
   clear: () => {
+    courseEpoch++;
     writeActiveClass(null);
     set({ classes: [], courseId: null, activeClassId: null });
   },

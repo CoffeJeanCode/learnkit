@@ -4,6 +4,7 @@ import { useGraph } from "../../stores/graph";
 import { useRoadmap } from "../../stores/roadmap";
 import { useUi } from "../../stores/ui";
 import { ConceptForm, ConfirmButton, GraphCanvas, LinkForm, RelationList } from "./GraphParts";
+import { GraphCanvasD3 } from "./GraphCanvasD3";
 import type { Selection } from "./GraphParts";
 import { classLabel, layoutGraph, nodeOptions } from "./graph";
 
@@ -24,6 +25,7 @@ export function GraphView() {
 
   const [selection, setSelection] = useState<Selection>(null);
   const [panel, setPanel] = useState<Panel>(null);
+  const [viewMode, setViewMode] = useState<"d3" | "columns">("d3");
 
   useEffect(() => {
     if (courseId) void load(courseId);
@@ -60,13 +62,31 @@ export function GraphView() {
         información en conocimiento.
       </p>
 
-      <div className="row">
-        <button className="btn-primary" disabled={!firstClass} onClick={() => { setSelection(null); setPanel({ kind: "concept", classId: selectedNode?.classId ?? firstClass }); }}>
-          ＋ Nuevo concepto
-        </button>
-        <button className="btn-primary" disabled={options.length < 2} onClick={() => { setSelection(null); setPanel({ kind: "link", fromId: selectedNode?.id }); }}>
-          ＋ Nueva relación
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="row">
+          <button className="btn-primary" disabled={!firstClass} onClick={() => { setSelection(null); setPanel({ kind: "concept", classId: selectedNode?.classId ?? firstClass }); }}>
+            ＋ Nuevo concepto
+          </button>
+          <button className="btn-primary" disabled={options.length < 2} onClick={() => { setSelection(null); setPanel({ kind: "link", fromId: selectedNode?.id }); }}>
+            ＋ Nueva relación
+          </button>
+        </div>
+        <div className="flex items-center gap-1.5 p-1 rounded-lg bg-paper-deep border border-slate-800 text-xs">
+          <button
+            type="button"
+            className={`px-2 py-1 rounded transition-colors ${viewMode === "d3" ? "bg-slate-700 text-slate-100 font-semibold" : "text-slate-400 hover:text-slate-200"}`}
+            onClick={() => setViewMode("d3")}
+          >
+            Grafo D3
+          </button>
+          <button
+            type="button"
+            className={`px-2 py-1 rounded transition-colors ${viewMode === "columns" ? "bg-slate-700 text-slate-100 font-semibold" : "text-slate-400 hover:text-slate-200"}`}
+            onClick={() => setViewMode("columns")}
+          >
+            Columnas
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -85,6 +105,15 @@ export function GraphView() {
 
       {!loading && layout.nodes.length === 0 ? (
         <p className="muted">Este curso aún no tiene clases para conectar.</p>
+      ) : viewMode === "d3" ? (
+        <GraphCanvasD3
+          classes={classes}
+          concepts={graph.concepts}
+          links={graph.links}
+          selection={selection}
+          onSelect={select}
+          onCreateLink={addLink}
+        />
       ) : (
         <GraphCanvas layout={layout} selection={selection} onSelect={select} />
       )}

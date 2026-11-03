@@ -6,3 +6,7 @@ src-tauri/WixTools/
 *.key
 .env
 src-tauri/resources/
+.claude/worktrees/
+src-tauri/target-check/
+*.manifest
+

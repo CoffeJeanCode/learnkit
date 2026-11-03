@@ -24,7 +24,7 @@ use crate::domain::study::{resolve_variant, StudyEvent, StudyEventKind, StudySet
 use crate::domain::learner_memory::LearnerCognitiveMemory;
 use crate::domain::notebook::{
     BlockStatus, BlockUpdate, ClassRecord, Concept, ConceptGraph, ConceptLink, Course, DiagnosticBattery, GateAttempt, DiagnosticBatteryState, DynamicBlockType,
-    NotebookBlock, NotebookDocument, NotebookPayload, NotebookStatus, SyllabusMilestone,
+    NotebookBlock, NotebookComment, NotebookDocument, NotebookPayload, NotebookStatus, SyllabusMilestone,
 };
 use crate::error::{AppError, AppResult};
 
@@ -184,6 +184,24 @@ CREATE TABLE IF NOT EXISTS learner_memory (
     data_json TEXT NOT NULL,
     updated_at_ms INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS notebook_comments (
+    id TEXT PRIMARY KEY,
+    notebook_id TEXT NOT NULL,
+    class_id TEXT NOT NULL,
+    course_id TEXT NOT NULL,
+    block_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    selected_text TEXT NOT NULL,
+    anchor_y REAL NOT NULL,
+    content TEXT NOT NULL,
+    ai_response TEXT,
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notebook_comments_nb ON notebook_comments(notebook_id);
+CREATE INDEX IF NOT EXISTS idx_notebook_comments_course ON notebook_comments(course_id);
 "#;
 
 /// `skill_evidence` shipped without `is_transfer`; databases created by that
@@ -1205,6 +1223,7 @@ impl NotebookStore {
             content_json: content_json.clone(),
             order_index,
             status,
+            concept_node_id: None,
             attempt_count: 0,
             last_feedback: None,
         }))
@@ -1576,6 +1595,99 @@ impl NotebookStore {
     /// which overwrites the whole payload. `None` leaves a key as it was; an
     /// empty note or a `null` state removes it. Returns `false` when the block
     /// doesn't belong to `notebook_id`.
+    pub fn upsert_comment(&self, comment: &NotebookComment) -> AppResult<NotebookComment> {
+        let conn = self.lock();
+        let tags_json = serde_json::to_string(&comment.tags).unwrap_or_else(|_| "[]".to_string());
+        conn.execute(
+            "INSERT INTO notebook_comments (
+                id, notebook_id, class_id, course_id, block_id, kind, selected_text, anchor_y, content, ai_response, tags_json, created_at_ms, updated_at_ms
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+            ON CONFLICT(id) DO UPDATE SET
+                content = excluded.content,
+                ai_response = excluded.ai_response,
+                tags_json = excluded.tags_json,
+                anchor_y = excluded.anchor_y,
+                updated_at_ms = excluded.updated_at_ms",
+            params![
+                comment.id,
+                comment.notebook_id,
+                comment.class_id,
+                comment.course_id,
+                comment.block_id,
+                comment.kind,
+                comment.selected_text,
+                comment.anchor_y,
+                comment.content,
+                comment.ai_response,
+                tags_json,
+                comment.created_at_ms,
+                comment.updated_at_ms,
+            ],
+        )?;
+        Ok(comment.clone())
+    }
+
+    pub fn list_comments_by_notebook(&self, notebook_id: &str) -> AppResult<Vec<NotebookComment>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, notebook_id, class_id, course_id, block_id, kind, selected_text, anchor_y, content, ai_response, tags_json, created_at_ms, updated_at_ms
+             FROM notebook_comments WHERE notebook_id = ?1 ORDER BY created_at_ms ASC"
+        )?;
+        let rows = stmt.query_map(params![notebook_id], |r| {
+            let tags_str: String = r.get(10)?;
+            let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
+            Ok(NotebookComment {
+                id: r.get(0)?,
+                notebook_id: r.get(1)?,
+                class_id: r.get(2)?,
+                course_id: r.get(3)?,
+                block_id: r.get(4)?,
+                kind: r.get(5)?,
+                selected_text: r.get(6)?,
+                anchor_y: r.get(7)?,
+                content: r.get(8)?,
+                ai_response: r.get(9)?,
+                tags,
+                created_at_ms: r.get(11)?,
+                updated_at_ms: r.get(12)?,
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn list_comments_by_course(&self, course_id: &str) -> AppResult<Vec<NotebookComment>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, notebook_id, class_id, course_id, block_id, kind, selected_text, anchor_y, content, ai_response, tags_json, created_at_ms, updated_at_ms
+             FROM notebook_comments WHERE course_id = ?1 ORDER BY created_at_ms ASC"
+        )?;
+        let rows = stmt.query_map(params![course_id], |r| {
+            let tags_str: String = r.get(10)?;
+            let tags: Vec<String> = serde_json::from_str(&tags_str).unwrap_or_default();
+            Ok(NotebookComment {
+                id: r.get(0)?,
+                notebook_id: r.get(1)?,
+                class_id: r.get(2)?,
+                course_id: r.get(3)?,
+                block_id: r.get(4)?,
+                kind: r.get(5)?,
+                selected_text: r.get(6)?,
+                anchor_y: r.get(7)?,
+                content: r.get(8)?,
+                ai_response: r.get(9)?,
+                tags,
+                created_at_ms: r.get(11)?,
+                updated_at_ms: r.get(12)?,
+            })
+        })?.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn delete_comment(&self, comment_id: &str) -> AppResult<bool> {
+        let n = self.lock().execute("DELETE FROM notebook_comments WHERE id = ?1", params![comment_id])?;
+        Ok(n > 0)
+    }
+
     pub fn merge_block_annotation(
         &self,
         notebook_id: &str,
@@ -1702,6 +1814,7 @@ fn row_to_block(row: &rusqlite::Row) -> rusqlite::Result<NotebookBlock> {
         content_json,
         order_index: row.get(4)?,
         status: BlockStatus::parse(&status_str).unwrap_or(BlockStatus::Passed),
+        concept_node_id: None,
         attempt_count: row.get(6)?,
         last_feedback: row.get(7)?,
     })

@@ -92,6 +92,63 @@ impl ProviderKind {
             _ => main_model.to_string(),
         }
     }
+
+    /// Default strong model for reasoning-intensive agents.
+    pub fn suggested_strong_model(&self) -> &'static str {
+        match self {
+            ProviderKind::OpenAI => "gpt-5",
+            ProviderKind::Anthropic => "claude-sonnet-4-6",
+            ProviderKind::Gemini => "gemini-2.5-pro",
+            ProviderKind::OpenRouter => "anthropic/claude-sonnet-4",
+            ProviderKind::DeepSeek => "deepseek-chat",
+            ProviderKind::Xiaomi => "mimo-v2.6-pro",
+        }
+    }
+
+    /// Default lightweight/cheap model for high-frequency or evaluative tasks.
+    pub fn suggested_cheap_model(&self) -> &'static str {
+        match self {
+            ProviderKind::OpenAI => "gpt-4.1-mini",
+            ProviderKind::Anthropic => "claude-haiku-4-5",
+            ProviderKind::Gemini => "gemini-2.5-flash",
+            ProviderKind::OpenRouter => "openai/gpt-4.1-mini",
+            ProviderKind::DeepSeek => "deepseek-v4-flash",
+            ProviderKind::Xiaomi => "mimo-v2.6-flash",
+        }
+    }
+
+    /// Default multimodal model for image/diagram analysis.
+    pub fn suggested_vision_model(&self) -> &'static str {
+        match self {
+            ProviderKind::OpenAI => "gpt-5",
+            ProviderKind::Anthropic => "claude-sonnet-4-6",
+            ProviderKind::Gemini => "gemini-2.5-flash",
+            ProviderKind::OpenRouter => "anthropic/claude-sonnet-4",
+            ProviderKind::DeepSeek => "deepseek-chat",
+            ProviderKind::Xiaomi => "mimo-v2.6-pro",
+        }
+    }
+}
+
+/// Execution tier classification for dynamic multi-model orchestration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ModelTier {
+    Strong,
+    Cheap,
+    Vision,
+}
+
+/// Dynamic tier configuration mapping each capability tier to a specific provider and model.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelTierConfig {
+    pub strong_provider_id: Option<String>,
+    pub strong_model: Option<String>,
+    pub cheap_provider_id: Option<String>,
+    pub cheap_model: Option<String>,
+    pub vision_provider_id: Option<String>,
+    pub vision_model: Option<String>,
 }
 
 /// Non-sensitive provider configuration. Persisted as JSON. Never contains secrets.

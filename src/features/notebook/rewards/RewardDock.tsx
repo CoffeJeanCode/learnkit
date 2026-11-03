@@ -35,13 +35,16 @@ export function RewardDock({ notebookId }: { notebookId: string }) {
 
   if (!pieces || pieces.length === 0) return null;
 
-  const caption = hover ? hover.why : lastEarned ? `Pieza nueva: ${lastEarned.why}` : "Arrastra tus piezas: cada una cuenta cómo la ganaste.";
+  // Do not alter caption on hover: tooltips on the pieces prevent layout shifting
+  const caption = lastEarned
+    ? `Pieza nueva: ${lastEarned.why}`
+    : "Arma tus piezas sobre la mesa como legos: encajan en los studs y cada una cuenta cómo la ganaste.";
   return (
     <RewardDockView
       pieces={pieces}
       open={open}
       caption={caption}
-      isNew={!!lastEarned && !hover}
+      isNew={!!lastEarned}
       onOpen={() => setOpen(true)}
       onClose={() => setOpen(false)}
       onSettle={(placements) => place(notebookId, placements)}

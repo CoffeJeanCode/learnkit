@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { SubmitGate } from "./index";
+import { GateProgress, GateSubmitButton } from "./GateSubmitButton";
 import { answerKey } from "./interaction";
 import { CaseWiring, ChainOrder } from "./nodes";
 import { asNullableString, asStringArray, usePersistedState } from "./persist";
@@ -89,7 +90,7 @@ export function InteractivePredictionGateBlock({
 
   const header = (
     <>
-      {content.visualAid && <StaticVisual visual={content.visualAid} />}
+      {content.visualAid && <StaticVisual visual={content.visualAid} locked={!resolved} />}
       <RichText className="block-question" text={content.question} />
     </>
   );
@@ -122,12 +123,15 @@ export function InteractivePredictionGateBlock({
         <p className="hint">Arrastra cada eslabón hasta su lugar: primero arriba, último abajo.</p>
         <ChainOrder steps={order} onChange={(next) => patch({ order: next })} disabled={!isActive || busy} render={(step) => <InlineText text={step} />} />
         <div className="row">
-          <button className="btn-primary" onClick={checkOrder} disabled={!isActive || busy || alreadyTried}>
-            {busy ? "Calificando…" : "Comprobar secuencia"}
-          </button>
-          {alreadyTried && <span className="hint">Ya probaste este orden — cámbialo antes de volver a comprobar.</span>}
+          <GateSubmitButton
+            label="Comprobar secuencia"
+            busy={busy}
+            disabled={!isActive || alreadyTried}
+            disabledReason={!isActive ? "Esta predicción ya no está activa." : alreadyTried ? "Ya probaste este orden — cámbialo antes de volver a comprobar." : null}
+            onClick={checkOrder}
+          />
         </div>
-        {busy && <p className="hint">Calificando…</p>}
+        <GateProgress busy={busy} label="Comprobando la secuencia" />
         {warning}
       </div>
     );
@@ -146,13 +150,23 @@ export function InteractivePredictionGateBlock({
           disabled={!isActive || busy}
         />
         <div className="row">
-          <button className="btn-primary" onClick={checkCases} disabled={!isActive || busy || !allClassified || alreadyTried}>
-            {busy ? "Calificando…" : "Comprobar casos"}
-          </button>
-          {!allClassified && isActive && <span className="hint">Conecta todos los casos para comprobar.</span>}
-          {alreadyTried && <span className="hint">Ya probaste esta clasificación — cambia algún caso.</span>}
+          <GateSubmitButton
+            label="Comprobar casos"
+            busy={busy}
+            disabled={!isActive || !allClassified || alreadyTried}
+            disabledReason={
+              !isActive
+                ? "Esta predicción ya no está activa."
+                : !allClassified
+                  ? "Conecta todos los casos para comprobar."
+                  : alreadyTried
+                    ? "Ya probaste esta clasificación — cambia algún caso."
+                    : null
+            }
+            onClick={checkCases}
+          />
         </div>
-        {busy && <p className="hint">Calificando…</p>}
+        <GateProgress busy={busy} label="Comprobando los casos" />
         {warning}
       </div>
     );
@@ -194,7 +208,7 @@ export function InteractivePredictionGateBlock({
           ))}
         </ul>
       )}
-      {busy && <p className="hint">Calificando…</p>}
+      <GateProgress busy={busy} label="Comprobando la predicción" />
       {warning}
     </div>
   );

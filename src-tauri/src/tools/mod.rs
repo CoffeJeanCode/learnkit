@@ -17,7 +17,7 @@ use crate::domain::message::AgentEvent;
 
 pub use echo::EchoTool;
 pub use notebook_tools::{
-    BlockAuditCapture, BlockAuditResult, ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult,
+    extract_block_from_text, BlockAuditCapture, BlockAuditResult, ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult,
     GateScaffold, GradeClosureSubmissionTool, GradeGateSubmissionTool, NotebookBlockCapture, PublishedBlock, PublishNotebookBlockTool,
     ScaffoldType, SubmitBlockAuditTool,
 };

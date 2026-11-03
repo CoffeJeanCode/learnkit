@@ -1,7 +1,7 @@
 use tauri::State;
 
 use crate::domain::model::ModelInfo;
-use crate::domain::provider::{ProviderConfig, ProviderKind, ProviderWithStatus};
+use crate::domain::provider::{ModelTierConfig, ProviderConfig, ProviderKind, ProviderWithStatus};
 use crate::error::AppResult;
 use crate::state::AppState;
 
@@ -73,4 +73,15 @@ pub async fn list_models(state: State<'_, AppState>, provider_id: String) -> App
 #[tauri::command]
 pub fn suggested_models(state: State<'_, AppState>, provider: ProviderKind) -> Vec<String> {
     state.provider_service.suggested_models(provider)
+}
+
+#[tauri::command]
+pub fn get_model_tiers(state: State<'_, AppState>) -> AppResult<ModelTierConfig> {
+    Ok(state.get_model_tiers())
+}
+
+#[tauri::command]
+pub fn set_model_tiers(state: State<'_, AppState>, config: ModelTierConfig) -> AppResult<ModelTierConfig> {
+    state.set_model_tiers(config.clone())?;
+    Ok(config)
 }

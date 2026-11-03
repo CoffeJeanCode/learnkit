@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tauri::State;
 
 use crate::domain::learner_memory::LearnerCognitiveMemory;
-use crate::domain::notebook::{BlockUpdate, ClassRecord, ClosureFeedback, Concept, ConceptGraph, ConceptLink, Course, DiagnosticBatteryState, GateResult, GateSubmission, NotebookPayload};
+use crate::domain::notebook::{BlockUpdate, ClassRecord, ClosureFeedback, Concept, ConceptGraph, ConceptLink, Course, DiagnosticBatteryState, GateResult, GateSubmission, NotebookComment, NotebookPayload};
 use crate::application::notebook_service::RetrievalAnswerResult;
 use crate::domain::skill_evidence::SkillEvidence;
 use crate::domain::capability_map::CapabilityMap;
@@ -284,4 +284,36 @@ pub fn save_diagnostic_battery_answers(
 #[tauri::command]
 pub fn get_learner_memory(state: State<'_, AppState>) -> AppResult<LearnerCognitiveMemory> {
     state.notebook_service.get_learner_memory()
+}
+
+#[tauri::command]
+pub fn upsert_notebook_comment(
+    state: State<'_, AppState>,
+    comment: NotebookComment,
+) -> AppResult<NotebookComment> {
+    state.notebook_service.upsert_comment(&comment)
+}
+
+#[tauri::command]
+pub fn list_notebook_comments(
+    state: State<'_, AppState>,
+    notebook_id: String,
+) -> AppResult<Vec<NotebookComment>> {
+    state.notebook_service.list_comments_by_notebook(&notebook_id)
+}
+
+#[tauri::command]
+pub fn list_course_comments(
+    state: State<'_, AppState>,
+    course_id: String,
+) -> AppResult<Vec<NotebookComment>> {
+    state.notebook_service.list_comments_by_course(&course_id)
+}
+
+#[tauri::command]
+pub fn delete_notebook_comment(
+    state: State<'_, AppState>,
+    comment_id: String,
+) -> AppResult<bool> {
+    state.notebook_service.delete_comment(&comment_id)
 }

@@ -11,7 +11,7 @@ import {
 } from "../../lib/tauri";
 import { useNotebookNav } from "../../stores/notebook";
 import { browserStore, saveResume } from "../../lib/resume";
-import { useResumeTarget } from "../../lib/resumeSession";
+import { finishRestoring, isRestoring, useResumeTarget } from "../../lib/resumeSession";
 import { useRewards } from "../../stores/rewards";
 import { useRoadmap } from "../../stores/roadmap";
 import { useUi } from "../../stores/ui";
@@ -24,6 +24,13 @@ import { RewardDock } from "./rewards/RewardDock";
 import { ClassPath } from "../../components/ClassPath";
 import { DynamicNotebookBlock } from "./blocks";
 import { useClassNotebookSession } from "./useClassNotebookSession";
+import { SessionObserverBadge } from "./SessionObserverBadge";
+import { SessionMetricsModal } from "./SessionMetricsModal";
+import { ScrollJump } from "./ScrollJump";
+import { CommentsSidebar } from "./comments/CommentsSidebar";
+import { CourseNotesModal } from "./comments/CourseNotesModal";
+import { useCommentsStore } from "./commentsStore";
+import { IconNotes, IconRefresh } from "../../components/Icons";
 
 // One-class-ahead buffer: while the student reads class N, class N+1's
 // first block starts generating silently in the background, so by the time
@@ -47,6 +54,26 @@ const GATE_BLOCK_TYPES: readonly DynamicBlockType[] = [
 
 function isUnresolvedGate(block: NotebookBlock): boolean {
   return GATE_BLOCK_TYPES.includes(block.block_type) && block.status !== "passed" && block.status !== "escalated";
+}
+
+/** Computes how many blocks should be initially revealed: reveals all unlocked content
+ *  up to the first unresolved gate, and always includes the target resume block if present. */
+function computeUnlockedBlockCount(blocks: NotebookBlock[], targetBlockId?: string): number {
+  if (blocks.length === 0) return 1;
+  let count = 0;
+  for (let i = 0; i < blocks.length; i++) {
+    count = i + 1;
+    if (isUnresolvedGate(blocks[i])) {
+      break;
+    }
+  }
+  if (targetBlockId) {
+    const targetIdx = blocks.findIndex((b) => b.id === targetBlockId);
+    if (targetIdx >= 0 && targetIdx + 1 > count) {
+      count = targetIdx + 1;
+    }
+  }
+  return Math.max(1, count);
 }
 
 /** Short labels for the popover assistant's `keyConcepts` — derived from
@@ -101,6 +128,10 @@ export function ClassNotebookView() {
   const [regeneratingClass, setRegeneratingClass] = useState(false);
   const [regenerateClassError, setRegenerateClassError] = useState<string | null>(null);
 
+  const toggleCommentsSidebar = useCommentsStore((s) => s.toggleSidebar);
+  const totalCommentsCount = useCommentsStore((s) => s.comments.length);
+  const commentsSidebarOpen = useCommentsStore((s) => s.isSidebarOpen);
+
   // --- Sidebar plan note -----------------------------------------------
   // Only when the open session actually OWNS this course: the header's
   // sections belong to the active session, so an unrelated conversation must
@@ -127,6 +158,13 @@ export function ClassNotebookView() {
     regeneratingBlockId,
   } = useClassNotebookSession(classId, reloadToken);
   const activeClass = classes.find((c) => c.id === classId);
+  const setCommentsScope = useCommentsStore((s) => s.setScope);
+
+  useEffect(() => {
+    if (document?.id && classId && courseId) {
+      setCommentsScope(document.id, classId, courseId);
+    }
+  }, [document?.id, classId, courseId, setCommentsScope]);
   // Which block the "Regenerar" action failed for, and why — shown on THAT
   // block's card so a failure never hides behind an unrelated one.
   const [regenerateFailure, setRegenerateFailure] = useState<{ blockId: string; message: string } | null>(null);
@@ -153,10 +191,27 @@ export function ClassNotebookView() {
   // prefetch that previously bounced.
   useEffect(() => {
     setVisibleCount(1);
+    setReadingBlockId(null);
     setRegenerateFailure(null);
     setConfirmRegenerateClass(false);
     setRegenerateClassError(null);
   }, [classId]);
+
+  const pending = useResumeTarget((s) => s.pending);
+
+  // When blocks are loaded/ready, immediately reveal all unlocked blocks up to the first
+  // unresolved gate (or the target resume block if queued).
+  useEffect(() => {
+    if (blocks.length > 0) {
+      const pendingBlockId =
+        pending?.classId === classId
+          ? pending.blockId
+          : undefined;
+      const unlocked = computeUnlockedBlockCount(blocks, pendingBlockId);
+      setVisibleCount((prev) => Math.max(prev, unlocked));
+    }
+  }, [blocks, classId, pending]);
+
   useEffect(() => {
     if (!classId || blocks.length === 0) return;
     const idx = classes.findIndex((c) => c.id === classId);
@@ -185,31 +240,89 @@ export function ClassNotebookView() {
     }
   }, [awaitingGate, nextBufferedBlock]);
 
-  // Remember the last block the student reached, so reopening the session lands on it.
+  // Track the block currently in reading focus in .workspace
+  const [readingBlockId, setReadingBlockId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!classId || blocks.length === 0) return;
+    const scroller = window.document.querySelector(".workspace");
+
+    const updateVisibleBlock = () => {
+      const pendingTarget = useResumeTarget.getState().pending;
+      if (pendingTarget && pendingTarget.classId === classId) return;
+      if (isRestoring()) return;
+
+      const elements = Array.from(window.document.querySelectorAll<HTMLElement>(".notebook-block-wrapper[data-block-id]"));
+      if (elements.length === 0) return;
+
+      const viewportCenter = window.innerHeight / 2;
+      let closestBlockId: string | null = null;
+      let minDistance = Infinity;
+
+      for (const el of elements) {
+        const rect = el.getBoundingClientRect();
+        const blockCenter = rect.top + rect.height / 2;
+        const distance = Math.abs(blockCenter - viewportCenter);
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestBlockId = el.dataset.blockId ?? null;
+        }
+      }
+
+      if (closestBlockId) {
+        setReadingBlockId(closestBlockId);
+      }
+    };
+
+    const scrollerTarget = scroller ?? window;
+    scrollerTarget.addEventListener("scroll", updateVisibleBlock, { passive: true });
+    return () => {
+      scrollerTarget.removeEventListener("scroll", updateVisibleBlock);
+    };
+  }, [classId, visibleCount, blocks.length]);
+
+  // Remember the last block the student reached/read, so reopening the session lands on it.
   const sessionId = useRoadmap((s) => s.session?.session_id);
   const lastVisibleId = lastVisible?.id;
   useEffect(() => {
-    if (!sessionId || !classId || !lastVisibleId) return;
-    saveResume(browserStore(), sessionId, { blockId: lastVisibleId, blockClassId: classId });
-  }, [sessionId, classId, lastVisibleId]);
+    if (!sessionId || !classId || isRestoring()) return;
+    const pendingTarget = useResumeTarget.getState().pending;
+    if (pendingTarget && pendingTarget.classId === classId) return;
+
+    const blockToSave = readingBlockId ?? lastVisibleId;
+    if (!blockToSave) return;
+
+    saveResume(browserStore(), sessionId, {
+      view: "notebook",
+      classId,
+      blockId: blockToSave,
+      blockClassId: classId,
+    });
+  }, [sessionId, classId, readingBlockId, lastVisibleId]);
 
   // Coming back to a session: scroll to the block where the student stopped. The target is
-  // queued by `resumeSession`; the block may not be revealed yet (content auto-advances up to
-  // the first open gate), so this retries as more blocks appear and gives up after a while.
-  const pending = useResumeTarget((s) => s.pending);
+  // queued by `resumeSession`; all unlocked blocks up to the target are already visible.
   useEffect(() => {
     if (!pending) return;
     if (pending.classId !== classId) {
       useResumeTarget.setState({ pending: null });
+      finishRestoring();
       return;
     }
     const el = window.document.querySelector(`[data-block-id="${pending.blockId}"]`);
     if (el) {
-      el.scrollIntoView({ block: "center" });
+      el.scrollIntoView({ block: "center", behavior: "auto" });
+      const raf = requestAnimationFrame(() => {
+        el.scrollIntoView({ block: "center", behavior: "auto" });
+        finishRestoring();
+      });
       useResumeTarget.setState({ pending: null });
-      return;
+      return () => cancelAnimationFrame(raf);
     }
-    const giveUp = window.setTimeout(() => useResumeTarget.setState({ pending: null }), 12000);
+    const giveUp = window.setTimeout(() => {
+      useResumeTarget.setState({ pending: null });
+      finishRestoring();
+    }, 12000);
     return () => window.clearTimeout(giveUp);
   }, [pending, classId, visibleCount, blocks.length]);
 
@@ -333,12 +446,22 @@ export function ClassNotebookView() {
   }
 
   return (
-    <div className="view notebook" {...{ [STICKER_LAYER_ATTR]: "" }}>
+    <div className={`view notebook${commentsSidebarOpen ? " comments-open" : ""}`} {...{ [STICKER_LAYER_ATTR]: "" }}>
       <div className="notebook-shell">
         <div className="notebook-main">
           <div className="row notebook-header">
             <h2>{activeClass?.title ?? "Clase"}</h2>
             <div className="notebook-header-actions">
+              <SessionObserverBadge />
+              <button
+                type="button"
+                className="btn-quiet flex items-center gap-1.5"
+                onClick={toggleCommentsSidebar}
+                title="Abrir panel de comentarios y notas de esta clase"
+              >
+                <IconNotes />
+                <span>Notas {totalCommentsCount > 0 ? `(${totalCommentsCount})` : ""}</span>
+              </button>
               {confirmRegenerateClass ? (
                 <>
                   <span className="danger-confirm-text">Se perderá tu progreso en esta clase.</span>
@@ -351,12 +474,13 @@ export function ClassNotebookView() {
                 </>
               ) : (
                 <button
-                  className="btn-quiet"
+                  className="btn-quiet flex items-center gap-1.5"
                   title="Para casos atípicos: reinicia esta clase desde cero, sin conservar el progreso actual"
                   onClick={() => setConfirmRegenerateClass(true)}
                   disabled={loading || regeneratingClass}
                 >
-                  🔄 Regenerar clase
+                  <IconRefresh />
+                  <span>Regenerar clase</span>
                 </button>
               )}
             </div>
@@ -459,6 +583,10 @@ export function ClassNotebookView() {
       </div>
       {document && <PageStickers notebookId={document.id} />}
       {document && <RewardDock notebookId={document.id} />}
+      <ScrollJump />
+      <SessionMetricsModal />
+      <CommentsSidebar />
+      <CourseNotesModal />
     </div>
   );
 }
