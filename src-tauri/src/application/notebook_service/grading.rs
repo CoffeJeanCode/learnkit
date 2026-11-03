@@ -18,7 +18,7 @@ use crate::domain::skill_evidence::RubricCriterion;
 use crate::domain::notebook::{BlockStatus, DynamicBlockType, NotebookBlock};
 use crate::error::{AppError, AppResult};
 use crate::orchestration::Orchestrator;
-use crate::tools::{ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult};
+use crate::tools::{ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult, GateScaffold, ScaffoldType};
 
 use super::render;
 
@@ -235,13 +235,15 @@ async fn run_gate_grader(orchestrator: &Orchestrator, app: Option<&AppHandle>, b
             Ok(output) => {
                 let result = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
                 if let Some(r) = result {
-                    return Ok(ModelGrade { passed: r.passed, scaffold_feedback: r.scaffold.map(|s| s.content), criteria: r.criteria });
+                    let feedback = r.scaffold.map(|s| clean_tool_and_xml_tags(&s.content));
+                    return Ok(ModelGrade { passed: r.passed, scaffold_feedback: feedback, criteria: r.criteria });
                 }
 
-                // Fallback 1: Parse JSON verdict directly from the model's text response
+                // Fallback 1: Parse verdict directly from model text response (handles XML tool calls & JSON)
                 if let Some(r) = parse_gate_grade_from_text(&output.text) {
                     tracing::info!("recovered gate grading result directly from model text output");
-                    return Ok(ModelGrade { passed: r.passed, scaffold_feedback: r.scaffold.map(|s| s.content), criteria: r.criteria });
+                    let feedback = r.scaffold.map(|s| clean_tool_and_xml_tags(&s.content));
+                    return Ok(ModelGrade { passed: r.passed, scaffold_feedback: feedback, criteria: r.criteria });
                 }
 
                 // Fallback 2: Retry with assertive system note if attempts remain
@@ -297,17 +299,23 @@ pub(super) async fn grade_closure_with_model(
         let capture: ClosureFeedbackCapture = Arc::new(Mutex::new(None));
         let input = format!("{base_input}{note}");
         match orchestrator.run_closure_grading_agent(app, CLOSURE_FEEDBACK_GRADER_AGENT_ID, &input, capture.clone()).await {
-            Ok(_) => {
+            Ok(output) => {
                 let result = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
-                return match result {
-                    Some(r) if !r.feedback.trim().is_empty() => Ok(r),
-                    Some(_) => Err(AppError::AgentExecutionFailed(
-                        "el evaluador del cierre devolvió un feedback vacío".to_string(),
-                    )),
-                    None => Err(AppError::AgentExecutionFailed(
-                        "el evaluador del cierre no llamó a grade_closure_submission".to_string(),
-                    )),
-                };
+                if let Some(mut r) = result {
+                    r.feedback = clean_tool_and_xml_tags(&r.feedback);
+                    if !r.feedback.trim().is_empty() {
+                        return Ok(r);
+                    }
+                }
+                if let Some(mut r) = parse_closure_grade_from_text(&output.text) {
+                    r.feedback = clean_tool_and_xml_tags(&r.feedback);
+                    if !r.feedback.trim().is_empty() {
+                        return Ok(r);
+                    }
+                }
+                return Err(AppError::AgentExecutionFailed(
+                    "el evaluador del cierre no llamó a grade_closure_submission".to_string(),
+                ));
             }
             Err(e) if e.is_output_budget_exhausted() && attempt + 1 < MAX_GRADING_ATTEMPTS => {
                 tracing::warn!(error = %e, "closure grading ran out of output budget, retrying more concisely");
@@ -423,10 +431,221 @@ mod tests {
         let passed = redact_block(&block(DynamicBlockType::HeuristicErrorAudit, BlockStatus::Passed, audit_content)).content_json;
         assert_eq!(passed["faultyLineNumber"], 2, "revealed once the gate is passed");
     }
+
+    #[test]
+    fn parses_xml_tool_calls_and_strips_tool_markup() {
+        let raw_user_sample = "<tool_call><function=grade_gate_submission><parameter=passed>false</parameter><parameter=rationale>La tabla contiene los valores correctos (16/24 en Default, 20.0/30.0 en Relaxed) pero incumple tres criterios centrales de la rúbrica: (1) falta la derivación escrita del factor de Relaxed con la opera";
+        let parsed = parse_gate_grade_from_text(raw_user_sample).expect("should parse xml tool call");
+        assert!(!parsed.passed);
+        assert!(!parsed.rationale.contains("<tool_call"));
+        assert!(!parsed.rationale.contains("<parameter"));
+        assert!(parsed.rationale.contains("La tabla contiene los valores correctos"));
+
+        let scaffold = parsed.scaffold.expect("failure should provide scaffold feedback");
+        assert!(!scaffold.content.contains("<tool_call"));
+        assert!(!scaffold.content.contains("<parameter"));
+        assert!(scaffold.content.contains("La tabla contiene los valores correctos"));
+    }
+
+    #[test]
+    fn cleans_nested_thought_and_function_tags() {
+        let text = "<thought>Checking criteria...</thought><tool_call><function=grade_gate_submission><parameter=passed>true</parameter><parameter=rationale>¡Excelente solución!</parameter></tool_call>";
+        let parsed = parse_gate_grade_from_text(text).expect("should parse pass");
+        assert!(parsed.passed);
+        assert_eq!(parsed.rationale, "¡Excelente solución!");
+    }
 }
 
 
+/// Strips out XML tool-calling wrappers (<tool_call>, <function=...>, <parameter=...>,
+/// </parameter>, <invoke...>, <thought>...</thought>, etc.) and leftover markup,
+/// ensuring student-facing messages and feedbacks are always clean human-readable prose.
+pub fn clean_tool_and_xml_tags(text: &str) -> String {
+    let mut s = text.to_string();
+
+    // 1. Remove <thought>...</thought> and <thinking>...</thinking>
+    while let Some(start) = s.find("<thought>") {
+        if let Some(end) = s[start..].find("</thought>") {
+            s.replace_range(start..start + end + "</thought>".len(), "");
+        } else {
+            s.truncate(start);
+            break;
+        }
+    }
+    while let Some(start) = s.find("<thinking>") {
+        if let Some(end) = s[start..].find("</thinking>") {
+            s.replace_range(start..start + end + "</thinking>".len(), "");
+        } else {
+            s.truncate(start);
+            break;
+        }
+    }
+
+    // 2. Strip any <parameter=passed>...</parameter> or <parameter name="passed">...</parameter>
+    // so verdicts don't get glued to the feedback text.
+    for param in &["passed", "function", "name"] {
+        for prefix in &[
+            format!("<parameter={param}>"),
+            format!("<parameter name=\"{param}\">"),
+            format!("<{param}>"),
+        ] {
+            while let Some(start) = s.find(prefix.as_str()) {
+                let after = start + prefix.len();
+                let end = s[after..]
+                    .find("</parameter>")
+                    .or_else(|| s[after..].find(format!("</{param}>").as_str()))
+                    .map(|idx| after + idx + "</parameter>".len())
+                    .unwrap_or(after);
+                s.replace_range(start..end, "");
+            }
+        }
+    }
+
+    // 3. Strip all XML tags like <tool_call>, </tool_call>, <parameter=...>, </parameter>, <invoke...>, etc.
+    let mut cleaned = String::with_capacity(s.len());
+    let mut in_tag = false;
+    for ch in s.chars() {
+        if ch == '<' {
+            in_tag = true;
+        } else if ch == '>' && in_tag {
+            in_tag = false;
+        } else if !in_tag {
+            cleaned.push(ch);
+        }
+    }
+
+    // 4. Unwrap markdown code fence if the entire string was wrapped in ```
+    let trimmed = cleaned.trim();
+    if trimmed.starts_with("```") && trimmed.ends_with("```") {
+        let inner = trimmed.trim_start_matches('`');
+        let inner = if let Some(idx) = inner.find('\n') {
+            &inner[idx + 1..]
+        } else {
+            inner
+        };
+        let inner = inner.trim_end_matches('`').trim();
+        return inner.to_string();
+    }
+
+    trimmed.to_string()
+}
+
+fn parse_xml_param(text: &str, name: &str) -> Option<String> {
+    let patterns = [
+        format!("<parameter={name}>"),
+        format!("<parameter name=\"{name}\">"),
+        format!("<{name}>"),
+    ];
+    for pat in &patterns {
+        if let Some(idx) = text.find(pat.as_str()) {
+            let start = idx + pat.len();
+            let end_markers = [
+                "</parameter>",
+                "</tool_call>",
+                "</function>",
+                "</invoke>",
+                "<parameter",
+                "<function",
+            ];
+            let mut closest_end = text.len() - start;
+            for marker in &end_markers {
+                if let Some(m_idx) = text[start..].find(marker) {
+                    if m_idx < closest_end {
+                        closest_end = m_idx;
+                    }
+                }
+            }
+            let val = text[start..start + closest_end].trim();
+            let cleaned = clean_tool_and_xml_tags(val);
+            if !cleaned.is_empty() {
+                return Some(cleaned);
+            }
+        }
+    }
+    None
+}
+
 fn parse_gate_grade_from_text(text: &str) -> Option<GateGradingResult> {
+    // 1. Try parsing XML-style tool calls (<tool_call><function=grade_gate_submission>...)
+    if text.contains("<tool_call")
+        || text.contains("<function")
+        || text.contains("<parameter")
+        || text.contains("<invoke")
+    {
+        let passed_str = parse_xml_param(text, "passed");
+        let passed = passed_str.as_ref().map(|s| s.eq_ignore_ascii_case("true"));
+        let rationale = parse_xml_param(text, "rationale").unwrap_or_default();
+        let scaffold_content = parse_xml_param(text, "scaffold")
+            .or_else(|| parse_xml_param(text, "content"));
+
+        if let Some(is_pass) = passed {
+            let scaffold = if is_pass {
+                None
+            } else {
+                let content = scaffold_content
+                    .or_else(|| {
+                        if !rationale.is_empty() {
+                            Some(rationale.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_else(|| {
+                        "Revisa los requisitos del reto e inténtalo de nuevo.".to_string()
+                    });
+                Some(GateScaffold {
+                    scaffold_type: ScaffoldType::SocraticHint,
+                    content,
+                })
+            };
+            return Some(GateGradingResult {
+                passed: is_pass,
+                rationale,
+                criteria: Vec::new(),
+                scaffold,
+            });
+        }
+
+        // Even if passed param was missing, check if text/rationale indicates pass or fail
+        let lower = text.to_lowercase();
+        let indicates_pass = lower.contains("passed: true")
+            || lower.contains("\"passed\": true")
+            || lower.contains("es correcta")
+            || lower.contains("aprobado");
+        let indicates_fail = lower.contains("passed: false")
+            || lower.contains("\"passed\": false")
+            || lower.contains("es incorrecta")
+            || lower.contains("no cumple")
+            || lower.contains("incumple")
+            || lower.contains("reprobado")
+            || lower.contains("faltan");
+
+        if indicates_fail && !indicates_pass {
+            let content = if !rationale.is_empty() {
+                rationale.clone()
+            } else {
+                clean_tool_and_xml_tags(text)
+            };
+            return Some(GateGradingResult {
+                passed: false,
+                rationale,
+                criteria: Vec::new(),
+                scaffold: Some(GateScaffold {
+                    scaffold_type: ScaffoldType::SocraticHint,
+                    content,
+                }),
+            });
+        } else if indicates_pass && !indicates_fail {
+            return Some(GateGradingResult {
+                passed: true,
+                rationale,
+                criteria: Vec::new(),
+                scaffold: None,
+            });
+        }
+    }
+
+    // 2. Try JSON in code fences
     if let Some(start) = text.find("```json") {
         if let Some(end) = text[start + 7..].find("```") {
             let json_str = text[start + 7..start + 7 + end].trim();
@@ -435,6 +654,8 @@ fn parse_gate_grade_from_text(text: &str) -> Option<GateGradingResult> {
             }
         }
     }
+
+    // 3. Try balanced JSON object
     if let Some(start) = text.find('{') {
         if let Some(end) = text.rfind('}') {
             if end > start {
@@ -443,13 +664,44 @@ fn parse_gate_grade_from_text(text: &str) -> Option<GateGradingResult> {
                     return Some(res);
                 }
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(candidate) {
-                    if let Some(passed) = val.get("passed").and_then(|v| v.as_bool()) {
-                        let rationale = val.get("rationale").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    let target_val = val.get("arguments").unwrap_or(&val);
+                    if let Some(passed) = target_val.get("passed").and_then(|v| v.as_bool()) {
+                        let rationale = target_val
+                            .get("rationale")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let scaffold = if passed {
+                            None
+                        } else {
+                            let scaffold_txt = target_val
+                                .get("scaffold")
+                                .and_then(|s| {
+                                    s.get("content")
+                                        .and_then(|c| c.as_str())
+                                        .or_else(|| s.as_str())
+                                })
+                                .map(|s| s.to_string())
+                                .or_else(|| {
+                                    if !rationale.is_empty() {
+                                        Some(rationale.clone())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or_else(|| {
+                                    "Revisa tu entrega e inténtalo de nuevo.".to_string()
+                                });
+                            Some(GateScaffold {
+                                scaffold_type: ScaffoldType::SocraticHint,
+                                content: clean_tool_and_xml_tags(&scaffold_txt),
+                            })
+                        };
                         return Some(GateGradingResult {
                             passed,
-                            rationale,
+                            rationale: clean_tool_and_xml_tags(&rationale),
                             criteria: Vec::new(),
-                            scaffold: None,
+                            scaffold,
                         });
                     }
                 }
@@ -457,6 +709,7 @@ fn parse_gate_grade_from_text(text: &str) -> Option<GateGradingResult> {
         }
     }
 
+    // 4. Heuristic text analysis with STRICT tag cleaning
     let lower = text.to_lowercase();
     let indicates_pass = lower.contains(r#""passed": true"#)
         || lower.contains("passed: true")
@@ -469,25 +722,86 @@ fn parse_gate_grade_from_text(text: &str) -> Option<GateGradingResult> {
         || lower.contains("passed: false")
         || lower.contains("es incorrecta")
         || lower.contains("no cumple")
+        || lower.contains("incumple")
         || lower.contains("reprobado")
         || lower.contains("faltan");
+
+    let cleaned_text = clean_tool_and_xml_tags(text);
 
     if indicates_pass && !indicates_fail {
         return Some(GateGradingResult {
             passed: true,
-            rationale: text.chars().take(200).collect(),
+            rationale: cleaned_text.chars().take(200).collect(),
             criteria: Vec::new(),
             scaffold: None,
         });
     } else if indicates_fail && !indicates_pass {
+        let content: String = if !cleaned_text.is_empty() {
+            cleaned_text.chars().take(300).collect()
+        } else {
+            "Revisa los requisitos del reto e inténtalo de nuevo.".to_string()
+        };
         return Some(GateGradingResult {
             passed: false,
-            rationale: text.chars().take(200).collect(),
+            rationale: content.chars().take(200).collect(),
             criteria: Vec::new(),
             scaffold: Some(crate::tools::GateScaffold {
                 scaffold_type: crate::tools::ScaffoldType::SocraticHint,
-                content: text.chars().take(300).collect(),
+                content,
             }),
+        });
+    }
+
+    None
+}
+
+fn parse_closure_grade_from_text(text: &str) -> Option<ClosureFeedbackResult> {
+    if text.contains("<tool_call")
+        || text.contains("<function")
+        || text.contains("<parameter")
+        || text.contains("<invoke")
+    {
+        let passed_str = parse_xml_param(text, "passed");
+        let passed = passed_str
+            .as_ref()
+            .map(|s| s.eq_ignore_ascii_case("true"))
+            .unwrap_or(true);
+        let feedback = parse_xml_param(text, "feedback")
+            .unwrap_or_else(|| clean_tool_and_xml_tags(text));
+        if !feedback.is_empty() {
+            return Some(ClosureFeedbackResult { passed, feedback });
+        }
+    }
+
+    if let Some(start) = text.find('{') {
+        if let Some(end) = text.rfind('}') {
+            if end > start {
+                let candidate = &text[start..=end];
+                if let Ok(res) = serde_json::from_str::<ClosureFeedbackResult>(candidate) {
+                    return Some(ClosureFeedbackResult {
+                        passed: res.passed,
+                        feedback: clean_tool_and_xml_tags(&res.feedback),
+                    });
+                }
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(candidate) {
+                    let target_val = val.get("arguments").unwrap_or(&val);
+                    if let Some(feedback) = target_val.get("feedback").and_then(|v| v.as_str()) {
+                        let passed = target_val.get("passed").and_then(|v| v.as_bool()).unwrap_or(true);
+                        return Some(ClosureFeedbackResult {
+                            passed,
+                            feedback: clean_tool_and_xml_tags(feedback),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    let cleaned = clean_tool_and_xml_tags(text);
+    if !cleaned.is_empty() {
+        return Some(ClosureFeedbackResult {
+            passed: true,
+            feedback: cleaned,
         });
     }
 
