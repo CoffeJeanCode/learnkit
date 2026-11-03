@@ -41,9 +41,45 @@ function unflattenEscapedText(text: string): string {
  */
 export function cleanToolAndXmlArtifacts(text: string): string {
   if (!text) return "";
-  if (!text.includes("<") && !text.includes("tool_call") && !text.includes("parameter")) return text;
+  let s = text.trim();
 
-  let s = text;
+  // 0. Unwrap serialized JSON payload (e.g. `{"scaffoldType": "...", "content": "..."}`)
+  if (
+    (s.includes('"scaffoldType"') || s.includes('"content"') || s.includes('"feedback"')) &&
+    s.includes("{") &&
+    s.includes("}")
+  ) {
+    try {
+      const firstBrace = s.indexOf("{");
+      const lastBrace = s.lastIndexOf("}");
+      if (firstBrace !== -1 && lastBrace > firstBrace) {
+        const candidate = s.slice(firstBrace, lastBrace + 1);
+        const parsed = JSON.parse(candidate);
+        const target = parsed.arguments ?? parsed;
+        const extracted =
+          target.content ??
+          target.feedback ??
+          (typeof target.scaffold === "string"
+            ? target.scaffold
+            : target.scaffold?.content) ??
+          target.rationale;
+        if (typeof extracted === "string" && extracted.trim().length > 0) {
+          s = extracted;
+        }
+      }
+    } catch {
+      const match = s.match(/"(?:content|feedback)"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      if (match && match[1]) {
+        try {
+          s = JSON.parse(`"${match[1]}"`);
+        } catch {
+          s = match[1];
+        }
+      }
+    }
+  }
+
+  if (!s.includes("<") && !s.includes("tool_call") && !s.includes("parameter")) return s;
   // 1. Remove thinking / thought blocks
   s = s.replace(/<thought>[\s\S]*?<\/thought>/gi, "").replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
   // 2. Strip boolean or function parameter wrappers like <parameter=passed>false</parameter>
