@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ClassRecord, Concept, ConceptLink } from "../../lib/schemas";
-import { RELATION_HINTS, classLabel, truncate } from "./graph";
+import { RELATION_CONNECTIVES, RELATION_HINTS, classLabel, formatRelationLabel, truncate } from "./graph";
 import type { Selection } from "./GraphParts";
 import {
   IconClose,
@@ -245,7 +245,7 @@ export function GraphSidebar({
                           onClick={() => onSelect({ kind: "link", id: l.id })}
                         >
                           <span className="text-2xs text-amber-300 font-mono block">
-                            {isOutgoing ? `→ ${l.label}` : `← ${l.label}`}
+                            {isOutgoing ? `→ ${formatRelationLabel(l.label)}` : `← ${formatRelationLabel(l.label)}`}
                           </span>
                           <span className="text-slate-200 font-medium truncate block">
                             {otherName}
@@ -438,18 +438,20 @@ export function GraphSidebar({
                   onChange={(e) => setEditingLinkLabel(e.target.value)}
                 />
 
-                {/* Suggested Chips */}
-                <div className="flex flex-wrap gap-1 mt-2">
-                  {RELATION_HINTS.map((h) => (
+                {/* Cognitive Connectives (LearnHarness-style) */}
+                <div className="grid grid-cols-2 gap-1.5 mt-2">
+                  {RELATION_CONNECTIVES.map((c) => (
                     <button
-                      key={h}
+                      key={c.value}
                       type="button"
-                      className={`chip text-2xs ${
-                        (editingLinkLabel ?? selectedLink.label) === h ? "is-active" : ""
+                      className={`chip text-2xs justify-start gap-1 py-1 px-1.5 ${
+                        (editingLinkLabel ?? selectedLink.label) === c.value ? "is-active" : ""
                       }`}
-                      onClick={() => setEditingLinkLabel(h)}
+                      onClick={() => setEditingLinkLabel(c.value)}
+                      title={c.description}
                     >
-                      {h}
+                      <span className="font-mono text-amber-300 font-bold">{c.glyph}</span>
+                      <span className="truncate">{c.label}</span>
                     </button>
                   ))}
                 </div>

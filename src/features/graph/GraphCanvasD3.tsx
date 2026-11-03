@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import * as d3 from "d3";
 import type { ClassRecord, Concept, ConceptLink } from "../../lib/schemas";
-import { RELATION_HINTS, classLabel, truncate } from "./graph";
+import {
+  RELATION_CONNECTIVES,
+  RELATION_HINTS,
+  classLabel,
+  formatRelationLabel,
+  truncate,
+} from "./graph";
 import type { Selection } from "./GraphParts";
 import {
   IconClose,
@@ -251,6 +257,46 @@ export function GraphCanvasD3({
         .data(d3Nodes, (d) => d.id)
         .join("g")
         .attr("transform", (d) => `translate(${d.x || 0}, ${d.y || 0})`);
+
+      // Update cluster hulls (LearnHarness-style visual grouping by class)
+      const clustersMap = new Map<string, Array<[number, number]>>();
+      d3Nodes.forEach((n) => {
+        if (typeof n.x === "number" && typeof n.y === "number") {
+          const cid = n.classId;
+          if (!clustersMap.has(cid)) clustersMap.set(cid, []);
+          const pts = clustersMap.get(cid)!;
+          const pad = 24;
+          const hw = n.w / 2 + pad;
+          const hh = n.h / 2 + pad;
+          pts.push([n.x - hw, n.y - hh]);
+          pts.push([n.x + hw, n.y - hh]);
+          pts.push([n.x + hw, n.y + hh]);
+          pts.push([n.x - hw, n.y + hh]);
+        }
+      });
+
+      const clusterData: Array<{ classId: string; pathD: string }> = [];
+      const lineGen = d3.line().curve(d3.curveCatmullRomClosed);
+      clustersMap.forEach((points, cid) => {
+        const hasConcepts = d3Nodes.some((n) => n.classId === cid && n.kind === "concept");
+        if (hasConcepts && points.length >= 6) {
+          const hull = d3.polygonHull(points);
+          if (hull) {
+            const d = lineGen(hull);
+            if (d) clusterData.push({ classId: cid, pathD: d });
+          }
+        }
+      });
+
+      const hullsLayer = g.select<SVGGElement>(".d3-hulls-layer");
+      if (!hullsLayer.empty()) {
+        hullsLayer
+          .selectAll<SVGPathElement, { classId: string; pathD: string }>(".d3-cluster-hull")
+          .data(clusterData, (d) => (d as { classId: string }).classId)
+          .join("path")
+          .attr("class", "d3-cluster-hull")
+          .attr("d", (d) => (d as { pathD: string }).pathD);
+      }
     });
 
     return () => {
@@ -556,6 +602,9 @@ export function GraphCanvasD3({
         <rect width="100%" height="100%" fill="url(#d3-dot-grid)" />
 
         <g className="d3-viewport">
+          {/* Cluster hulls layer: visual territories of knowledge (LearnHarness-style) */}
+          <g className="d3-hulls-layer" />
+
           {/* Link paths */}
           {linksRef.current.map((link) => {
             const isExplicit = !!link.label;
@@ -633,7 +682,7 @@ export function GraphCanvasD3({
                     });
                   }}
                 >
-                  {truncate(link.label, 24)}
+                  {truncate(formatRelationLabel(link.label), 28)}
                 </text>
               );
             })}
@@ -761,8 +810,8 @@ export function GraphCanvasD3({
       {/* Floating Relation Creator Modal when connection is dropped */}
       {pendingRelation && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="w-full max-w-sm p-4 rounded-xl bg-surface-deep border border-slate-700 shadow-2xl space-y-3 animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between">
+          <div className="w-full max-w-md p-4 rounded-xl bg-surface-deep border border-slate-700 shadow-2xl space-y-3 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between pb-1 border-b border-slate-800">
               <h4 className="text-sm font-semibold text-slate-100 flex items-center gap-1.5">
                 <IconLink /> Relacionar conceptos
               </h4>
@@ -774,29 +823,54 @@ export function GraphCanvasD3({
                 <IconClose />
               </button>
             </div>
-            <p className="text-xs text-slate-400">
-              ¿Por qué se conectan estas dos ideas? Escribe su relación:
-            </p>
-            <input
-              autoFocus
-              className="w-full p-2 text-xs rounded bg-input text-slate-100 border border-slate-700"
-              value={relationLabel}
-              placeholder="Ej. causa, deriva de, es parte de, contrasta con…"
-              onChange={(e) => setRelationLabel(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleConfirmPendingRelation()}
-            />
-            <div className="flex flex-wrap gap-1">
-              {RELATION_HINTS.map((h) => (
-                <button
-                  key={h}
-                  type="button"
-                  className={`chip text-2xs ${relationLabel === h ? "is-active" : ""}`}
-                  onClick={() => setRelationLabel(h)}
-                >
-                  {h}
-                </button>
-              ))}
+
+            {/* Connection visual preview: from -> to */}
+            <div className="flex items-center gap-2 p-2 rounded-lg bg-paper-deep/90 border border-slate-800 text-xs">
+              <span className="font-semibold text-slate-200 truncate flex-1 text-left">
+                {nodesRef.current.find((n) => n.id === pendingRelation.fromId)?.label || pendingRelation.fromId}
+              </span>
+              <span className="text-amber-400 font-mono font-bold px-1">⟹</span>
+              <span className="font-semibold text-slate-200 truncate flex-1 text-right">
+                {nodesRef.current.find((n) => n.id === pendingRelation.toId)?.label || pendingRelation.toId}
+              </span>
             </div>
+
+            <div>
+              <label className="block text-2xs text-slate-400 uppercase tracking-wider mb-1.5">
+                Tipo de asociación lógica (LearnHarness)
+              </label>
+              <div className="grid grid-cols-2 gap-1.5">
+                {RELATION_CONNECTIVES.map((c) => (
+                  <button
+                    key={c.value}
+                    type="button"
+                    className={`chip text-2xs justify-start gap-1.5 py-1.5 px-2 ${
+                      relationLabel === c.value ? "is-active" : ""
+                    }`}
+                    onClick={() => setRelationLabel(c.value)}
+                    title={c.description}
+                  >
+                    <span className="font-mono text-amber-300 font-bold text-xs">{c.glyph}</span>
+                    <span className="truncate">{c.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-2xs text-slate-400 uppercase tracking-wider mb-1">
+                O escribe con tus propias palabras
+              </label>
+              <input
+                autoFocus
+                className="w-full p-2 text-xs rounded bg-input text-slate-100 border border-slate-700 font-mono"
+                value={relationLabel}
+                placeholder="Ej. deriva en, fundamenta a, se compone con…"
+                onChange={(e) => setRelationLabel(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleConfirmPendingRelation()}
+              />
+            </div>
+
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
               <button
                 type="button"

@@ -18,7 +18,89 @@ const HEADER_H = 34;
 
 /** Quick-pick wording for a relation. Shortcuts for typing only — the student
  *  may write anything, and a relation is never created without their text. */
-export const RELATION_HINTS = ["causa", "es parte de", "contrasta con", "depende de", "es un ejemplo de", "me recuerda a"] as const;
+export const RELATION_HINTS = [
+  "deriva en",
+  "fundamenta a",
+  "se compone con",
+  "contrasta con",
+  "ejemplifica a",
+  "depende de",
+  "causa",
+  "es parte de",
+] as const;
+
+export interface RelationConnective {
+  glyph: string;
+  label: string;
+  description: string;
+  value: string;
+}
+
+/** Structured reasoning connectives inspired by LearnHarness / cognitive science.
+ *  Promotes genuine relational association (derivation, foundation, composition). */
+export const RELATION_CONNECTIVES: readonly RelationConnective[] = [
+  {
+    glyph: "⟹",
+    label: "Deriva en",
+    description: "Causa o consecuencia lógica: entender A concluye lógicamente en B",
+    value: "deriva en",
+  },
+  {
+    glyph: "⊤",
+    label: "Fundamenta",
+    description: "Principio base: A es la premisa conceptual que sostiene la regla B",
+    value: "fundamenta a",
+  },
+  {
+    glyph: "∧",
+    label: "Compone con",
+    description: "Composición conjunta: A y B operan juntos para resolver el reto",
+    value: "se compone con",
+  },
+  {
+    glyph: "≠",
+    label: "Contrasta con",
+    description: "Diferenciación o corrección: A desmiente o refuta el error B",
+    value: "contrasta con",
+  },
+  {
+    glyph: "⊙",
+    label: "Ejemplifica",
+    description: "Caso concreto: B es una aplicación o instancia práctica de A",
+    value: "ejemplifica a",
+  },
+  {
+    glyph: "↤",
+    label: "Depende de",
+    description: "Prerrequisito: B no puede funcionar sin la existencia previa de A",
+    value: "depende de",
+  },
+] as const;
+
+/** Formats a link label with its logic glyph when recognized. */
+export function formatRelationLabel(rawLabel: string): string {
+  if (!rawLabel) return "";
+  const trimmed = rawLabel.trim();
+  if (
+    trimmed.startsWith("⟹") ||
+    trimmed.startsWith("⊤") ||
+    trimmed.startsWith("∧") ||
+    trimmed.startsWith("≠") ||
+    trimmed.startsWith("⊙") ||
+    trimmed.startsWith("↤")
+  ) {
+    return trimmed;
+  }
+  const match = RELATION_CONNECTIVES.find(
+    (c) =>
+      trimmed.toLowerCase() === c.value.toLowerCase() ||
+      trimmed.toLowerCase().startsWith(c.value.toLowerCase()),
+  );
+  if (match) {
+    return `${match.glyph} ${trimmed}`;
+  }
+  return trimmed;
+}
 
 export type NodeKind = "class" | "concept";
 

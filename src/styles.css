@@ -2046,6 +2046,16 @@ body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16p
   display: block;
 }
 
+.d3-cluster-hull {
+  fill: var(--card);
+  fill-opacity: 0.18;
+  stroke: var(--chalk-faint);
+  stroke-width: 1.2px;
+  stroke-dasharray: 4 4;
+  pointer-events: none;
+  transition: opacity 0.2s ease, fill-opacity 0.2s ease;
+}
+
 /* Floating Canvas Overlays */
 .graph-canvas-overlay-topleft {
   position: absolute;

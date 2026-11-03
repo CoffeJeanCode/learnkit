@@ -3,7 +3,7 @@ import { useGraph } from "../../stores/graph";
 import { useNotebookNav } from "../../stores/notebook";
 import { useUi } from "../../stores/ui";
 import type { ClassRecord, Concept } from "../../lib/schemas";
-import { RELATION_HINTS, earlierNodes, truncate } from "./graph";
+import { RELATION_CONNECTIVES, RELATION_HINTS, earlierNodes, truncate } from "./graph";
 import type { NodeOption } from "./graph";
 
 const MAX_NEW_IDEAS = 3;
@@ -66,11 +66,9 @@ export function ConnectStepView({
           <button className="btn-primary" onClick={() => setOpen(true)}>
             {saved ? "Añadir más conexiones" : "Conectar ideas"}
           </button>
-          {saved && (
-            <button className="btn-quiet" onClick={onOpenGraph}>
-              Ver en el grafo
-            </button>
-          )}
+          <button className="btn-quiet" onClick={onOpenGraph}>
+            Ver en el grafo
+          </button>
           {!saved && (
             <button className="btn-quiet" onClick={() => setSkipped(true)}>
               Omitir
@@ -131,10 +129,17 @@ export function ConnectStepView({
                     ¿Cómo se relacionan?
                     <input value={d.relation} maxLength={120} placeholder="Por qué o cómo se conectan…" onChange={(e) => set(i, { relation: e.target.value })} />
                   </label>
-                  <div className="chip-row">
-                    {RELATION_HINTS.map((h) => (
-                      <button key={h} type="button" className="chip" onClick={() => set(i, { relation: d.relation.trim() ? d.relation : h })}>
-                        {h}
+                  <div className="chip-row" style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "6px" }}>
+                    {RELATION_CONNECTIVES.map((c) => (
+                      <button
+                        key={c.value}
+                        type="button"
+                        className={`chip ${d.relation === c.value ? "is-active" : ""}`}
+                        title={c.description}
+                        onClick={() => set(i, { relation: c.value })}
+                      >
+                        <span style={{ fontWeight: "bold", marginRight: "4px" }}>{c.glyph}</span>
+                        {c.label}
                       </button>
                     ))}
                   </div>
