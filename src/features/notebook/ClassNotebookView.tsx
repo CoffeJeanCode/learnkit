@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DynamicSectionBlockSchema } from "../../lib/schemas";
 import type { DynamicBlockType, NotebookBlock } from "../../lib/schemas";
 import {
@@ -117,6 +117,7 @@ export function ClassNotebookView() {
   const setActiveClass = useNotebookNav((s) => s.setActiveClass);
   const setClasses = useNotebookNav((s) => s.setClasses);
   const setView = useUi((s) => s.setView);
+  const view = useUi((s) => s.view);
   const roadmapSession = useRoadmap((s) => s.session);
   const [reloadToken, setReloadToken] = useState(0);
   const [visibleCount, setVisibleCount] = useState(1);
@@ -325,6 +326,55 @@ export function ClassNotebookView() {
     }, 12000);
     return () => window.clearTimeout(giveUp);
   }, [pending, classId, visibleCount, blocks.length]);
+
+  // Auto-scroll to active block (or newly revealed block):
+  // 1) When returning to notebook from another view (e.g. graph, gallery, providers)
+  // 2) When visibleCount increments (a gate passed or auto-advanced)
+  // 3) When switching classes
+  // 4) On initial load of blocks
+  const prevViewRef = useRef<string>(view);
+  const prevVisibleCountRef = useRef<number>(visibleCount);
+  const prevClassIdRef = useRef<string | null>(classId);
+  const initialScrolledClassRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    // Only scroll when notebook view is active and we have blocks to display
+    if (view !== "notebook" || !classId || blocks.length === 0 || !lastVisible) {
+      prevViewRef.current = view;
+      return;
+    }
+
+    // Skip if cold resume is currently restoring a specific target
+    if (pending && pending.classId === classId) return;
+    if (isRestoring()) return;
+
+    const viewReturned = prevViewRef.current !== "notebook" && view === "notebook";
+    const classChanged = prevClassIdRef.current !== classId;
+    const blockUnlocked = visibleCount > prevVisibleCountRef.current;
+    const needsInitialClassScroll = initialScrolledClassRef.current !== classId && visibleBlocks.length > 0;
+
+    prevViewRef.current = view;
+    prevClassIdRef.current = classId;
+    prevVisibleCountRef.current = visibleCount;
+
+    if (viewReturned || classChanged || blockUnlocked || needsInitialClassScroll) {
+      initialScrolledClassRef.current = classId;
+      const targetId = lastVisible.id;
+
+      // Allow DOM to settle and calculate layout after display change
+      const timer = window.setTimeout(() => {
+        const el = window.document.querySelector<HTMLElement>(`[data-block-id="${targetId}"]`);
+        if (el) {
+          el.scrollIntoView({
+            block: "start",
+            behavior: "smooth",
+          });
+        }
+      }, 60);
+
+      return () => window.clearTimeout(timer);
+    }
+  }, [view, classId, visibleCount, blocks.length, lastVisible?.id, pending]);
 
   // Passing a gate (or closing the class) earns a piece for the student's table
   // (see `RewardDock`): its colour and size say how it was earned, so the reward

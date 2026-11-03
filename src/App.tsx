@@ -39,23 +39,12 @@ export default function App() {
   const prevActiveClassRef = useRef<string | null>(null);
   const [bootstrapping, setBootstrapping] = useState(true);
 
-  // `.workspace` is the page's only scroller and survives class changes, so
-  // opening a class (from the roadmap or the class path) would otherwise land
-  // wherever the previous screen was scrolled. Scoped to the notebook:
-  // quiet when a target block is pending resume so scroll position is preserved.
+  // Keep track of activeClassId to avoid unnecessary scroll resets.
+  // ClassNotebookView handles smooth auto-scrolling to the active block
+  // on mount, on view return, and as new blocks unlock.
   useEffect(() => {
-    if (view === "notebook") {
-      const pending = useResumeTarget.getState().pending;
-      if (isRestoring() || (pending && pending.classId === activeClassId)) {
-        prevActiveClassRef.current = activeClassId;
-        return;
-      }
-      if (prevActiveClassRef.current !== activeClassId) {
-        prevActiveClassRef.current = activeClassId;
-        workspaceRef.current?.scrollTo({ top: 0 });
-      }
-    } else {
-      prevActiveClassRef.current = null;
+    if (view === "notebook" && activeClassId) {
+      prevActiveClassRef.current = activeClassId;
     }
   }, [view, activeClassId]);
 
@@ -137,18 +126,27 @@ export default function App() {
             <div className="spinner" />
             <p>Continuando tu sesión de aprendizaje…</p>
           </div>
-        ) : view === "providers" ? (
-          <ProvidersView />
-        ) : view === "graph" ? (
-          <GraphView />
-        ) : view === "gallery" ? (
-          <GalleryStudioView />
-        ) : view === "notebook" ? (
-          <ClassNotebookView />
-        ) : view === "roadmap" || view === "plan" ? (
-          <SessionView />
         ) : (
-          <RoadmapView />
+          <>
+            <div
+              className="view-wrapper"
+              style={{ display: view === "notebook" ? "contents" : "none" }}
+            >
+              <ClassNotebookView />
+            </div>
+            <div
+              className="view-wrapper"
+              style={{
+                display:
+                  view === "roadmap" || view === "plan" ? "contents" : "none",
+              }}
+            >
+              <SessionView />
+            </div>
+            {view === "graph" && <GraphView />}
+            {view === "gallery" && <GalleryStudioView />}
+            {view === "providers" && <ProvidersView />}
+          </>
         )}
       </main>
       {devEnabled && <DevPanel />}

@@ -1238,6 +1238,8 @@ pre.output, .quickrun pre {
   border-radius: var(--squircle);
   corner-shape: squircle;
   padding: 16px;
+  scroll-margin-top: 24px;
+  scroll-margin-bottom: 24px;
 }
 /* Unsupported block: dimmed card instead of a dashed ring. */
 .notebook-block-wrapper.unsupported { background: var(--paper-deep); opacity: 0.8; }
