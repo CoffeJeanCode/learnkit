@@ -2007,7 +2007,9 @@ body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16p
 .workspace.is-graph {
   padding: 0;
   overflow: hidden;
-  height: calc(100vh - 46px);
+  flex: 1;
+  min-height: 0;
+  height: 100%;
   display: flex;
 }
 
@@ -2059,9 +2061,9 @@ body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16p
 /* Floating Canvas Overlays */
 .graph-canvas-overlay-topleft {
   position: absolute;
-  top: var(--space-md);
-  left: var(--space-md);
-  z-index: 10;
+  top: 16px;
+  left: 16px;
+  z-index: 20;
   display: flex;
   align-items: center;
   gap: var(--space-sm);
@@ -2116,9 +2118,9 @@ body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16p
 
 .graph-canvas-overlay-bottomright {
   position: absolute;
-  bottom: var(--space-md);
-  right: var(--space-md);
-  z-index: 10;
+  bottom: 16px;
+  right: 16px;
+  z-index: 20;
   pointer-events: auto;
 }
 

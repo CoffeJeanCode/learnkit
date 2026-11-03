@@ -3,7 +3,8 @@ import { useNotebookNav } from "../../stores/notebook";
 import { useGraph } from "../../stores/graph";
 import { useRoadmap } from "../../stores/roadmap";
 import { useUi } from "../../stores/ui";
-import { GraphCanvasD3 } from "./GraphCanvasD3";
+import { GraphCanvasD3, type GraphCanvasHandle } from "./GraphCanvasD3";
+import { useRef } from "react";
 import { GraphContextMenu, type ContextMenuState } from "./GraphContextMenu";
 import { GraphSidebar } from "./GraphSidebar";
 import type { Selection } from "./GraphParts";
@@ -36,6 +37,7 @@ export function GraphView() {
   const [selection, setSelection] = useState<Selection>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const canvasRef = useRef<GraphCanvasHandle>(null);
 
   // Context Menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -129,6 +131,7 @@ export function GraphView() {
         )}
 
         <GraphCanvasD3
+          ref={canvasRef}
           classes={classes}
           concepts={graph.concepts}
           links={graph.links}
@@ -213,10 +216,10 @@ export function GraphView() {
             }
           }}
           onResetZoom={() => {
-            // Triggered inside D3 canvas via context menu
+            canvasRef.current?.fitToCenter();
           }}
           onReorganize={() => {
-            // Re-warm simulation
+            canvasRef.current?.reorganize();
           }}
         />
       )}
