@@ -156,7 +156,7 @@ export function Header() {
             title="Tu mapa de ideas: conecta lo que aprendes con tus propias palabras"
           >
             {inGraph ? <IconArrowLeft /> : <IconGraph />}
-            <span>{inGraph ? "Volver" : "Grafo"}</span>
+            <span>{inGraph ? "Volver" : "🕸 Grafo"}</span>
           </button>
 
           <button
