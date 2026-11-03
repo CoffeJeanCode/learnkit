@@ -231,6 +231,7 @@
         blocks: Mutex<VecDeque<Option<GeneratedSectionBlock>>>,
         audits: Mutex<VecDeque<AppResult<BlockAuditResult>>>,
         inputs: Mutex<Vec<String>>,
+        system_prompts: Mutex<Vec<String>>,
         block_calls: Mutex<usize>,
         audit_calls: Mutex<usize>,
         /// Simulates the model having authored the NEXT block via a MECHANICAL
@@ -253,12 +254,13 @@
             &self,
             _provider_id: &str,
             _model: &str,
-            _system_prompt: &str,
+            system_prompt: &str,
             input: &str,
             capture: NotebookBlockCapture,
         ) -> AppResult<PromptOutput> {
             *self.block_calls.lock().unwrap() += 1;
             self.inputs.lock().unwrap().push(input.to_string());
+            self.system_prompts.lock().unwrap().push(system_prompt.to_string());
             if let Some(block) = self.blocks.lock().unwrap().pop_front().flatten() {
                 let mechanical = {
                     let mut flag = self.mechanical_next.lock().unwrap();
@@ -547,6 +549,37 @@
         let status = service.get_course_skill_status(&service.list_courses().expect("courses")[0].id).expect("status");
         assert!(status[0].solved.achieved && status[0].applied.achieved, "{status:?}");
         assert!(!status[0].retained.achieved, "retention needs a later, written answer");
+    }
+
+    #[tokio::test]
+    async fn speculative_prefetch_serves_next_block_on_gate_pass_and_discards_on_fail() {
+        crate::application::notebook_service::generation::clear_prefetch_cache();
+
+        let runner = Arc::new(ScriptedNotebookRunner {
+            blocks: Mutex::new(
+                vec![Some(prediction_gate("B")), Some(micro_theory()), Some(hands_on_mission())].into(),
+            ),
+            ..Default::default()
+        });
+        let service = service_with(runner.clone()).with_prefetch(true);
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("start");
+        let gate_block = &payload.blocks[0];
+        let gate_id = gate_block.id.clone();
+
+        // Give background prefetch task time to run and cache
+        let_background_chain_settle().await;
+        let_background_chain_settle().await;
+
+        // When student submits correct answer: prefetch hit -> next_block is populated in GateResult
+        let result = service
+            .submit_gate_response(None, &gate_id, GateSubmission::InteractivePredictionGate { selected_option: Some("B".to_string()), ordered_steps: None, case_verdicts: None })
+            .await
+            .expect("submit ok");
+        assert!(result.passed);
+        assert!(result.next_block.is_some(), "prefetched next block was served in GateResult without an extra wait");
+        assert_eq!(result.next_block.unwrap().block_type, DynamicBlockType::AnchoredMicroTheory);
     }
 
     #[tokio::test]
@@ -881,6 +914,33 @@
             runner.inputs.lock().unwrap()[1].contains("el hook es vago"),
             "the critic's feedback is fed back to the generator as the corrective note"
         );
+    }
+
+    #[tokio::test]
+    async fn planned_block_uses_lean_prompt_on_first_attempt_and_full_prompt_on_retry() {
+        let runner = Arc::new(CriticRunner {
+            blocks: Mutex::new(vec![Some(micro_theory()), Some(micro_theory())].into()),
+            audits: Mutex::new(
+                vec![
+                    Ok(BlockAuditResult { accepted: false, feedback: vec!["el hook es vago".to_string()] }),
+                    Ok(BlockAuditResult { accepted: true, feedback: vec![] }),
+                ]
+                .into(),
+            ),
+            ..Default::default()
+        });
+        let service = service_with_critic(runner.clone());
+        let class_id = first_class_id(&service);
+
+        let payload = service.start_class_notebook(None, &class_id).await.expect("recovers on the corrected retry");
+        assert_eq!(payload.blocks[0].block_type, DynamicBlockType::AnchoredMicroTheory);
+        assert_eq!(*runner.block_calls.lock().unwrap(), 2);
+        let prompts = runner.system_prompts.lock().unwrap().clone();
+        assert_eq!(prompts.len(), 2);
+        let lean = crate::agents::block_generator_agent::system_prompt_for(Some(DynamicBlockType::AnchoredMicroTheory));
+        let full = crate::agents::block_generator_agent::system_prompt_for(None);
+        assert_eq!(prompts[0], lean, "first attempt with fixed plan uses lean prompt");
+        assert_eq!(prompts[1], full, "retry falls back to full prompt");
     }
 
     #[tokio::test]

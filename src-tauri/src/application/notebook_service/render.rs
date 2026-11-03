@@ -143,8 +143,33 @@ fn composition_hint(
     ctx: &ClassGenerationContext,
     existing_blocks: &[NotebookBlock],
     mastery: MasteryProgress,
-    (usage, total_classes): &(HashMap<String, i64>, i64),
+    usage: &(HashMap<String, i64>, i64),
 ) -> Option<serde_json::Value> {
+    let (profile, dominant, suggested) = composition_suggestion(ctx, existing_blocks, mastery, usage)?;
+    let prior: Vec<DynamicBlockType> = existing_blocks.iter().map(|b| b.block_type).collect();
+    Some(serde_json::json!({
+        "disciplineProfile": profile.as_str(),
+        "profileSequence": suggested_sequence(profile).iter().map(|t| t.as_str()).collect::<Vec<_>>(),
+        "nextPosition": prior.iter().filter(|t| **t != DynamicBlockType::SpacedInterleavedRetrieval).count() + 1,
+        "suggestedBlockType": suggested.map(|t| t.as_str()),
+        "avoidBlockTypes": dominant.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
+        "guidance": "Perfil inferido por palabras clave del tema (corrígelo en pedagogicalRationale si el tema de HOY es de otro perfil). \
+                     suggestedBlockType es el punto de partida para ESTA posición, no un molde: respétalo salvo que scaffolding, \
+                     masteryStatus o contentSoFar pidan otra cosa. No uses el mismo tipo de práctica que en las clases anteriores \
+                     (avoidBlockTypes) ni dos veces seguidas.",
+    }))
+}
+
+/// The pure half of [`composition_hint`]: the inferred profile, the practice
+/// types that already dominate the course, and the block that belongs at the
+/// next position. Shared with `domain::block_planner`, which turns the
+/// suggestion into a firm plan when nothing overrides it.
+pub(super) fn composition_suggestion(
+    ctx: &ClassGenerationContext,
+    existing_blocks: &[NotebookBlock],
+    mastery: MasteryProgress,
+    (usage, total_classes): &(HashMap<String, i64>, i64),
+) -> Option<(crate::domain::lesson_composition::DisciplineProfile, Vec<DynamicBlockType>, Option<DynamicBlockType>)> {
     let profile = infer_profile(&ctx.class.title, &[&ctx.milestone.title, &ctx.course.title, &ctx.course.target_goal])?;
     let prior: Vec<DynamicBlockType> = existing_blocks.iter().map(|b| b.block_type).collect();
     // Practice-family types that already dominate this course (same >50% rule
@@ -162,17 +187,7 @@ fn composition_hint(
         Vec::new()
     };
     let suggested = suggest_next_block(profile, &prior, mastery.complete(), &dominant);
-    Some(serde_json::json!({
-        "disciplineProfile": profile.as_str(),
-        "profileSequence": suggested_sequence(profile).iter().map(|t| t.as_str()).collect::<Vec<_>>(),
-        "nextPosition": prior.iter().filter(|t| **t != DynamicBlockType::SpacedInterleavedRetrieval).count() + 1,
-        "suggestedBlockType": suggested.map(|t| t.as_str()),
-        "avoidBlockTypes": dominant.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
-        "guidance": "Perfil inferido por palabras clave del tema (corrígelo en pedagogicalRationale si el tema de HOY es de otro perfil). \
-                     suggestedBlockType es el punto de partida para ESTA posición, no un molde: respétalo salvo que scaffolding, \
-                     masteryStatus o contentSoFar pidan otra cosa. No uses el mismo tipo de práctica que en las clases anteriores \
-                     (avoidBlockTypes) ni dos veces seguidas.",
-    }))
+    Some((profile, dominant, suggested))
 }
 
 /// Input for a normal (non-escalation) `publish_notebook_block` call — used
@@ -357,10 +372,18 @@ pub(super) fn render_escalation_block_input(
 /// Input for `notebook_gate_grader`'s `grade_gate_submission` call — one
 /// free-text submission against its block's reference solution/rubric.
 pub(super) fn render_grading_input(block: &NotebookBlock, submission_text: &str, attempt_number: u32, selected_line: Option<u32>) -> String {
+    // The grader only needs the rubric, evaluation criteria, the correct key
+    // (redacted by the caller before this reaches the frontend, but kept here
+    // for server-side grading), and the student's text. Large geometry (visualAid),
+    // scaffolding hints and worked templates bloat the token count with no
+    // grading value; stripping them is the single biggest latency win.
     let mut content = block.content_json.clone();
     if let Some(obj) = content.as_object_mut() {
         obj.remove("studentNote");
         obj.remove("studentState");
+        obj.remove("visualAid");
+        obj.remove("scaffoldingHints");
+        obj.remove("workedTemplate");
     }
     let mut context = serde_json::json!({
         "blockType": block.block_type.as_str(),
@@ -475,6 +498,7 @@ mod tests {
             content_json,
             order_index,
             status: BlockStatus::Ready,
+            concept_node_id: None,
             attempt_count: 0,
             last_feedback: None,
         }

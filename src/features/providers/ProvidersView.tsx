@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useProviders } from "../../stores/providers";
 import { DevModeCard } from "../dev/DevModeCard";
+import { ModelTiersCard } from "./ModelTiersCard";
 import { StudySettingsCard } from "../study/StudySettingsCard";
 import { SearchKeyCard } from "./SearchKeyCard";
 import type { ModelInfo } from "../../types";
@@ -206,6 +207,7 @@ export function ProvidersView() {
       {error && <div className="alert error" onClick={clearNotice}>{error}</div>}
       {notice && <div className="alert ok" onClick={clearNotice}>{notice}</div>}
       {loading && <p className="muted">Cargando…</p>}
+      <ModelTiersCard />
       <div className="provider-list">
         {providers.map((p) => (
           <ProviderCard key={p.id} id={p.id} />

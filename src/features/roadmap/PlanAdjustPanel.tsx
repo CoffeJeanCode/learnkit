@@ -1,12 +1,15 @@
 import { useId, useState } from "react";
 import type { PlanAdjustmentPayload, PlanEmphasis } from "../../lib/schemas";
-import { EMPHASIS_OPTIONS, LIMITS, adjustDraftFrom, adjustmentFrom, formatWeekly, weeklyHours } from "./profileFormModel";
+import { EMPHASIS_OPTIONS, LIMITS, adjustDraftFrom, adjustmentFrom } from "./profileFormModel";
+import { RhythmTile } from "./panel/RhythmTile";
+import { WeeksDial } from "./panel/WeeksDial";
 
 /**
- * "Ajustar el plan" with controls instead of a negotiation chat: weeks, hours,
- * where to lean (practice / theory / project) and an optional short note. Only
- * what actually changed is sent, and one proposal turn answers it. Mount it
- * with a `key` that changes per proposal so it resets to the new plan's values.
+ * "Ajustar el plan" with the same controls as the board that made it: the
+ * weeks dial, the day switches + hours slider, where to lean (practice /
+ * theory / project) as cards, and an optional short note. Only what actually
+ * changed is sent, and one proposal turn answers it. Mount it with a `key`
+ * that changes per proposal so it resets to the new plan's values.
  */
 export function PlanAdjustPanel({
   current,
@@ -20,56 +23,37 @@ export function PlanAdjustPanel({
   const uid = useId();
   const [draft, setDraft] = useState(() => adjustDraftFrom(current));
   const { payload, errors } = adjustmentFrom(draft, current);
-  const weekly = weeklyHours(draft.hoursPerDay, draft.daysPerWeek);
   const toggleEmphasis = (id: PlanEmphasis) => setDraft((d) => ({ ...d, emphasis: d.emphasis === id ? "" : id }));
 
   return (
     <details className="adjust-panel">
       <summary>Ajustar el plan</summary>
       <div className="adjust-body">
-        <div className="pf-row pf-row-3">
-          <label className="pf-field">
-            <span className="pf-label">Semanas</span>
-            <input
-              inputMode="numeric"
-              value={draft.weeks}
-              onChange={(e) => setDraft((d) => ({ ...d, weeks: e.target.value }))}
-              disabled={busy}
-            />
-            {errors.weeks && <span className="field-error">{errors.weeks}</span>}
-          </label>
-          <label className="pf-field">
-            <span className="pf-label">Horas por día</span>
-            <input
-              inputMode="decimal"
-              value={draft.hoursPerDay}
-              onChange={(e) => setDraft((d) => ({ ...d, hoursPerDay: e.target.value }))}
-              disabled={busy}
-            />
-            {errors.hoursPerDay && <span className="field-error">{errors.hoursPerDay}</span>}
-          </label>
-          <label className="pf-field">
-            <span className="pf-label">Días por semana</span>
-            <input
-              inputMode="numeric"
-              value={draft.daysPerWeek}
-              onChange={(e) => setDraft((d) => ({ ...d, daysPerWeek: e.target.value }))}
-              disabled={busy}
-            />
-            {errors.daysPerWeek && <span className="field-error">{errors.daysPerWeek}</span>}
-          </label>
+        <div className="pf-field">
+          <span className="pf-label">Semanas</span>
+          <WeeksDial value={draft.weeks} onChange={(weeks) => setDraft((d) => ({ ...d, weeks }))} disabled={busy} />
+          {errors.weeks && <span className="field-error">{errors.weeks}</span>}
         </div>
-        {weekly !== null && !errors.weekly && <p className="hint">Son {formatWeekly(weekly)}.</p>}
-        {errors.weekly && <span className="field-error">{errors.weekly}</span>}
+
+        <div className="pf-field">
+          <span className="pf-label">Tu ritmo</span>
+          <RhythmTile
+            daysPerWeek={draft.daysPerWeek}
+            hoursPerDay={draft.hoursPerDay}
+            onChange={(patch) => setDraft((d) => ({ ...d, ...patch }))}
+            disabled={busy}
+            error={errors.weekly ?? errors.hoursPerDay ?? errors.daysPerWeek}
+          />
+        </div>
 
         <fieldset className="pf-field pf-fieldset" disabled={busy}>
           <legend className="pf-label">¿Hacia dónde inclino el plan?</legend>
-          <div className="chip-row">
+          <div className="card-deck">
             {EMPHASIS_OPTIONS.map((opt) => (
               <button
                 key={opt.id}
                 type="button"
-                className={`chip-choice${draft.emphasis === opt.id ? " selected" : ""}`}
+                className={`pick-card${draft.emphasis === opt.id ? " selected" : ""}`}
                 aria-pressed={draft.emphasis === opt.id}
                 onClick={() => toggleEmphasis(opt.id)}
               >

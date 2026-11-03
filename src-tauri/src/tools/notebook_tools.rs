@@ -150,6 +150,119 @@ fn repair_escaped_string(s: &str) -> String {
     s.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\\"", "\"")
 }
 
+/// Fallback extractor inspired by OpenCode and Pi-Agent harnesses:
+/// When a model does not emit a native tool call (or emits JSON in prose/markdown),
+/// this scans the generated text for a valid `PublishBlockArgs` JSON payload.
+pub fn extract_block_from_text(text: &str) -> Option<PublishedBlock> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // 1. Try direct deserialization of the entire text (if model returned clean JSON).
+    if let Ok(args) = serde_json::from_str::<PublishBlockArgs>(trimmed) {
+        let args = repair_double_escaped(args);
+        return Some(args.into_published());
+    }
+
+    // 2. Check for <tool_call>...</tool_call> tags (common in raw tool-calling outputs).
+    if let Some(start) = text.find("<tool_call>") {
+        let after = &text[start + "<tool_call>".len()..];
+        if let Some(end) = after.find("</tool_call>") {
+            let inner = after[..end].trim();
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(inner) {
+                if let Some(args_val) = val.get("arguments") {
+                    if let Ok(args) = serde_json::from_value::<PublishBlockArgs>(args_val.clone()) {
+                        let args = repair_double_escaped(args);
+                        return Some(args.into_published());
+                    }
+                    if let Some(args_str) = args_val.as_str() {
+                        if let Ok(args) = serde_json::from_str::<PublishBlockArgs>(args_str) {
+                            let args = repair_double_escaped(args);
+                            return Some(args.into_published());
+                        }
+                    }
+                }
+                if let Ok(args) = serde_json::from_value::<PublishBlockArgs>(val) {
+                    let args = repair_double_escaped(args);
+                    return Some(args.into_published());
+                }
+            }
+        }
+    }
+
+    // 3. Scan for markdown code fences (```json ... ``` or ``` ... ```).
+    let mut cursor = 0;
+    while let Some(start_fence) = text[cursor..].find("```") {
+        let block_start = cursor + start_fence + 3;
+        let content_start = if let Some(newline) = text[block_start..].find('\n') {
+            block_start + newline + 1
+        } else {
+            block_start
+        };
+        if let Some(end_fence) = text[content_start..].find("```") {
+            let candidate = text[content_start..content_start + end_fence].trim();
+            if candidate.contains("\"blockType\"") {
+                if let Ok(args) = serde_json::from_str::<PublishBlockArgs>(candidate) {
+                    let args = repair_double_escaped(args);
+                    return Some(args.into_published());
+                }
+            }
+            cursor = content_start + end_fence + 3;
+        } else {
+            break;
+        }
+    }
+
+    // 4. Scan for balanced JSON object containing "blockType".
+    let mut search_idx = 0;
+    while let Some(rel_bt) = text[search_idx..].find("\"blockType\"") {
+        let bt_idx = search_idx + rel_bt;
+        if let Some(open_rel) = text[..bt_idx].rfind('{') {
+            let mut depth = 0;
+            let mut in_string = false;
+            let mut escape = false;
+            let mut close_idx = None;
+            for (idx, ch) in text[open_rel..].char_indices() {
+                if escape {
+                    escape = false;
+                    continue;
+                }
+                if ch == '\\' {
+                    escape = true;
+                    continue;
+                }
+                if ch == '"' {
+                    in_string = !in_string;
+                    continue;
+                }
+                if in_string {
+                    continue;
+                }
+                if ch == '{' {
+                    depth += 1;
+                } else if ch == '}' {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_idx = Some(open_rel + idx);
+                        break;
+                    }
+                }
+            }
+            if let Some(end) = close_idx {
+                let candidate = &text[open_rel..=end];
+                if let Ok(args) = serde_json::from_str::<PublishBlockArgs>(candidate) {
+                    let args = repair_double_escaped(args);
+                    return Some(args.into_published());
+                }
+            }
+        }
+        search_idx = bt_idx + "\"blockType\"".len();
+    }
+
+    None
+}
+
 /// A remediation hint shown ONLY on a failed gate attempt (1st or 2nd — the
 /// 3rd triggers a full re-approach block instead, see `notebook_service::
 /// generation::submit_gate_response`). `scaffold_type` is informational (lets
@@ -378,18 +491,106 @@ fn grade_closure_submission_json_schema() -> serde_json::Value {
 }
 
 fn visual_aid_json_schema() -> serde_json::Value {
+    // Cheapest-to-write first: the model reads the variants in this order.
+    let variable = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "sym": {"type": "string", "description": "Símbolo de la fórmula: letra + letras/dígitos/_ (p. ej. \"k\", \"masa\")"},
+            "label": {"type": "string"},
+            "unit": {"type": "string"},
+            "min": {"type": "number"}, "max": {"type": "number"}, "step": {"type": "number"},
+            "init": {"type": "number", "description": "Valor inicial, dentro de [min, max]"}
+        },
+        "required": ["sym", "label", "min", "max", "init"]
+    });
     serde_json::json!({
         "type": "object",
-        "description": "Visual estático y declarativo — nunca un simulador dinámico",
+        "description": "Visual estático o parametrizable. ORDEN DE PREFERENCIA: interactive_module (relación entre variables, función, vectores, gradiente, línea de tiempo) > diagram_spec (flujos, estados, secuencias, ciclos) > conceptual_matrix (comparaciones) > declarative_svg (SOLO fenómenos físicos/biológicos que ningún módulo cubre) > mermaid (evítalo).",
         "oneOf": [
             {
                 "properties": {
-                    "renderEngine": {"const": "mermaid"},
-                    "chartType": {"type": "string", "enum": ["flowchart", "sequenceDiagram", "classDiagram", "stateDiagram", "erDiagram"]},
-                    "code": {"type": "string", "description": "Código Mermaid válido y compilable. En stateDiagram no uses '::' dentro de una etiqueta (p. ej. String::from): Mermaid lo rechaza y el diagrama no se dibuja — di el paso con palabras"},
+                    "renderEngine": {"const": "interactive_module"},
+                    "spec": {
+                        "type": "object",
+                        "description": "Módulo del catálogo cerrado; el estudiante mueve sliders y el sistema calcula y dibuja — tú solo rellenas parámetros. Elige por `module`.",
+                        "properties": {
+                            "module": {"type": "string", "enum": ["relation_explorer", "function_plot", "vector_sum", "particle_gradient", "timeline"]},
+                            "output": {
+                                "type": "object",
+                                "description": "relation_explorer: lo que se calcula. expr = fórmula SOLO con los `sym` de variables (+ - * / ^ ( ), sin/cos/sqrt/abs/ln/exp/min/max, pi, e). Sin `=`.",
+                                "properties": {"sym": {"type": "string"}, "label": {"type": "string"}, "unit": {"type": "string"}, "expr": {"type": "string"}},
+                                "required": ["sym", "label", "expr"]
+                            },
+                            "variables": {"type": "array", "description": "relation_explorer: 1-4 sliders de entrada", "items": variable},
+                            "expr": {"type": "string", "description": "function_plot: y = f(x) en `x` y los `params` (p. ej. \"a*x^2 + b\")"},
+                            "domain": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "function_plot: [xMin, xMax]"},
+                            "params": {"type": "array", "description": "function_plot: 0-3 sliders de parámetros (\"x\" está reservado)", "items": variable},
+                            "tangent": {"type": "boolean", "description": "function_plot: muestra una tangente movible (derivadas)"},
+                            "vectors": {"type": "array", "description": "vector_sum: 2-4 vectores, x e y entre -10 y 10", "items": {"type": "object", "properties": {"label": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"}}, "required": ["label", "x", "y"]}},
+                            "showResultant": {"type": "boolean"},
+                            "highLabel": {"type": "string"}, "lowLabel": {"type": "string"},
+                            "highCount": {"type": "integer", "description": "particle_gradient: partículas en la zona densa (≤60) — debe ser mayor que lowCount"},
+                            "lowCount": {"type": "integer"},
+                            "hasBarrier": {"type": "boolean"},
+                            "channels": {"type": "integer", "description": "particle_gradient: canales de la barrera (1-8 si hay barrera)"},
+                            "events": {"type": "array", "description": "timeline: 2-8 eventos en orden", "items": {"type": "object", "properties": {"label": {"type": "string"}, "detail": {"type": "string"}}, "required": ["label", "detail"]}}
+                        },
+                        "required": ["module"]
+                    },
+                    "challenge": {
+                        "type": "object",
+                        "description": "Opcional (relation_explorer / function_plot): meta que el estudiante logra moviendo los sliders. `sym` = una variable, la salida o un parámetro; `target` debe ser alcanzable.",
+                        "properties": {"prompt": {"type": "string"}, "sym": {"type": "string"}, "target": {"type": "number"}, "tolerance": {"type": "number"}},
+                        "required": ["prompt", "sym", "target"]
+                    },
                     "caption": {"type": "string"}
                 },
-                "required": ["renderEngine", "chartType", "code", "caption"]
+                "required": ["renderEngine", "spec", "caption"]
+            },
+            {
+                "properties": {
+                    "renderEngine": {"const": "diagram_spec"},
+                    "kind": {"type": "string", "enum": ["flowchart", "sequence", "state", "cycle", "compare"]},
+                    "direction": {"type": "string", "enum": ["TD", "LR", "BT", "RL"]},
+                    "title": {"type": "string"},
+                    "nodes": {
+                        "type": "array",
+                        "description": "Máximo 10. `id` sin espacios (letras/dígitos/_). `explanation` (1-2 frases) se muestra al tocar el nodo — úsala para enseñar sin saturar el dibujo.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "label": {"type": "string"},
+                                "shape": {"type": "string", "enum": ["rectangle", "round", "diamond", "cylinder", "circle"]},
+                                "subtext": {"type": "string"},
+                                "explanation": {"type": "string"}
+                            },
+                            "required": ["id", "label"]
+                        }
+                    },
+                    "edges": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "from": {"type": "string"}, "to": {"type": "string"}, "label": {"type": "string"},
+                                "style": {"type": "string", "enum": ["solid", "dotted", "thick"]}
+                            },
+                            "required": ["from", "to"]
+                        }
+                    },
+                    "caption": {"type": "string"}
+                },
+                "required": ["renderEngine", "kind", "nodes", "edges"]
+            },
+            {
+                "properties": {
+                    "renderEngine": {"const": "conceptual_matrix"},
+                    "headers": {"type": "array", "items": {"type": "string"}},
+                    "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
+                    "contrastFocus": {"type": "string"}
+                },
+                "required": ["renderEngine", "headers", "rows", "contrastFocus"]
             },
             {
                 "properties": {
@@ -439,12 +640,12 @@ fn visual_aid_json_schema() -> serde_json::Value {
             },
             {
                 "properties": {
-                    "renderEngine": {"const": "conceptual_matrix"},
-                    "headers": {"type": "array", "items": {"type": "string"}},
-                    "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
-                    "contrastFocus": {"type": "string"}
+                    "renderEngine": {"const": "mermaid"},
+                    "chartType": {"type": "string", "enum": ["flowchart", "sequenceDiagram", "classDiagram", "stateDiagram", "erDiagram"]},
+                    "code": {"type": "string", "description": "Código Mermaid válido. Solo si diagram_spec no alcanza (classDiagram/erDiagram). En stateDiagram no uses '::' en etiquetas"},
+                    "caption": {"type": "string"}
                 },
-                "required": ["renderEngine", "headers", "rows", "contrastFocus"]
+                "required": ["renderEngine", "chartType", "code", "caption"]
             }
         ]
     })
@@ -460,7 +661,7 @@ fn visual_aid_json_schema() -> serde_json::Value {
 fn visual_aid_pointer_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
-        "description": "Opcional. Mismo shape que `visualAid` de declarative_visual_diagram (renderEngine mermaid | declarative_svg | conceptual_matrix)"
+        "description": "Opcional. Mismo shape que `visualAid` de declarative_visual_diagram (renderEngine interactive_module | diagram_spec | conceptual_matrix | declarative_svg | mermaid)"
     })
 }
 
@@ -473,6 +674,30 @@ fn visual_aid_pointer_schema() -> serde_json::Value {
 pub(crate) fn single_block_json_schema() -> serde_json::Value {
     let mut schema = serde_json::json!({
         "type": "object",
+        "properties": {
+            "blockType": {
+                "type": "string",
+                "description": "Tipo de bloque pedagógico a generar o template",
+                "enum": [
+                    "spaced_interleaved_retrieval",
+                    "anchored_micro_theory",
+                    "declarative_visual_diagram",
+                    "branching_scenario_challenge",
+                    "heuristic_error_audit",
+                    "interactive_prediction_gate",
+                    "hands_on_mission",
+                    "metacognitive_closure",
+                    "tpl_multiple_choice",
+                    "tpl_true_false",
+                    "tpl_ordering",
+                    "tpl_scenario_choice",
+                    "tpl_quick_recall",
+                    "tpl_theory",
+                    "tpl_boundary_cases"
+                ]
+            }
+        },
+        "required": ["blockType"],
         "oneOf": [
             {
                 "properties": {
@@ -1069,5 +1294,37 @@ mod tests {
         for tpl in ["tpl_multiple_choice", "tpl_true_false", "tpl_ordering", "tpl_scenario_choice", "tpl_quick_recall", "tpl_theory", "tpl_boundary_cases", "interactive_prediction_gate"] {
             assert!(tags.contains(&tpl), "missing {tpl}");
         }
+    }
+
+    #[test]
+    fn extract_block_from_text_parses_clean_json_and_markdown_blocks() {
+        let json_str = r#"{
+            "blockType": "anchored_micro_theory",
+            "title": "Concepto",
+            "intuitiveHook": "Gancho intuitivo",
+            "systemRule": "Regla del sistema",
+            "frequentError": "Error frecuente"
+        }"#;
+
+        // 1. Direct clean JSON
+        let extracted = extract_block_from_text(json_str).expect("clean json should extract");
+        assert_eq!(extracted.block.block_type().as_str(), "anchored_micro_theory");
+
+        // 2. Wrapped in markdown code block with surrounding reasoning prose
+        let prose = format!("Pensando en la lección...\n```json\n{json_str}\n```\nEspero que ayude.");
+        let extracted_prose = extract_block_from_text(&prose).expect("markdown fence should extract");
+        assert_eq!(extracted_prose.block.block_type().as_str(), "anchored_micro_theory");
+
+        // 3. Template extraction
+        let tpl_str = r#"```json
+        {
+            "blockType": "tpl_true_false",
+            "statement": "El agua hierve a 100°C al nivel del mar",
+            "isTrue": true,
+            "explanation": "Por la presión atmosférica estándar"
+        }
+        ```"#;
+        let extracted_tpl = extract_block_from_text(tpl_str).expect("template block should extract");
+        assert!(extracted_tpl.mechanical_template);
     }
 }

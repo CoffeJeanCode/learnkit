@@ -35,6 +35,26 @@ function unflattenEscapedText(text: string): string {
   return text.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\\"/g, '"');
 }
 
+/**
+ * Strips raw AI tool-calling wrappers (<tool_call>, <function=...>, <parameter=...>, </parameter>, etc.)
+ * and leftover XML artifacts so student-facing messages and feedback are always clean prose.
+ */
+export function cleanToolAndXmlArtifacts(text: string): string {
+  if (!text) return "";
+  if (!text.includes("<") && !text.includes("tool_call") && !text.includes("parameter")) return text;
+
+  let s = text;
+  // 1. Remove thinking / thought blocks
+  s = s.replace(/<thought>[\s\S]*?<\/thought>/gi, "").replace(/<thinking>[\s\S]*?<\/thinking>/gi, "");
+  // 2. Strip boolean or function parameter wrappers like <parameter=passed>false</parameter>
+  s = s.replace(/<parameter=(?:passed|function|name)>[\s\S]*?<\/parameter>/gi, "");
+  s = s.replace(/<parameter\s+name=["'](?:passed|function|name)["']>[\s\S]*?<\/parameter>/gi, "");
+  // 3. Strip all XML tags
+  s = s.replace(/<\/?(?:tool_call|function_calls|invoke|function|parameter)[^>]*>/gi, "");
+  s = s.replace(/<parameter=[^>]*>/gi, "");
+  return s.trim();
+}
+
 type Segment = { kind: "prose"; text: string } | { kind: "code"; lang: string; code: string };
 
 function splitSegments(text: string): Segment[] {
@@ -77,7 +97,7 @@ function splitBold(text: string, keyBase: string): ReactNode[] {
  *  sentence into islands separated by `gap` — "texto mal renderizado". A
  *  single wrapper keeps it one flex item that flows normally inside. */
 export function InlineText({ text }: { text: string }) {
-  const parts = unflattenEscapedText(text).split(/(`[^`\n]+`)/g);
+  const parts = unflattenEscapedText(cleanToolAndXmlArtifacts(text)).split(/(`[^`\n]+`)/g);
   return (
     <span className="inline-text">
       {parts.map((part, i) =>
@@ -186,7 +206,7 @@ function renderRun(run: ProseRun, key: string): ReactNode {
  *  blocks. Never nest this inside a `<p>`/`<li>` — the `<pre>` would be
  *  invalid there; use `InlineText` in those spots instead. */
 export function RichText({ text, className }: { text: string; className?: string }) {
-  const segments = splitSegments(unflattenEscapedText(text));
+  const segments = splitSegments(unflattenEscapedText(cleanToolAndXmlArtifacts(text)));
   return (
     <div className={className ? `rich-text ${className}` : "rich-text"}>
       {segments.map((segment, i) => {

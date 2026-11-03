@@ -316,6 +316,161 @@ pub enum StaticVisualSpec {
         #[serde(rename = "contrastFocus")]
         contrast_focus: String,
     },
+    /// Fast Generative UI diagram AST compiled into deterministic Mermaid client-side.
+    #[serde(rename = "diagram_spec")]
+    DiagramSpec {
+        kind: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        nodes: Vec<DiagramNodeSpec>,
+        edges: Vec<DiagramEdgeSpec>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+    },
+    /// A parametrised, student-manipulable module from a CLOSED catalogue
+    /// (see [`InteractiveModuleSpec`]). The model only fills a small typed
+    /// spec; the maths and the rendering live in the frontend, so the visual
+    /// is correct by construction and cheap in output tokens.
+    #[serde(rename = "interactive_module")]
+    InteractiveModule {
+        spec: InteractiveModuleSpec,
+        /// Optional "do this with the controls" goal, checked client-side
+        /// (feedback only — it never gates the block).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        challenge: Option<ModuleChallenge>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+    },
+}
+
+/// The closed catalogue of interactive modules. Adding one means: a variant
+/// here, its validation in `notebook_service::grounding`, the tool schema in
+/// `tools::notebook_tools`, and its renderer in
+/// `src/features/notebook/blocks/InteractiveModule.tsx`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "module", rename_all = "snake_case")]
+pub enum InteractiveModuleSpec {
+    /// A law as `output = f(variables)` with one slider per variable
+    /// (Hooke, Ohm, Coulomb, Pythagoras…).
+    RelationExplorer { output: ModuleOutput, variables: Vec<ModuleVariable> },
+    /// `y = f(x)` over `domain`, with optional parameter sliders and an
+    /// optional movable tangent.
+    FunctionPlot {
+        expr: String,
+        domain: [f64; 2],
+        #[serde(default)]
+        params: Vec<ModuleVariable>,
+        #[serde(default)]
+        tangent: bool,
+    },
+    /// 2-4 editable 2D vectors and (optionally) their resultant.
+    VectorSum {
+        vectors: Vec<ModuleVector>,
+        #[serde(rename = "showResultant", default = "default_true")]
+        show_resultant: bool,
+    },
+    /// Two regions with different particle density, optionally separated by a
+    /// barrier with channels; a time slider moves particles down the gradient.
+    ParticleGradient {
+        #[serde(rename = "highLabel")]
+        high_label: String,
+        #[serde(rename = "lowLabel")]
+        low_label: String,
+        #[serde(rename = "highCount")]
+        high_count: u32,
+        #[serde(rename = "lowCount")]
+        low_count: u32,
+        #[serde(rename = "hasBarrier", default = "default_true")]
+        has_barrier: bool,
+        #[serde(default)]
+        channels: u32,
+    },
+    /// Ordered events revealed one at a time with a stepper.
+    Timeline { events: Vec<TimelineEvent> },
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleVariable {
+    pub sym: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    pub min: f64,
+    pub max: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<f64>,
+    pub init: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleOutput {
+    pub sym: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// Arithmetic expression over the variables' `sym`s (see `domain::safe_expr`).
+    pub expr: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleVector {
+    pub label: String,
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineEvent {
+    pub label: String,
+    pub detail: String,
+}
+
+/// "Make `sym` reach `target` (±`tolerance`)" — `sym` is a variable or the
+/// output of a `relation_explorer`, or a parameter of a `function_plot`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModuleChallenge {
+    pub prompt: String,
+    pub sym: String,
+    pub target: f64,
+    #[serde(default)]
+    pub tolerance: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramNodeSpec {
+    pub id: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtext: Option<String>,
+    /// Shown in a side panel when the student taps the node (Gemini-style
+    /// "interactive image"). One or two sentences; optional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiagramEdgeSpec {
+    pub from: String,
+    pub to: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style: Option<String>,
 }
 
 fn default_view_box() -> String {
@@ -920,6 +1075,26 @@ pub struct NotebookDocument {
     pub initial_prediction: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NotebookComment {
+    pub id: String,
+    pub notebook_id: String,
+    pub class_id: String,
+    pub course_id: String,
+    pub block_id: String,
+    pub kind: String, // "doubt" | "note"
+    pub selected_text: String,
+    pub anchor_y: f64,
+    pub content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_response: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    pub created_at_ms: i64,
+    pub updated_at_ms: i64,
+}
+
 /// One persisted block: backend-owned `id`/`order_index` alongside the
 /// block's own type-specific payload (`content_json` — the same shape
 /// `GeneratedSectionBlock` serializes to, `blockType` tag included, so the
@@ -941,6 +1116,11 @@ pub struct NotebookBlock {
     pub content_json: serde_json::Value,
     pub order_index: u32,
     pub status: BlockStatus,
+    /// The concept node this block teaches (from the class's `lessonGraph`).
+    /// The generation guardrail ensures every non-retrieval/non-closure block
+    /// has a valid node, and the dependency graph checks prerequisites.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concept_node_id: Option<String>,
     pub attempt_count: u32,
     /// The most recent scaffold hint / re-approach rationale shown to the
     /// student for this block, if it has ever failed. `None` for blocks

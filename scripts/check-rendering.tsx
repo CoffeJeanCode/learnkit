@@ -312,8 +312,8 @@ checks["a chain gate parses without options or answer key"] = chain.options.leng
 const chainHtml = renderToStaticMarkup(
   <InteractivePredictionGateBlock block={fakeBlock("interactive_prediction_gate", chain)} content={chain} isActive onSubmitGate={noopSubmit} />,
 );
-checks["chain gate lists the shuffled links with up/down controls"] =
-  (chainHtml.match(/chain-item/g) ?? []).length === 3 && chainHtml.includes("↑") && chainHtml.includes("↓") && chainHtml.includes("Comprobar secuencia");
+checks["chain gate lists the shuffled links as draggable nodes with a keyboard path"] =
+  (chainHtml.match(/class="chain-item/g) ?? []).length === 3 && chainHtml.includes("Flechas arriba y abajo") && chainHtml.includes("Comprobar secuencia");
 checks["chain gate keeps the shuffled order on first paint"] = chainHtml.indexOf("Paso B") < chainHtml.indexOf("Paso A");
 checks["moveItem swaps neighbours and clamps at the edges"] =
   moveItem(["a", "b", "c"], 1, -1).join("") === "bac" && moveItem(["a", "b", "c"], 0, -1).join("") === "abc" && moveItem(["a", "b", "c"], 2, 1).join("") === "abc";

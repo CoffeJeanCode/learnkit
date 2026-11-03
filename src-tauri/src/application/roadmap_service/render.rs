@@ -27,11 +27,24 @@ pub(super) fn rejection_directive(reasons: &[String]) -> Option<String> {
     if reasons.is_empty() {
         return None;
     }
+    let mut surgical_hints = Vec::new();
+    for reason in reasons {
+        if reason.contains("sesgo de longitud") {
+            surgical_hints.push("Para resolver el sesgo de longitud, mantén todas las opciones con similar número de palabras y nivel de detalle.");
+        } else if reason.contains("justificación") {
+            surgical_hints.push("Para resolver la justificación, quita cualquier explicación ('porque', 'debido a') de las opciones y colócala en diagnosticInsight.");
+        }
+    }
+    let hint_str = if surgical_hints.is_empty() {
+        String::new()
+    } else {
+        format!(" Indicación quirúrgica: {}", surgical_hints.join(" "))
+    };
+
     Some(format!(
-        "Tu intento anterior de llamar una herramienta fue RECHAZADO por estas razones: {}. \
-         Corrígelo y vuelve a llamarla en este turno — no se lo menciones al estudiante, es \
-         un ajuste interno.",
-        reasons.join("; ")
+        "Tu intento anterior de llamar una herramienta fue RECHAZADO por estas razones: {}.          Corrígelo y vuelve a llamarla en este turno — no se lo menciones al estudiante, es          un ajuste interno.{}",
+        reasons.join("; "),
+        hint_str
     ))
 }
 

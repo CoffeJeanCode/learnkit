@@ -14,6 +14,15 @@ export interface ProviderWithStatus extends ProviderConfig {
   active: boolean;
 }
 
+export interface ModelTierConfig {
+  strongProviderId?: string | null;
+  strongModel?: string | null;
+  cheapProviderId?: string | null;
+  cheapModel?: string | null;
+  visionProviderId?: string | null;
+  visionModel?: string | null;
+}
+
 export interface ModelInfo {
   id: string;
   name: string | null;
@@ -69,14 +78,7 @@ export interface AppError {
   message: string;
 }
 
-export type View = "chat" | "agents" | "workflows" | "providers" | "roadmap" | "plan" | "notebook" | "graph";
-
-// Roadmap & Syllabus Diagnostic Agent types live in `../lib/schemas` now —
-// they're Zod schemas (the runtime validation boundary for the agent's JSON
-// contract), with `z.infer` types derived from them, not hand-duplicated
-// here. Import `RoadmapSession`, `RoadmapPhase`, etc. from `../lib/schemas`.
-// Same for the Notebook engine types (`Course`, `ClassRecord`,
-// `NotebookPayload`, etc.).
+export type View = "chat" | "agents" | "workflows" | "providers" | "roadmap" | "plan" | "notebook" | "graph" | "gallery";
 
 /** One block's edited content, sent to `save_notebook_state`. */
 export interface BlockUpdate {

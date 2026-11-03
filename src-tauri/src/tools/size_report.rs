@@ -10,6 +10,7 @@ use crate::agents::{
     analyst_agent, block_generator_agent, closure_feedback_grader_agent, lexical_assistant_agent, notebook_gate_grader_agent,
     pedagogical_critic_agent, roadmap_agent,
 };
+use crate::domain::notebook::DynamicBlockType;
 use crate::tools::{
     ConfirmSyllabusPlanTool, DiagnosticToolScope, GradeClosureSubmissionTool, GradeGateSubmissionTool, PresentDiagnosticBatteryTool,
     ProposeCapstoneProjectTool, ProposeSyllabusPlanTool, PublishNotebookBlockTool, RoadmapCapture, SubmitBlockAuditTool,
@@ -67,17 +68,33 @@ fn rows() -> Vec<(String, String, Vec<String>)> {
     ] {
         rows.push((format!("roadmap [{name}]"), roadmap_agent::definition().system_prompt, roadmap_tools(scope)));
     }
+    for t in [
+        DynamicBlockType::AnchoredMicroTheory,
+        DynamicBlockType::InteractivePredictionGate,
+        DynamicBlockType::HeuristicErrorAudit,
+        DynamicBlockType::HandsOnMission,
+        DynamicBlockType::BranchingScenarioChallenge,
+        DynamicBlockType::DeclarativeVisualDiagram,
+        DynamicBlockType::MetacognitiveClosure,
+        DynamicBlockType::SpacedInterleavedRetrieval,
+    ] {
+        rows.push((
+            format!("notebook_generator [lean:{}]", t.as_str()),
+            block_generator_agent::system_prompt_for(Some(t)),
+            vec![tool_json(&PublishNotebookBlockTool(Default::default()))],
+        ));
+    }
     rows
 }
 
 #[test]
 #[ignore = "prints a report; run with --ignored --nocapture"]
 fn size_report() {
-    println!("\n{:<34} {:>9} {:>9} {:>9} {:>9} {:>10}", "agent [scope]", "sys B", "sys tok", "tools B", "tools tok", "prefix tok");
+    println!("\n{:<54} {:>9} {:>9} {:>9} {:>9} {:>10}", "agent [scope]", "sys B", "sys tok", "tools B", "tools tok", "prefix tok");
     for (label, sys, tools) in rows() {
         let tools_b: usize = tools.iter().map(String::len).sum();
         let prefix = est_tokens(sys.len()) + est_tokens(tools_b);
-        println!("{:<34} {:>9} {:>9} {:>9} {:>9} {:>10}", label, sys.len(), est_tokens(sys.len()), tools_b, est_tokens(tools_b), prefix);
+        println!("{:<54} {:>9} {:>9} {:>9} {:>9} {:>10}", label, sys.len(), est_tokens(sys.len()), tools_b, est_tokens(tools_b), prefix);
     }
     println!("(prefix tok = est(system) + est(tools), bytes/4; baseline had a separate +165 B TOON hint in every user input)");
 }

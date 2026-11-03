@@ -165,15 +165,25 @@ impl RoadmapService {
                     had_violation = true;
                 }
                 None => {
-                    let violations = diagnostic_battery_violations(&battery);
-                    if violations.is_empty() {
-                        let mut battery = battery;
+                    let mut battery = battery;
+                    let fixes = crate::domain::content_repair::repair_diagnostic_battery(&mut battery);
+                    if fixes > 0 {
+                        tracing::info!(session_id = %session.session_id, fixes, "repaired diagnostic_battery options deterministically");
+                        crate::dev_trace::trace_note("repair", "content_repair", &session.session_id, "diagnostic_battery_repaired", &[format!("fixes={fixes}")]);
+                    }
+                    let report = evaluate_diagnostic_battery(&battery);
+                    for warning in report.warnings() {
+                        tracing::info!(session_id = %session.session_id, field = %warning.field, message = %warning.message, "diagnostic_battery adaptive slack warning");
+                        crate::dev_trace::trace_note("slack", "adaptive_slack", &session.session_id, &warning.field, &[warning.message.clone()]);
+                    }
+                    if report.is_acceptable() {
                         battery.shuffle_options();
                         session.pending_diagnostic_battery = Some(DiagnosticBatteryState { battery, answers: Default::default() });
                         session.last_rejection_reasons.clear();
                     } else {
+                        let violations: Vec<String> = report.criticals().into_iter().map(|f| f.message.clone()).collect();
                         crate::dev_trace::trace_note("critique", "roadmap_grounding", &session.session_id, "present_diagnostic_battery_rejected", &violations);
-                tracing::warn!(session_id = %session.session_id, ?violations, "present_diagnostic_battery failed grounding");
+                        tracing::warn!(session_id = %session.session_id, ?violations, "present_diagnostic_battery failed grounding");
                         session.last_rejection_reasons = violations;
                         had_violation = true;
                     }

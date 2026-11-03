@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { IconNotes } from "../../../components/Icons";
 
 /** Saves a block's annotation: `note` (free text) and/or `selection` (UI state). */
 export type Annotate = (blockId: string, patch: { note?: string; selection?: Record<string, unknown> }) => void;
@@ -75,7 +76,11 @@ export function BlockNote({ blockId, saved, onAnnotate }: { blockId: string; sav
   return (
     <details className="block-note" open={note.trim().length > 0}>
       <summary>
-        📝 Mis notas{note.trim() && <span className="block-note-dot" aria-label="Tienes una nota guardada"> ●</span>}
+        <span className="inline-flex items-center gap-1.5">
+          <IconNotes className="w-3.5 h-3.5" />
+          <span>Mis notas</span>
+        </span>
+        {note.trim() && <span className="block-note-dot" aria-label="Tienes una nota guardada"> ●</span>}
       </summary>
       <textarea
         value={note}

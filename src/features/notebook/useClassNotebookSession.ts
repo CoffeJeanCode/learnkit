@@ -4,6 +4,8 @@ import type { GenerationStage } from "../../components/AgentLoader";
 import type { GateResult, GateSubmission, NotebookBlock, NotebookBlockEvent, NotebookDocument } from "../../lib/schemas";
 import { onAgentEvent, onNotebookBlockEvent, regenerateNotebookBlock, requestEasierStep as requestEasierStepCommand, retryPendingBlock as retryPendingBlockCommand, saveBlockAnnotation, startClassNotebook, submitGateResponse, tauriError } from "../../lib/tauri";
 import { type BlockDraft, applyBlockDelta } from "./blockDraft";
+import { useProviders } from "../../stores/providers";
+import { useSessionObserver } from "./sessionObserver";
 
 export type BufferState = "idle" | "generating" | "error";
 
@@ -63,6 +65,11 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
     setDocument(null);
     setBlocks([]);
 
+    const activeProv = useProviders.getState().providers.find((p) => p.active);
+    const providerId = activeProv?.id ?? "xiaomi";
+    const modelName = activeProv?.default_model ?? "mimo-v2.6-pro";
+    useSessionObserver.getState().initSession(classId, providerId, modelName);
+
     (async () => {
       // Everything below — event subscription AND the actual start call —
       // is inside ONE try/finally: an exception from either (e.g. `listen`
@@ -80,6 +87,7 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
                 // A new block starts: drop the previous block's draft so its
                 // attempt counter cannot make the new one look stale.
                 setDraft(null);
+                useSessionObserver.getState().recordGenerating(blocks.length, e.attempt ?? 1);
               }
             },
           ],
@@ -90,6 +98,7 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
               setBlocks((prev) => upsertBlock(prev, e.block!));
               setBufferState("idle");
               setDraft(null);
+              useSessionObserver.getState().recordReady(e.block);
             },
           ],
           [
@@ -99,6 +108,7 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
               setBufferState("error");
               setBufferError(e.message ?? "No se pudo generar el siguiente bloque.");
               setDraft(null);
+              useSessionObserver.getState().recordError(e.message ?? "Error de generación");
             },
           ],
           // Live progress. Unlike the events above it must also be accepted
@@ -110,6 +120,10 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
             (e) => {
               if (documentIdRef.current !== null && e.document_id !== documentIdRef.current) return;
               setDraft((prev) => applyBlockDelta(prev, e));
+              useSessionObserver.getState().recordFirstDelta();
+              if (e.reasoning_chars) {
+                useSessionObserver.getState().recordTokenUsage({ reasoning: e.reasoning_chars });
+              }
             },
           ],
           // Unfiltered: a `generating` boundary marks "a NEW block started" —
@@ -148,6 +162,10 @@ export function useClassNotebookSession(classId: string | null, reloadToken = 0)
         documentIdRef.current = payload.document.id;
         setDocument(payload.document);
         setBlocks(sortByOrder(payload.blocks));
+        useSessionObserver.getState().attachDocumentId(payload.document.id);
+        for (const b of payload.blocks) {
+          useSessionObserver.getState().recordReady(b);
+        }
         // Block 1 is in `payload`, not in a `ready` event, so its draft is
         // cleared here (the next block's `generating` clears again).
         setDraft(null);

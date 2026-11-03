@@ -6,10 +6,31 @@ import { BLOCK_TYPE_LABEL } from "./blockTypeInfo";
 const FIELD_LABEL: Record<string, string | null> = {
   title: null,
   intuitiveHook: "La idea",
+  analogyBoundary: "Hasta dónde llega la analogía",
   systemRule: "La regla",
   frequentError: "Error frecuente",
+  scenario: "La situación",
+  decisionPoint: "La decisión",
+  instruction: "Tu tarea",
+  question: "La pregunta",
+  statement: "La afirmación",
+  challengeStatement: "El reto",
+  synthesisTask: "Para cerrar",
 };
-const FIELD_ORDER = ["title", "intuitiveHook", "systemRule", "frequentError"];
+const FIELD_ORDER = [
+  "title",
+  "intuitiveHook",
+  "analogyBoundary",
+  "systemRule",
+  "frequentError",
+  "scenario",
+  "decisionPoint",
+  "instruction",
+  "question",
+  "statement",
+  "challengeStatement",
+  "synthesisTask",
+];
 
 /**
  * Draft of the block being written, shown in place of a bare spinner. Purely

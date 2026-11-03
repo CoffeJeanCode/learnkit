@@ -1,26 +1,31 @@
 import { create } from "zustand";
 import {
   deleteProviderKey,
+  getModelTiers,
   listModels,
   listProviders,
   setActiveProvider,
   saveProvider,
   saveProviderKey,
+  setModelTiers,
   suggestedModels,
   tauriError,
   testProvider,
 } from "../lib/tauri";
-import type { ModelInfo, ProviderWithStatus } from "../types";
+import type { ModelInfo, ModelTierConfig, ProviderWithStatus } from "../types";
 
 interface ProvidersState {
   providers: ProviderWithStatus[];
   modelsCache: Record<string, ModelInfo[]>;
   suggestionsCache: Record<string, string[]>;
+  modelTiers: ModelTierConfig | null;
   loading: boolean;
   busyId: string | null;
   error: string | null;
   notice: string | null;
   refresh: () => Promise<void>;
+  loadModelTiers: () => Promise<void>;
+  saveModelTiers: (config: ModelTierConfig) => Promise<void>;
   saveConfig: (id: string, patch: Partial<ProviderWithStatus>) => Promise<void>;
   activate: (id: string) => Promise<void>;
   saveKey: (id: string, key: string) => Promise<void>;
@@ -35,6 +40,7 @@ export const useProviders = create<ProvidersState>((set, get) => ({
   providers: [],
   modelsCache: {},
   suggestionsCache: {},
+  modelTiers: null,
   // Starts true (not false): every consumer calls `refresh()` in a mount
   // effect, which runs AFTER the first paint. Defaulting to false let that
   // first frame render with an empty `providers` array as if loading were
@@ -48,8 +54,11 @@ export const useProviders = create<ProvidersState>((set, get) => ({
   refresh: async () => {
     set({ loading: true, error: null });
     try {
-      const providers = await listProviders();
-      set({ providers, loading: false });
+      const [providers, tiers] = await Promise.all([
+        listProviders(),
+        getModelTiers().catch(() => null),
+      ]);
+      set({ providers, modelTiers: tiers, loading: false });
     } catch (e) {
       set({ error: tauriError(e).message, loading: false });
     }
@@ -148,6 +157,25 @@ export const useProviders = create<ProvidersState>((set, get) => ({
       set((s) => ({ suggestionsCache: { ...s.suggestionsCache, [provider]: suggestions } }));
     } catch {
       // Non-critical; manual model ids always allowed.
+    }
+  },
+
+  loadModelTiers: async () => {
+    try {
+      const tiers = await getModelTiers();
+      set({ modelTiers: tiers });
+    } catch (e) {
+      set({ error: tauriError(e).message });
+    }
+  },
+
+  saveModelTiers: async (config) => {
+    set({ error: null, notice: null });
+    try {
+      const saved = await setModelTiers(config);
+      set({ modelTiers: saved, notice: "Asignación de modelos guardada correctamente." });
+    } catch (e) {
+      set({ error: tauriError(e).message });
     }
   },
 

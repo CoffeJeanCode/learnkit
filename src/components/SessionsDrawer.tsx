@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { RoadmapPhase } from "../lib/schemas";
 import { getRoadmapSession, listCourseClasses } from "../lib/tauri";
 import { useRoadmap } from "../stores/roadmap";
+import { resumeSession } from "../lib/resumeSession";
 import { useUi } from "../stores/ui";
 
 // User-facing gate labels (mirrors RoadmapView's tracker).
@@ -58,14 +59,10 @@ export function SessionsDrawer({ open, onClose }: { open: boolean; onClose: () =
   if (!open) return null;
 
   const choose = async (id: string) => {
-    await openSession(id);
+    // Land where the student left it: the class and block inside the notebook, the plan, or
+    // (for a session still being built) its conversation. See `resumeSession`.
+    await resumeSession(id);
     onClose();
-    // Land by state, not by habit: a sealed session has real content waiting
-    // in Plan/Clases, so the drawer (which is where you go to pick a course)
-    // drops you on the plan; a session still being built goes to its
-    // conversation. Either way the header chip now names what you opened.
-    const opened = useRoadmap.getState().session;
-    setView(opened?.status === "sealed" ? "plan" : "roadmap");
   };
 
   const beginDelete = async (summary: { session_id: string; status: string; imported_course_id?: string | null }) => {

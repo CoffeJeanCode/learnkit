@@ -13,7 +13,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rig_agent::agent::{AgentHook, HookContext, ObservationAction, ReasoningDelta, ToolCallDelta};
+use rig_agent::agent::{AgentHook, HookContext, ObservationAction, ReasoningDelta, TextDelta, ToolCallDelta};
 use serde_json::{Map, Value, json};
 
 use super::partial_json::parse_partial;
@@ -25,9 +25,33 @@ pub const MIN_EMIT_INTERVAL: Duration = Duration::from_millis(150);
 
 /// Reading-only prose fields that may be shown while a block of that type is
 /// being written, per block type. NEVER add a field that holds or hints at an
-/// answer (options, correct answers, explanations of a gate, solutions).
-const PREVIEW_FIELDS: &[(DynamicBlockType, &[&str])] =
-    &[(DynamicBlockType::AnchoredMicroTheory, &["title", "intuitiveHook", "systemRule", "frequentError"])];
+/// answer (options, correct answers, explanations of a gate, solutions): each
+/// field below is something the student reads anyway before answering.
+const PREVIEW_FIELDS: &[(DynamicBlockType, &[&str])] = &[
+    (DynamicBlockType::AnchoredMicroTheory, &["title", "intuitiveHook", "analogyBoundary", "systemRule", "frequentError"]),
+    (DynamicBlockType::DeclarativeVisualDiagram, &["title"]),
+    (DynamicBlockType::BranchingScenarioChallenge, &["scenario", "decisionPoint"]),
+    (DynamicBlockType::HeuristicErrorAudit, &["instruction"]),
+    (DynamicBlockType::InteractivePredictionGate, &["question"]),
+    (DynamicBlockType::HandsOnMission, &["challengeStatement"]),
+    (DynamicBlockType::MetacognitiveClosure, &["synthesisTask"]),
+];
+
+/// The block-template tags (`tpl_*`, see `domain::block_templates`) the model
+/// prefers for simple blocks: the block type they expand to and the ONLY raw
+/// arguments that may stream. Their other arguments hold the answer key
+/// (`isTrue`, `correct`, `stepsInOrder`, `explanation`, `followsRule`...) and are
+/// never forwarded. `tpl_quick_recall` streams nothing (its `expectedAnswer` is
+/// the answer to the recall prompt).
+const PREVIEW_TEMPLATES: &[(&str, DynamicBlockType, &[&str])] = &[
+    ("tpl_theory", DynamicBlockType::AnchoredMicroTheory, &["title", "intuitiveHook", "analogyBoundary", "systemRule", "frequentError"]),
+    ("tpl_multiple_choice", DynamicBlockType::InteractivePredictionGate, &["question"]),
+    ("tpl_true_false", DynamicBlockType::InteractivePredictionGate, &["statement"]),
+    ("tpl_ordering", DynamicBlockType::InteractivePredictionGate, &["question"]),
+    ("tpl_boundary_cases", DynamicBlockType::InteractivePredictionGate, &["question"]),
+    ("tpl_scenario_choice", DynamicBlockType::BranchingScenarioChallenge, &["scenario", "decisionPoint"]),
+    ("tpl_quick_recall", DynamicBlockType::SpacedInterleavedRetrieval, &[]),
+];
 
 /// A preview field is cut at this many characters: it is a progress hint, not
 /// the block.
@@ -67,31 +91,39 @@ fn truncate_chars(s: &str) -> String {
     if s.chars().count() <= MAX_FIELD_CHARS { s.to_string() } else { s.chars().take(MAX_FIELD_CHARS).collect() }
 }
 
+/// The block type a (complete) `blockType` tag stands for and the prose fields
+/// allowed to stream for it: a real block type, or a `tpl_*` template.
+fn resolve_tag(tag: &str) -> Option<(DynamicBlockType, &'static [&'static str])> {
+    if let Ok(bt) = serde_json::from_value::<DynamicBlockType>(Value::String(tag.to_string())) {
+        let allowed = PREVIEW_FIELDS.iter().find(|(t, _)| *t == bt).map(|(_, f)| *f).unwrap_or(&[]);
+        return Some((bt, allowed));
+    }
+    PREVIEW_TEMPLATES.iter().find(|(name, _, _)| *name == tag).map(|(_, bt, f)| (*bt, *f))
+}
+
 /// Sanitizes a partially-parsed tool-call argument object into the preview the
 /// client may see. The block type is forwarded only once it is a complete,
-/// known type (a half-written `"anchored_mi"` is not one); content fields only
-/// for types listed in [`PREVIEW_FIELDS`], and only string values.
+/// known type or template (a half-written `"anchored_mi"` is not one); content
+/// fields only for the tags listed above, and only string values.
 pub fn preview_from_partial(partial: &Value) -> Value {
     let obj = partial.as_object();
-    let block_type: Option<DynamicBlockType> =
-        obj.and_then(|o| o.get("blockType")).and_then(Value::as_str).and_then(|s| serde_json::from_value(Value::String(s.to_string())).ok());
+    let resolved = obj.and_then(|o| o.get("blockType")).and_then(Value::as_str).and_then(resolve_tag);
 
     let mut fields = Map::new();
-    if let (Some(bt), Some(o)) = (block_type, obj) {
-        if let Some((_, allowed)) = PREVIEW_FIELDS.iter().find(|(t, _)| *t == bt) {
-            for key in *allowed {
-                if let Some(text) = o.get(*key).and_then(Value::as_str) {
-                    fields.insert((*key).to_string(), Value::String(truncate_chars(text)));
-                }
+    if let (Some((_, allowed)), Some(o)) = (resolved, obj) {
+        for key in allowed {
+            if let Some(text) = o.get(*key).and_then(Value::as_str) {
+                fields.insert((*key).to_string(), Value::String(truncate_chars(text)));
             }
         }
     }
-    json!({ "blockType": block_type.map(|b| b.as_str()), "fields": fields })
+    json!({ "blockType": resolved.map(|(b, _)| b.as_str()), "fields": fields })
 }
 
 #[derive(Default)]
 struct HookState {
     args: String,
+    text: String,
     last_preview_emit: Option<Instant>,
     last_preview: Option<Value>,
     reasoning_chars: usize,
@@ -100,14 +132,29 @@ struct HookState {
 
 /// Observation-only hook feeding a [`BlockStreamSink`]. Never stops or alters
 /// the run.
+#[derive(Clone)]
 pub struct BlockStreamHook {
     sink: BlockStreamSink,
-    state: Mutex<HookState>,
+    state: Arc<Mutex<HookState>>,
 }
 
 impl BlockStreamHook {
     pub fn new(sink: BlockStreamSink) -> Self {
-        Self { sink, state: Mutex::new(HookState::default()) }
+        Self { sink, state: Arc::new(Mutex::new(HookState::default())) }
+    }
+
+    fn on_text_fragment(&self, fragment: &str) {
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        st.text.push_str(fragment);
+    }
+
+    pub fn accumulated_text(&self) -> String {
+        let st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !st.text.is_empty() {
+            st.text.clone()
+        } else {
+            st.args.clone()
+        }
     }
 
     fn on_args_fragment(&self, fragment: &str, now: Instant) {
@@ -153,6 +200,11 @@ impl AgentHook for BlockStreamHook {
         self.on_reasoning_fragment(event.delta, Instant::now());
         ObservationAction::Continue
     }
+
+    async fn on_text_delta(&self, _ctx: &HookContext, event: TextDelta<'_>) -> ObservationAction {
+        self.on_text_fragment(event.delta);
+        ObservationAction::Continue
+    }
 }
 
 #[cfg(test)]
@@ -178,31 +230,96 @@ mod tests {
         assert!(preview["fields"].get("visualAid").is_none());
     }
 
-    /// THE safety property: answer keys and gate prose never reach the client
-    /// through the stream, whatever order the model writes its fields in.
+    /// THE safety property: answer keys never reach the client through the
+    /// stream, whatever order the model writes its fields in. A gate shows its
+    /// question (the student reads it anyway) and nothing else.
     #[test]
-    fn gates_and_templates_never_leak_content_or_answer_keys() {
+    fn gates_stream_only_their_question_never_an_answer_key() {
         let gate = json!({
             "blockType": "interactive_prediction_gate", "question": "¿Cuál?", "options": ["A", "B"], "correctOption": "B",
-            "conceptualFeedbackMap": {"A": "mal"}
+            "conceptualFeedbackMap": {"A": "mal"}, "shuffledSteps": ["x"], "correctOrder": ["y"], "boundaryCases": [{"followsRule": true}]
         });
         let p = preview_from_partial(&gate);
         assert_eq!(p["blockType"], "interactive_prediction_gate");
-        assert_eq!(p["fields"], json!({}), "a gate streams no content at all");
+        assert_eq!(p["fields"], json!({"question": "¿Cuál?"}));
         let flat = p.to_string();
-        assert!(!flat.contains("correctOption") && !flat.contains("¿Cuál?") && !flat.contains("\"B\""));
+        for leaked in ["correctOption", "\"B\"", "mal", "shuffledSteps", "correctOrder", "followsRule"] {
+            assert!(!flat.contains(leaked), "{leaked} leaked: {flat}");
+        }
+    }
 
-        // A template (not a DynamicBlockType): its raw args hold `isTrue`.
-        let tpl = json!({"blockType": "tpl_true_false", "statement": "s", "isTrue": true, "explanation": "porque sí"});
-        let p = preview_from_partial(&tpl);
-        assert_eq!(p["blockType"], Value::Null);
+    /// Templates (`tpl_*`) are the preferred path, so they stream too — but only
+    /// the prose the student reads, never the field that carries the answer.
+    #[test]
+    fn templates_stream_their_prose_and_never_the_answer_key() {
+        let tf = json!({"blockType": "tpl_true_false", "statement": "El cielo es azul", "isTrue": true, "explanation": "porque sí"});
+        let p = preview_from_partial(&tf);
+        assert_eq!(p["blockType"], "interactive_prediction_gate");
+        assert_eq!(p["fields"], json!({"statement": "El cielo es azul"}));
+        assert!(!p.to_string().contains("porque") && !p.to_string().contains("isTrue"));
+
+        let mc = json!({"blockType": "tpl_multiple_choice", "question": "¿Q?", "correct": {"text": "RESPUESTA_OK", "feedback": "f"}, "distractors": [{"text": "DISTRACTOR", "feedback": "g"}]});
+        let p = preview_from_partial(&mc);
+        assert_eq!(p["fields"], json!({"question": "¿Q?"}));
+        assert!(!p.to_string().contains("RESPUESTA_OK") && !p.to_string().contains("DISTRACTOR"));
+
+        let ord = json!({"blockType": "tpl_ordering", "question": "Ordena", "stepsInOrder": ["uno", "dos", "tres"]});
+        let p = preview_from_partial(&ord);
+        assert_eq!(p["fields"], json!({"question": "Ordena"}));
+        assert!(!p.to_string().contains("uno"));
+
+        let bc = json!({"blockType": "tpl_boundary_cases", "question": "¿Cumple?", "cases": [{"statement": "s", "followsRule": true}]});
+        assert_eq!(preview_from_partial(&bc)["fields"], json!({"question": "¿Cumple?"}));
+
+        let recall = json!({"blockType": "tpl_quick_recall", "items": [{"conceptLabel": "c", "prompt": "p", "expectedAnswer": "RESP"}]});
+        let p = preview_from_partial(&recall);
+        assert_eq!(p["blockType"], "spaced_interleaved_retrieval");
         assert_eq!(p["fields"], json!({}));
-        assert!(!p.to_string().contains("porque"));
+        assert!(!p.to_string().contains("RESP"));
 
-        // Answer-key fields are not forwarded even on a whitelisted type.
-        let sneaky = json!({"blockType": "anchored_micro_theory", "title": "t", "correctOption": "B", "modelSolution": "x"});
-        let p = preview_from_partial(&sneaky);
-        assert!(!p.to_string().contains("correctOption") && !p.to_string().contains("modelSolution"));
+        let sc = json!({"blockType": "tpl_scenario_choice", "scenario": "S", "decisionPoint": "D", "optimal": {"choice": "OPT", "consequence": "c"}});
+        let p = preview_from_partial(&sc);
+        assert_eq!(p["blockType"], "branching_scenario_challenge");
+        assert_eq!(p["fields"], json!({"scenario": "S", "decisionPoint": "D"}));
+        assert!(!p.to_string().contains("OPT"));
+
+        let th = json!({"blockType": "tpl_theory", "title": "T", "intuitiveHook": "H", "analogyBoundary": "B", "systemRule": "R", "frequentError": "E"});
+        assert_eq!(preview_from_partial(&th)["fields"].as_object().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn every_other_block_streams_only_its_opening_prose() {
+        let branching = json!({"blockType": "branching_scenario_challenge", "scenario": "S", "decisionPoint": "D", "branches": [{"choice": "x", "consequence": "y", "isOptimal": true}]});
+        let p = preview_from_partial(&branching);
+        assert_eq!(p["fields"], json!({"scenario": "S", "decisionPoint": "D"}));
+        assert!(!p.to_string().contains("isOptimal"));
+
+        let audit = json!({"blockType": "heuristic_error_audit", "instruction": "Encuentra el error", "modelSolution": "LA SOLUCION", "flawedRepresentation": {"buggySnippetOrDiagram": "x"}});
+        let p = preview_from_partial(&audit);
+        assert_eq!(p["fields"], json!({"instruction": "Encuentra el error"}));
+        assert!(!p.to_string().contains("SOLUCION"));
+
+        let mission = json!({"blockType": "hands_on_mission", "challengeStatement": "Haz X", "expectedMilestoneArtifact": "Y", "workedTemplate": "Z", "scaffoldingHints": ["h"]});
+        assert_eq!(preview_from_partial(&mission)["fields"], json!({"challengeStatement": "Haz X"}));
+
+        let diagram = json!({"blockType": "declarative_visual_diagram", "title": "T", "visualAid": {"renderEngine": "mermaid"}});
+        assert_eq!(preview_from_partial(&diagram)["fields"], json!({"title": "T"}));
+
+        let closure = json!({"blockType": "metacognitive_closure", "synthesisTask": "Sintetiza", "predictionComparison": {"initialPrediction": "p"}});
+        assert_eq!(preview_from_partial(&closure)["fields"], json!({"synthesisTask": "Sintetiza"}));
+
+        let retrieval = json!({"blockType": "spaced_interleaved_retrieval", "items": [{"expectedAnswer": "RESP"}]});
+        assert_eq!(preview_from_partial(&retrieval)["fields"], json!({}));
+    }
+
+    /// Structural guard: no whitelisted field name looks like an answer key.
+    #[test]
+    fn the_whitelist_never_names_an_answer_field() {
+        let banned = ["correct", "answer", "solution", "explanation", "feedback", "istrue", "isoptimal", "followsrule", "expected", "order", "options", "branches"];
+        let all = PREVIEW_FIELDS.iter().flat_map(|(_, f)| f.iter()).chain(PREVIEW_TEMPLATES.iter().flat_map(|(_, _, f)| f.iter()));
+        for field in all {
+            assert!(!banned.iter().any(|b| field.to_lowercase().contains(b)), "suspicious preview field {field}");
+        }
     }
 
     #[test]

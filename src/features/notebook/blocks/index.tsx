@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { DynamicSectionBlockSchema } from "../../../lib/schemas";
+import { DynamicSectionBlockSchema, presentationOf } from "../../../lib/schemas";
 import type { DynamicSectionBlock, GateResult, GateSubmission, NotebookBlock } from "../../../lib/schemas";
 import { AnchoredMicroTheoryBlock } from "./AnchoredMicroTheoryBlock";
 import { BranchingScenarioChallengeBlock } from "./BranchingScenarioChallengeBlock";
@@ -157,11 +157,19 @@ export function DynamicNotebookBlock({
     );
   }
   const content = parsed.data;
+  const presentation = presentationOf(block.content_json);
   const statusLabel = block.status !== "ready" ? STATUS_LABEL[block.status] : undefined;
   const lexical = deriveBlockLexicalContext(content);
 
   return (
-    <section className={`notebook-block-wrapper ${content.blockType} status-${block.status}`} ref={blockRef}>
+    <section
+      className={`notebook-block-wrapper ${content.blockType} status-${block.status}`}
+      ref={blockRef}
+      data-block-id={block.id}
+      data-density={presentation.density}
+      data-emphasis={presentation.emphasis}
+      data-layout={presentation.layout}
+    >
       <div className="block-kicker">
         <span className="block-kicker-label">
           {BLOCK_LABEL[content.blockType] ?? content.blockType}
@@ -175,6 +183,7 @@ export function DynamicNotebookBlock({
       </div>
       <DevBlockInfo block={block} />
       <TheorySelectionAssistant
+        blockId={block.id}
         blockRef={blockRef}
         triggerRef={triggerRef}
         buttonOpen={assistantOpen}

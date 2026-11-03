@@ -20,7 +20,7 @@ import {
   RoadmapTurnPayloadSchema,
   SearchKeyStatusSchema,
 } from "./schemas";
-import type { ContextAnswer, GateSubmission, NotebookBlockEvent, PlanAdjustmentPayload, PlanPartEvent, ProfileBasics, ResearchStatusEvent } from "./schemas";
+import type { ContextAnswer, GateSubmission, NotebookBlockEvent, NotebookComment, PlanAdjustmentPayload, PlanPartEvent, ProfileBasics, ResearchStatusEvent } from "./schemas";
 import type { BlockUpdate } from "../types";
 import type { DevTraceEntry } from "./devTrace";
 import type {
@@ -29,6 +29,7 @@ import type {
   AgentOutput,
   AppError,
   ModelInfo,
+  ModelTierConfig,
   ProviderWithStatus,
   ToolInfo,
 } from "../types";
@@ -77,6 +78,11 @@ export const listModels = (provider_id: string) =>
 
 export const suggestedModels = (provider: string) =>
   invoke<string[]>("suggested_models", { provider });
+
+export const getModelTiers = () => invoke<ModelTierConfig>("get_model_tiers");
+
+export const setModelTiers = (config: ModelTierConfig) =>
+  invoke<ModelTierConfig>("set_model_tiers", { config });
 
 // --- Agents ----------------------------------------------------------------
 
@@ -225,6 +231,19 @@ export const submitGateResponse = (block_id: string, submission: GateSubmission)
  */
 export const saveBlockAnnotation = (notebook_id: string, block_id: string, patch: { note?: string; selection?: Record<string, unknown> }) =>
   invoke<void>("save_block_annotation", { notebookId: notebook_id, blockId: block_id, note: patch.note, selection: patch.selection });
+
+// --- Dual Comments: Dudas IA & Notas Importantes ---------------------------------
+export const upsertNotebookComment = (comment: NotebookComment) =>
+  invoke<NotebookComment>("upsert_notebook_comment", { comment });
+
+export const listNotebookComments = (notebookId: string) =>
+  invoke<NotebookComment[]>("list_notebook_comments", { notebookId });
+
+export const listCourseComments = (courseId: string) =>
+  invoke<NotebookComment[]>("list_course_comments", { courseId });
+
+export const deleteNotebookComment = (commentId: string) =>
+  invoke<boolean>("delete_notebook_comment", { commentId });
 
 // --- The student's knowledge graph ------------------------------------------
 // Concepts and relations are written by the student only: no command here asks a

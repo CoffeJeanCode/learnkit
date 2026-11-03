@@ -315,7 +315,7 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
             if title.trim().is_empty() {
                 v.push(empty("title"));
             }
-            v.extend(visual_violations(i, visual_aid));
+            v.extend(visual_violations(i, visual_aid, true));
             if guided_walkthrough.is_empty() {
                 v.push(format!("bloque {i} (declarative_visual_diagram): guidedWalkthrough está vacío"));
             }
@@ -345,7 +345,7 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
                 ));
             }
             if let Some(visual) = visual_aid {
-                v.extend(visual_violations(i, visual));
+                v.extend(visual_violations(i, visual, false));
             }
         }
         GeneratedSectionBlock::HeuristicErrorAudit {
@@ -377,7 +377,7 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
                 }
             }
             if let Some(visual) = visual_aid {
-                v.extend(visual_violations(i, visual));
+                v.extend(visual_violations(i, visual, false));
             }
         }
         GeneratedSectionBlock::InteractivePredictionGate {
@@ -442,7 +442,7 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
                 }
             }
             if let Some(visual) = visual_aid {
-                v.extend(visual_violations(i, visual));
+                v.extend(visual_violations(i, visual, false));
             }
         }
         GeneratedSectionBlock::HandsOnMission {
@@ -491,7 +491,7 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
                 v.push(format!("bloque {i} (hands_on_mission): evaluationRubricSummary está vacío"));
             }
             if let Some(visual) = visual_aid {
-                v.extend(visual_violations(i, visual));
+                v.extend(visual_violations(i, visual, false));
             }
         }
         GeneratedSectionBlock::MetacognitiveClosure { synthesis_task, prediction_comparison, self_evaluation_checklist } => {
@@ -512,7 +512,7 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
     v
 }
 
-fn visual_violations(i: usize, visual: &StaticVisualSpec) -> Vec<String> {
+fn visual_violations(i: usize, visual: &StaticVisualSpec, allow_svg: bool) -> Vec<String> {
     let mut v = Vec::new();
     match visual {
         StaticVisualSpec::Mermaid { code, caption, chart_type } => {
@@ -535,6 +535,14 @@ fn visual_violations(i: usize, visual: &StaticVisualSpec) -> Vec<String> {
             }
         }
         StaticVisualSpec::DeclarativeSvg { elements, groups, caption, .. } => {
+            if !allow_svg {
+                // The expensive, error-prone engine is reserved for the diagram block;
+                // everywhere else a module or diagram_spec says the same for a fraction of the tokens.
+                v.push(format!(
+                    "bloque {i}: visualAid declarative_svg solo se permite en declarative_visual_diagram — aquí usa \
+                     interactive_module (si hay variables que cambian un resultado), diagram_spec (flujos/estados) o conceptual_matrix"
+                ));
+            }
             if elements.is_empty() && groups.is_empty() {
                 v.push(format!("bloque {i}: visualAid declarative_svg sin elements ni groups"));
             }
@@ -548,6 +556,44 @@ fn visual_violations(i: usize, visual: &StaticVisualSpec) -> Vec<String> {
             }
             if contrast_focus.trim().is_empty() {
                 v.push(format!("bloque {i}: visualAid conceptual_matrix sin contrastFocus"));
+            }
+        }
+        StaticVisualSpec::DiagramSpec { nodes, edges, kind, .. } => {
+            if nodes.is_empty() {
+                v.push(format!("bloque {i}: visualAid diagram_spec sin nodes"));
+            }
+            if !matches!(kind.as_str(), "flowchart" | "sequence" | "state" | "cycle" | "compare") {
+                v.push(format!("bloque {i}: visualAid diagram_spec kind \"{kind}\" inválido (flowchart | sequence | state | cycle | compare)"));
+            }
+            let mut ids = std::collections::HashSet::new();
+            for node in nodes {
+                let valid_id = node.id.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+                    && node.id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+                if !valid_id {
+                    v.push(format!("bloque {i}: diagram_spec nodo con id \"{}\" inválido — usa letras/dígitos/_ sin espacios (p. ej. \"cache\")", node.id));
+                } else if !ids.insert(node.id.as_str()) {
+                    v.push(format!("bloque {i}: diagram_spec id de nodo repetido \"{}\"", node.id));
+                }
+            }
+            for edge in edges {
+                for end in [&edge.from, &edge.to] {
+                    if !ids.contains(end.as_str()) {
+                        v.push(format!("bloque {i}: diagram_spec una arista apunta a \"{end}\", que no es el id de ningún nodo"));
+                    }
+                }
+            }
+            if nodes.len() > 10 {
+                v.push(format!("bloque {i}: diagram_spec con {} nodos — máximo 10 (un diagrama = un modelo mental)", nodes.len()));
+            }
+        }
+        StaticVisualSpec::InteractiveModule { spec, challenge, caption } => {
+            v.extend(
+                crate::domain::interactive_module::module_violations("visualAid", spec, challenge.as_ref())
+                    .into_iter()
+                    .map(|m| format!("bloque {i}: {m}")),
+            );
+            if caption.as_deref().is_none_or(|c| c.trim().is_empty()) {
+                v.push(format!("bloque {i}: visualAid interactive_module sin caption"));
             }
         }
     }
@@ -690,6 +736,7 @@ mod tests {
                 content_json: serde_json::json!({}),
                 order_index: 0,
                 status,
+                concept_node_id: None,
                 attempt_count: 0,
                 last_feedback: None,
             }
@@ -1050,5 +1097,108 @@ mod tests {
         // Retrieval is only legal as the first block, so it is checked as such.
         let v = single_block_violations(&[], &recall, 1, false, no_mastery(), false, true);
         assert!(v.is_empty(), "{v:?}");
+    }
+
+    #[test]
+    fn declarative_svg_is_only_allowed_in_declarative_visual_diagram() {
+        let svg = StaticVisualSpec::DeclarativeSvg {
+            view_box: "0 0 800 450".into(),
+            elements: vec![crate::domain::notebook::SvgElement {
+                tag: crate::domain::notebook::SvgTag::Circle,
+                props: serde_json::json!({ "cx": 10, "cy": 10, "r": 5 }),
+                label: None,
+            }],
+            groups: vec![],
+            pedagogical_focus: None,
+            caption: "Diagrama".into(),
+        };
+
+        // In interactive_prediction_gate: must FAIL with the svg restriction message
+        let mut gate_with_svg = valid_gate();
+        match &mut gate_with_svg {
+            GeneratedSectionBlock::InteractivePredictionGate { visual_aid, .. } => {
+                *visual_aid = Some(svg.clone());
+            }
+            _ => unreachable!(),
+        }
+        let v_gate = single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &gate_with_svg, 2, false, no_mastery(), false, false);
+        assert!(v_gate.iter().any(|s| s.contains("declarative_svg solo se permite en declarative_visual_diagram")), "{v_gate:?}");
+
+        // In declarative_visual_diagram: must PASS
+        let diagram = GeneratedSectionBlock::DeclarativeVisualDiagram {
+            title: "Título".into(),
+            visual_aid: svg,
+            guided_walkthrough: vec![crate::domain::notebook::WalkthroughStep {
+                step_number: 1,
+                target_visual_element: "c".into(),
+                pedagogical_insight: "ins".into(),
+            }],
+        };
+        let v_diag = single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &diagram, 2, false, no_mastery(), false, false);
+        assert!(v_diag.is_empty(), "{v_diag:?}");
+
+        // In interactive_prediction_gate with valid diagram_spec: must PASS
+        let mut gate_with_diag_spec = valid_gate();
+        match &mut gate_with_diag_spec {
+            GeneratedSectionBlock::InteractivePredictionGate { visual_aid, .. } => {
+                *visual_aid = Some(StaticVisualSpec::DiagramSpec {
+                    kind: "flowchart".into(),
+                    direction: Some("LR".into()),
+                    title: None,
+                    nodes: vec![
+                        crate::domain::notebook::DiagramNodeSpec { id: "a".into(), label: "A".into(), shape: None, subtext: None, explanation: None },
+                        crate::domain::notebook::DiagramNodeSpec { id: "b".into(), label: "B".into(), shape: None, subtext: None, explanation: None },
+                    ],
+                    edges: vec![crate::domain::notebook::DiagramEdgeSpec { from: "a".into(), to: "b".into(), label: None, style: None }],
+                    caption: Some("flujo".into()),
+                });
+            }
+            _ => unreachable!(),
+        }
+        let v_spec = single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &gate_with_diag_spec, 2, false, no_mastery(), false, false);
+        assert!(v_spec.is_empty(), "{v_spec:?}");
+
+        // In interactive_prediction_gate with valid interactive_module: must PASS
+        let mut gate_with_mod = valid_gate();
+        match &mut gate_with_mod {
+            GeneratedSectionBlock::InteractivePredictionGate { visual_aid, .. } => {
+                *visual_aid = Some(StaticVisualSpec::InteractiveModule {
+                    spec: crate::domain::notebook::InteractiveModuleSpec::RelationExplorer {
+                        output: crate::domain::notebook::ModuleOutput { sym: "F".into(), label: "F".into(), unit: Some("N".into()), expr: "k * x".into() },
+                        variables: vec![
+                            crate::domain::notebook::ModuleVariable { sym: "k".into(), label: "Constante".into(), unit: Some("N/m".into()), min: 1.0, max: 10.0, step: Some(1.0), init: 5.0 },
+                            crate::domain::notebook::ModuleVariable { sym: "x".into(), label: "Elongación".into(), unit: Some("m".into()), min: 0.1, max: 2.0, step: Some(0.1), init: 1.0 },
+                        ],
+                    },
+                    challenge: None,
+                    caption: Some("Ley de Hooke".into()),
+                });
+            }
+            _ => unreachable!(),
+        }
+        let v_mod = single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &gate_with_mod, 2, false, no_mastery(), false, false);
+        assert!(v_mod.is_empty(), "{v_mod:?}");
+    }
+
+    #[test]
+    fn broken_interactive_module_is_rejected_by_single_block_violations() {
+        let mut gate = valid_gate();
+        match &mut gate {
+            GeneratedSectionBlock::InteractivePredictionGate { visual_aid, .. } => {
+                *visual_aid = Some(StaticVisualSpec::InteractiveModule {
+                    spec: crate::domain::notebook::InteractiveModuleSpec::RelationExplorer {
+                        output: crate::domain::notebook::ModuleOutput { sym: "F".into(), label: "F".into(), unit: Some("N".into()), expr: "k * undeclared_var".into() },
+                        variables: vec![
+                            crate::domain::notebook::ModuleVariable { sym: "k".into(), label: "Constante".into(), unit: Some("N/m".into()), min: 1.0, max: 10.0, step: Some(1.0), init: 5.0 },
+                        ],
+                    },
+                    challenge: None,
+                    caption: Some("Ley de Hooke".into()),
+                });
+            }
+            _ => unreachable!(),
+        }
+        let v = single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &gate, 2, false, no_mastery(), false, false);
+        assert!(v.iter().any(|s| s.contains("undeclared_var")), "{v:?}");
     }
 }

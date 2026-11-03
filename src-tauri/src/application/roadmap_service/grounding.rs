@@ -357,46 +357,95 @@ pub(super) fn option_has_embedded_justification(option: &str) -> bool {
     JUSTIFICATION_CONNECTORS.iter().any(|c| lower.contains(c))
 }
 
-pub(super) fn diagnostic_battery_violations(battery: &DiagnosticBattery) -> Vec<String> {
-    let mut v = Vec::new();
+pub(super) fn evaluate_diagnostic_battery(battery: &DiagnosticBattery) -> crate::domain::pedagogy_guardrails::ValidationReport {
+    use crate::domain::pedagogy_guardrails::{ValidationFinding, ValidationReport, ValidationSeverity};
+    let mut report = ValidationReport::default();
     if battery.goal_alignment.trim().is_empty() {
-        v.push("diagnosticBattery.goalAlignment está vacío".to_string());
+        report.findings.push(ValidationFinding {
+            field: "diagnosticBattery.goalAlignment".to_string(),
+            message: "diagnosticBattery.goalAlignment está vacío".to_string(),
+            severity: ValidationSeverity::Critical,
+            can_surgical_repair: false,
+        });
     }
     if !(3..=4).contains(&battery.questions.len()) {
-        v.push(format!("diagnosticBattery.questions tiene {} elementos, debe tener 3-4", battery.questions.len()));
+        report.findings.push(ValidationFinding {
+            field: "diagnosticBattery.questions".to_string(),
+            message: format!("diagnosticBattery.questions tiene {} elementos, debe tener 3-4", battery.questions.len()),
+            severity: ValidationSeverity::Critical,
+            can_surgical_repair: false,
+        });
     }
     for (i, q) in battery.questions.iter().enumerate() {
         if !(2..=4).contains(&q.options.len()) {
-            v.push(format!("diagnosticBattery.questions[{i}] tiene {} opciones, debe tener 2-4", q.options.len()));
+            report.findings.push(ValidationFinding {
+                field: format!("diagnosticBattery.questions[{i}].options"),
+                message: format!("diagnosticBattery.questions[{i}] tiene {} opciones, debe tener 2-4", q.options.len()),
+                severity: ValidationSeverity::Critical,
+                can_surgical_repair: true,
+            });
         }
         if !q.options.contains(&q.correct_option) {
-            v.push(format!("diagnosticBattery.questions[{i}].correctOption \"{}\" no está en options", q.correct_option));
+            report.findings.push(ValidationFinding {
+                field: format!("diagnosticBattery.questions[{i}].correctOption"),
+                message: format!("diagnosticBattery.questions[{i}].correctOption \"{}\" no está en options", q.correct_option),
+                severity: ValidationSeverity::Critical,
+                can_surgical_repair: true,
+            });
         }
+        let slack = crate::domain::pedagogy_guardrails::evaluate_options_length_slack(&q.options);
         let lengths: Vec<usize> = q.options.iter().map(|o| o.chars().count()).collect();
-        if let (Some(&max_len), Some(&min_len)) = (lengths.iter().max(), lengths.iter().min()) {
-            if max_len > 0 && (max_len - min_len) as f32 / max_len as f32 > 0.15 {
-                v.push(format!(
-                    "diagnosticBattery.questions[{i}] tiene opciones con longitudes muy dispares (sesgo de longitud) — \
-                     min {min_len} / max {max_len} caracteres, variación permitida < 15%"
-                ));
-            }
+        let min_len = lengths.iter().min().copied().unwrap_or(0);
+        let max_len = lengths.iter().max().copied().unwrap_or(0);
+        if slack == ValidationSeverity::Critical {
+            report.findings.push(ValidationFinding {
+                field: format!("diagnosticBattery.questions[{i}].options"),
+                message: format!(
+                    "diagnosticBattery.questions[{i}] tiene opciones con longitudes muy dispares (sesgo de longitud crítico) — min {min_len} / max {max_len} caracteres"
+                ),
+                severity: ValidationSeverity::Critical,
+                can_surgical_repair: true,
+            });
+        } else if slack == ValidationSeverity::Warning {
+            report.findings.push(ValidationFinding {
+                field: format!("diagnosticBattery.questions[{i}].options"),
+                message: format!(
+                    "diagnosticBattery.questions[{i}] tiene ligera disparidad de longitud (min {min_len} / max {max_len} caracteres) — aceptado bajo adaptive slack"
+                ),
+                severity: ValidationSeverity::Warning,
+                can_surgical_repair: false,
+            });
         }
         for opt in &q.options {
             if option_has_embedded_justification(opt) {
-                v.push(format!(
-                    "diagnosticBattery.questions[{i}] tiene una opción (\"{opt}\") con su propia justificación — \
-                     eso pertenece a diagnosticInsight, nunca al texto de la opción"
-                ));
+                report.findings.push(ValidationFinding {
+                    field: format!("diagnosticBattery.questions[{i}].options"),
+                    message: format!(
+                        "diagnosticBattery.questions[{i}] tiene una opción (\"{opt}\") con su propia justificación — eso pertenece a diagnosticInsight, nunca al texto de la opción"
+                    ),
+                    severity: ValidationSeverity::Critical,
+                    can_surgical_repair: true,
+                });
             }
         }
     }
     let dimensions: std::collections::HashSet<DiagnosticDimension> = battery.questions.iter().map(|q| q.dimension).collect();
     for required in [DiagnosticDimension::Intuition, DiagnosticDimension::Mechanics, DiagnosticDimension::CriticalCase] {
         if !dimensions.contains(&required) {
-            v.push(format!("diagnosticBattery.questions no cubre la dimensión obligatoria {required:?}"));
+            report.findings.push(ValidationFinding {
+                field: "diagnosticBattery.questions.dimension".to_string(),
+                message: format!("diagnosticBattery.questions no cubre la dimensión obligatoria {required:?}"),
+                severity: ValidationSeverity::Critical,
+                can_surgical_repair: false,
+            });
         }
     }
-    v
+    report
+}
+
+pub(super) fn diagnostic_battery_violations(battery: &DiagnosticBattery) -> Vec<String> {
+    let report = evaluate_diagnostic_battery(battery);
+    report.criticals().into_iter().map(|f| f.message.clone()).collect()
 }
 
 /// Gate 2's completion condition for Gate 3a to fire: either the student

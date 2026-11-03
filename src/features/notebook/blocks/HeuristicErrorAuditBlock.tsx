@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { DynamicSectionBlock, NotebookBlock } from "../../../lib/schemas";
 import type { SubmitGate } from "./index";
+import { GateProgress, GateSubmitButton } from "./GateSubmitButton";
 import { splitSnippetLines } from "./interaction";
 import { asNullableString, asNumber, usePersistedState } from "./persist";
 import type { Annotate } from "./persist";
@@ -142,11 +143,23 @@ export function HeuristicErrorAuditBlock({
             disabled={!isActive || busy}
           />
           <div className="row">
-            <button className="btn-primary" onClick={() => void submit()} disabled={!isActive || busy || !diagnosis.trim() || needsLine}>
-              {busy ? "Calificando…" : "Enviar diagnóstico"}
-            </button>
-            {needsLine && isActive && <span className="hint">Primero señala una línea.</span>}
+            <GateSubmitButton
+              label="Enviar diagnóstico"
+              busy={busy}
+              disabled={!isActive || !diagnosis.trim() || needsLine}
+              disabledReason={
+                !isActive
+                  ? "Esta auditoría ya no está activa."
+                  : needsLine
+                    ? "Primero señala una línea."
+                    : !diagnosis.trim()
+                      ? "Escribe tu diagnóstico antes de enviarlo."
+                      : null
+              }
+              onClick={() => void submit()}
+            />
           </div>
+          <GateProgress busy={busy} label="Calificando el diagnóstico" />
           {!busy && outcome && !outcome.passed && (
             <p className="hint hint-warn">{shownFeedback ? <InlineText text={shownFeedback} /> : "Todavía no — inténtalo de nuevo."}</p>
           )}

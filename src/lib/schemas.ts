@@ -435,6 +435,74 @@ export const SvgGroupSchema = z.object({
   elements: z.array(SvgElementSchema),
 });
 
+export const DiagramNodeSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  shape: z.enum(["rectangle", "round", "diamond", "cylinder", "circle"]).nullish(),
+  subtext: z.string().nullish(),
+  // Tap-to-learn note (Gemini-style "interactive image"); see `DiagramNodeSpec`.
+  explanation: z.string().nullish(),
+});
+
+export const DiagramEdgeSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  label: z.string().nullish(),
+  style: z.enum(["solid", "dotted", "thick"]).nullish(),
+});
+
+// Interactive modules: a CLOSED catalogue the model only parametrises (see
+// `InteractiveModuleSpec` in Rust and `blocks/InteractiveModule.tsx`).
+export const ModuleVariableSchema = z.object({
+  sym: z.string(),
+  label: z.string(),
+  unit: z.string().nullish(),
+  min: z.number(),
+  max: z.number(),
+  step: z.number().nullish(),
+  init: z.number(),
+});
+
+export const InteractiveModuleSpecSchema = z.discriminatedUnion("module", [
+  z.object({
+    module: z.literal("relation_explorer"),
+    output: z.object({ sym: z.string(), label: z.string(), unit: z.string().nullish(), expr: z.string() }),
+    variables: z.array(ModuleVariableSchema),
+  }),
+  z.object({
+    module: z.literal("function_plot"),
+    expr: z.string(),
+    domain: z.tuple([z.number(), z.number()]),
+    params: z.array(ModuleVariableSchema).default([]),
+    tangent: z.boolean().default(false),
+  }),
+  z.object({
+    module: z.literal("vector_sum"),
+    vectors: z.array(z.object({ label: z.string(), x: z.number(), y: z.number() })),
+    showResultant: z.boolean().default(true),
+  }),
+  z.object({
+    module: z.literal("particle_gradient"),
+    highLabel: z.string(),
+    lowLabel: z.string(),
+    highCount: z.number(),
+    lowCount: z.number(),
+    hasBarrier: z.boolean().default(true),
+    channels: z.number().default(0),
+  }),
+  z.object({
+    module: z.literal("timeline"),
+    events: z.array(z.object({ label: z.string(), detail: z.string() })),
+  }),
+]);
+
+export const ModuleChallengeSchema = z.object({
+  prompt: z.string(),
+  sym: z.string(),
+  target: z.number(),
+  tolerance: z.number().default(0),
+});
+
 export const StaticVisualSpecSchema = z.discriminatedUnion("renderEngine", [
   z.object({
     renderEngine: z.literal("mermaid"),
@@ -456,7 +524,42 @@ export const StaticVisualSpecSchema = z.discriminatedUnion("renderEngine", [
     rows: z.array(z.array(z.string())),
     contrastFocus: z.string(),
   }),
+  z.object({
+    renderEngine: z.literal("diagram_spec"),
+    kind: z.enum(["flowchart", "sequence", "state", "cycle", "compare"]),
+    direction: z.enum(["TD", "LR", "BT", "RL"]).nullish(),
+    title: z.string().nullish(),
+    nodes: z.array(DiagramNodeSchema).default([]),
+    edges: z.array(DiagramEdgeSchema).default([]),
+    caption: z.string().nullish(),
+  }),
+  z.object({
+    renderEngine: z.literal("interactive_module"),
+    spec: InteractiveModuleSpecSchema,
+    challenge: ModuleChallengeSchema.nullish(),
+    caption: z.string().nullish(),
+  }),
 ]);
+
+// --- Presentation (decided by the system, never by the model) ---------------
+// `domain::block_planner::Presentation`: how the UI should lay a block out,
+// derived from the learner's state and stored beside the block's content.
+export const PresentationSchema = z.object({
+  density: z.enum(["compact", "comfortable", "spacious"]).catch("comfortable"),
+  emphasis: z.enum(["visual", "balanced", "practice"]).catch("balanced"),
+  layout: z.enum(["stacked", "split"]).catch("stacked"),
+});
+export type Presentation = z.infer<typeof PresentationSchema>;
+
+export const DEFAULT_PRESENTATION: Presentation = { density: "comfortable", emphasis: "balanced", layout: "stacked" };
+
+/** The presentation stored in a block's raw content, or the neutral default
+ *  (blocks persisted before it existed, or a malformed value, never break). */
+export function presentationOf(contentJson: unknown): Presentation {
+  const raw = contentJson && typeof contentJson === "object" ? (contentJson as Record<string, unknown>).presentation : undefined;
+  const parsed = PresentationSchema.safeParse(raw);
+  return parsed.success && raw ? parsed.data : DEFAULT_PRESENTATION;
+}
 
 // --- Dynamic pedagogical block catalog -------------------------------------
 
@@ -826,6 +929,9 @@ export const NotebookBlockEventSchema = z.object({
 export type DynamicBlockType = z.infer<typeof DynamicBlockTypeSchema>;
 export type DisciplineProfile = z.infer<typeof DisciplineProfileSchema>;
 export type StaticVisualSpec = z.infer<typeof StaticVisualSpecSchema>;
+export type InteractiveModuleSpec = z.infer<typeof InteractiveModuleSpecSchema>;
+export type ModuleVariable = z.infer<typeof ModuleVariableSchema>;
+export type ModuleChallenge = z.infer<typeof ModuleChallengeSchema>;
 export type SvgElement = z.infer<typeof SvgElementSchema>;
 export type SvgGroup = z.infer<typeof SvgGroupSchema>;
 export type DiagnosticDimension = z.infer<typeof DiagnosticDimensionSchema>;
@@ -836,6 +942,23 @@ export type ScenarioBranch = z.infer<typeof ScenarioBranchSchema>;
 export type RetrievalPrompt = z.infer<typeof RetrievalPromptSchema>;
 export type DynamicSectionBlock = z.infer<typeof DynamicSectionBlockSchema>;
 export type InteractiveStep = z.infer<typeof InteractiveStepSchema>;
+
+export const NotebookCommentSchema = z.object({
+  id: z.string(),
+  notebookId: z.string(),
+  classId: z.string(),
+  courseId: z.string(),
+  blockId: z.string(),
+  kind: z.enum(["doubt", "note"]),
+  selectedText: z.string(),
+  anchorY: z.number().default(0),
+  content: z.string(),
+  aiResponse: z.string().nullish(),
+  tags: z.array(z.string()).default([]),
+  createdAtMs: z.number(),
+  updatedAtMs: z.number(),
+});
+export type NotebookComment = z.infer<typeof NotebookCommentSchema>;
 export type Course = z.infer<typeof CourseSchema>;
 export type Concept = z.infer<typeof ConceptSchema>;
 export type ConceptLink = z.infer<typeof ConceptLinkSchema>;

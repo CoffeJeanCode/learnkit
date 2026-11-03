@@ -42,13 +42,10 @@ function BlockSkeleton({ kind, compact }: { kind: SkeletonKind; compact: boolean
 }
 
 /**
- * What the student sees while the next block is being made: a status line from
- * real signals (see `describeGeneration`), the text of the block as it streams
- * in when the server shares it, a skeleton shaped like the block, and the
- * stopwatch. Remount it per block (`key`) so the stopwatch restarts.
- *
- * Replaces the fixed "Preparando el siguiente paso…" row, which looked the same
- * whether the model was thinking, writing, or retrying.
+ * What the student sees while the next block is being made:
+ * If there is draft text already streamed, it appears in its own preview card
+ * outside the loader block. The loader itself (status headline, skeleton, stopwatch)
+ * appears in a separate card below it.
  */
 export function BlockGeneratingCard({
   stage,
@@ -63,25 +60,37 @@ export function BlockGeneratingCard({
   const hasText = hasDraftContent(draft) && Object.keys(draft.fields).length > 0;
 
   return (
-    <div className={`gen-card phase-${status.phase}`}>
-      <div className="gen-card-head" role="status" aria-live="polite">
-        <ThinkingSketch label={status.headline} />
-        {onCancel && (
-          <button
-            type="button"
-            className="buffer-cancel"
-            title="Cancelar y reintentar"
-            aria-label="Cancelar y reintentar"
-            onClick={onCancel}
-          >
-            ×
-          </button>
-        )}
+    <>
+      {hasText && (
+        <div className="card block-draft-card" aria-label="Adelanto del bloque en redacción">
+          <div className="block-draft-card-head">
+            <span className="block-draft-badge">
+              <span className="dot dot-live" />
+              Adelanto de contenido
+            </span>
+          </div>
+          <BlockDraftPreview draft={draft} showKind={false} />
+        </div>
+      )}
+      <div className={`gen-card phase-${status.phase}`}>
+        <div className="gen-card-head" role="status" aria-live="polite">
+          <ThinkingSketch label={status.headline} />
+          {onCancel && (
+            <button
+              type="button"
+              className="buffer-cancel"
+              title="Cancelar y reintentar"
+              aria-label="Cancelar y reintentar"
+              onClick={onCancel}
+            >
+              ×
+            </button>
+          )}
+        </div>
+        {status.detail && <p className="gen-card-detail">{status.detail}</p>}
+        <BlockSkeleton kind={status.skeleton} compact={hasText} />
+        <WaitingHint />
       </div>
-      {status.detail && <p className="gen-card-detail">{status.detail}</p>}
-      {hasText && <BlockDraftPreview draft={draft} showKind={false} />}
-      <BlockSkeleton kind={status.skeleton} compact={hasText} />
-      <WaitingHint />
-    </div>
+    </>
   );
 }

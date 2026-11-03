@@ -413,6 +413,7 @@
             content_json: serde_json::json!({}),
             order_index,
             status,
+            concept_node_id: None,
             attempt_count: 0,
             last_feedback: None,
         }
@@ -497,6 +498,7 @@
         for (doc, blocks, why) in cases {
             assert!(!class_is_complete(&doc, &blocks), "{why}");
         }
+    }
 
     #[test]
     fn blocks_persisted_before_the_scaffolding_fields_still_deserialize() {
@@ -586,4 +588,3 @@
         .unwrap();
         assert!(matches!(audit, GateSubmission::HeuristicErrorAudit { selected_line: Some(3), .. }));
     }
-}

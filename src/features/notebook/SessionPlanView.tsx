@@ -4,6 +4,8 @@ import { useNotebookNav } from "../../stores/notebook";
 import { useRoadmap } from "../../stores/roadmap";
 import { useUi } from "../../stores/ui";
 import { SessionPlanTab } from "./SessionPlanTab";
+import { STICKER_LAYER_ATTR, PageStickers } from "./rewards/PageStickers";
+import { RewardDock } from "./rewards/RewardDock";
 
 /** The header's "Plan" section — the sealed roadmap that produced the active
  *  session's course, plus the class path's locks/checks. A first-class view
@@ -70,8 +72,10 @@ export function SessionPlanView() {
     );
   }
 
+  const planNotebookId = targetCourseId ? `plan-${targetCourseId}` : session?.session_id ? `plan-${session.session_id}` : "session-plan";
+
   return (
-    <div className="view plan">
+    <div className="view plan" {...{ [STICKER_LAYER_ATTR]: "" }}>
       <SessionPlanTab
         session={session}
         loading={loading || opening}
@@ -84,6 +88,8 @@ export function SessionPlanView() {
         onOpenConversation={() => setView("roadmap")}
         error={loadError?.course === targetCourseId ? loadError.message : null}
       />
+      <PageStickers notebookId={planNotebookId} />
+      <RewardDock notebookId={planNotebookId} />
     </div>
   );
 }

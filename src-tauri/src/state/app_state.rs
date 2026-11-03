@@ -5,6 +5,7 @@ use crate::agents::roadmap_agent::ROADMAP_AGENT_ID;
 use crate::agents::{AgentRegistry, basic_agent};
 use crate::application::{AgentService, LexicalAssistantService, NotebookService, ProviderService, ResearchService, RoadmapService, WorkflowService};
 use crate::domain::model::ModelRef;
+use crate::domain::provider::ModelTierConfig;
 use crate::error::AppResult;
 use crate::notebook_store::NotebookStore;
 use crate::orchestration::Orchestrator;
@@ -29,6 +30,7 @@ pub struct AppState {
     pub data_dir: PathBuf,
     store: FileStore,
     active_provider: RwLock<Option<String>>,
+    pub model_tier_config: RwLock<ModelTierConfig>,
 }
 
 impl AppState {
@@ -162,6 +164,7 @@ impl AppState {
             lexical_assistant_service,
             data_dir,
             active_provider: RwLock::new(store.load_active_provider()),
+            model_tier_config: RwLock::new(store.load_model_tiers().unwrap_or_default()),
             store,
         };
         // Covers both first run (fresh demo defs) and a stale `agents.json`
@@ -191,22 +194,32 @@ impl AppState {
         ]
     }
 
-    /// Pinned agents whose output is short and never grades the student: they
-    /// run on the provider's fast model (see `ProviderKind::light_agent_model`).
-    /// The generator, the graders and the roadmap agents stay on the main one.
-    const LIGHT_AGENT_IDS: [&'static str; 5] = [
+    /// Fast/cheap agents: graders, critics, lexical assistant, research and intake questions.
+    const CHEAP_AGENT_IDS: [&'static str; 7] = [
+        crate::agents::notebook_gate_grader_agent::NOTEBOOK_GATE_GRADER_AGENT_ID,
+        crate::agents::closure_feedback_grader_agent::CLOSURE_FEEDBACK_GRADER_AGENT_ID,
         crate::agents::pedagogical_critic_agent::PEDAGOGICAL_CRITIC_AGENT_ID,
         crate::agents::lexical_assistant_agent::LEXICAL_ASSISTANT_AGENT_ID,
-        // Both research steps are bounded by code: the planner's queries are
-        // capped and the curator can only choose among real hits.
         crate::agents::research_planner_agent::RESEARCH_PLANNER_AGENT_ID,
         crate::agents::research_curator_agent::RESEARCH_CURATOR_AGENT_ID,
-        // The intake questions are validated in code and fall back to a generic set.
         crate::agents::context_questions_agent::CONTEXT_QUESTIONS_AGENT_ID,
     ];
 
     pub fn active_provider_id(&self) -> Option<String> {
         self.active_provider.read().ok().and_then(|g| g.clone())
+    }
+
+    pub fn get_model_tiers(&self) -> ModelTierConfig {
+        self.model_tier_config.read().map(|g| g.clone()).unwrap_or_default()
+    }
+
+    pub fn set_model_tiers(&self, config: ModelTierConfig) -> AppResult<()> {
+        self.store.save_model_tiers(&config)?;
+        if let Ok(mut g) = self.model_tier_config.write() {
+            *g = config;
+        }
+        self.apply_active_provider();
+        Ok(())
     }
 
     /// Makes `provider_id` the one every built-in agent runs on, using that
@@ -224,11 +237,7 @@ impl AppState {
         Ok(())
     }
 
-    /// Re-pins the built-in agents to the active provider and its model.
-    /// Called when the active provider changes, when its model is edited and
-    /// after a key is saved. If no provider is active yet (or its key is
-    /// gone), the first one with a key becomes active — so onboarding
-    /// (pick provider -> save key) always ends with working agents.
+    /// Re-pins the built-in agents based on tier configuration and active provider.
     pub fn apply_active_provider(&self) {
         let usable = |id: &str| self.vault.has_provider_key(id).unwrap_or(false);
         let mut active = self.active_provider_id().filter(|id| usable(id));
@@ -239,21 +248,49 @@ impl AppState {
             }
             let _ = self.store.save_active_provider(active.as_deref());
         }
-        let Some(id) = active else { return };
-        let Ok(config) = self.providers.get(&id) else { return };
-        let model = config
-            .default_model
-            .clone()
-            .filter(|m| !m.trim().is_empty())
-            .or_else(|| config.provider.suggested_models().first().map(|m| m.to_string()));
-        let Some(model) = model else { return };
-        let light_model = config.provider.light_agent_model(&model);
-        let main_target = ModelRef::new(id.clone(), model);
-        let light_target = ModelRef::new(id, light_model);
+        let Some(active_id) = active else { return };
+        let Ok(active_config) = self.providers.get(&active_id) else { return };
+
+        let tier_cfg = self.get_model_tiers();
+
+        // 1. Resolve Strong model (tier override if valid key, else active provider default/suggested)
+        let strong_target = if let (Some(pid), Some(m)) = (&tier_cfg.strong_provider_id, &tier_cfg.strong_model) {
+            if usable(pid) && !m.trim().is_empty() {
+                Some(ModelRef::new(pid.clone(), m.clone()))
+            } else {
+                None
+            }
+        } else {
+            None
+        }.unwrap_or_else(|| {
+            let model = active_config
+                .default_model
+                .clone()
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or_else(|| active_config.provider.suggested_strong_model().to_string());
+            ModelRef::new(active_id.clone(), model)
+        });
+
+        // 2. Resolve Cheap model (tier override if valid key, else active provider fast/cheap)
+        let cheap_target = if let (Some(pid), Some(m)) = (&tier_cfg.cheap_provider_id, &tier_cfg.cheap_model) {
+            if usable(pid) && !m.trim().is_empty() {
+                Some(ModelRef::new(pid.clone(), m.clone()))
+            } else {
+                None
+            }
+        } else {
+            None
+        }.unwrap_or_else(|| {
+            let model = active_config.provider.fast_model()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| active_config.provider.suggested_cheap_model().to_string());
+            ModelRef::new(active_id.clone(), model)
+        });
+
         let mut changed = false;
         for agent_id in Self::pinned_agent_ids() {
             let Ok(mut def) = self.agents.get(agent_id) else { continue };
-            let target = if Self::LIGHT_AGENT_IDS.contains(&agent_id) { &light_target } else { &main_target };
+            let target = if Self::CHEAP_AGENT_IDS.contains(&agent_id) { &cheap_target } else { &strong_target };
             if def.model.provider_id == target.provider_id && def.model.model == target.model {
                 continue;
             }

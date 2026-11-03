@@ -477,7 +477,25 @@ impl Orchestrator {
         input: &str,
         capture: NotebookBlockCapture,
     ) -> AppResult<AgentOutput> {
-        let def = self.agents.get(agent_id)?;
+        self.run_notebook_block_agent_with(app, agent_id, None, input, capture).await
+    }
+
+    /// Same run with an optional system prompt that REPLACES the registered one
+    /// for this call only — the generator passes the short, type-specific prompt
+    /// (`block_generator_agent::system_prompt_for`) when the block type was
+    /// decided by the system. `None` = the registered (full) prompt.
+    pub async fn run_notebook_block_agent_with(
+        &self,
+        app: Option<&tauri::AppHandle>,
+        agent_id: &str,
+        system_prompt_override: Option<&str>,
+        input: &str,
+        capture: NotebookBlockCapture,
+    ) -> AppResult<AgentOutput> {
+        let mut def = self.agents.get(agent_id)?;
+        if let Some(prompt) = system_prompt_override {
+            def.system_prompt = prompt.to_string();
+        }
         let ctx = AgentContext {
             run_id: Uuid::new_v4().to_string(),
             agent_id: def.id.clone(),
@@ -519,6 +537,13 @@ impl Orchestrator {
                 Ok(output)
             }
             Err(e) => {
+                // If capture wasn't populated yet, check if the error message itself
+                // leaks the model's text output containing the block payload.
+                if capture.lock().unwrap_or_else(|err| err.into_inner()).is_none() {
+                    if let Some(published) = crate::tools::extract_block_from_text(&e.to_string()) {
+                        *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(published);
+                    }
+                }
                 // Rig's MaxTurnsError fires while PREPARING the next model
                 // call — AFTER a prior turn's `publish_notebook_block` already
                 // executed and wrote into the capture. Returning Err here
