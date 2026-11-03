@@ -900,6 +900,12 @@ pre.output, .quickrun pre {
   transform: none;
 }
 .chip:hover:not(:disabled) { color: var(--chalk); background: var(--card-hi); }
+.chip.is-active,
+.chip.selected {
+  background: var(--gold-chalk);
+  color: var(--paper-deep);
+  font-weight: 600;
+}
 .advanced { margin-top: 12px; }
 .advanced summary {
   cursor: pointer;
@@ -4248,4 +4254,195 @@ body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16p
 .editor-action-btn.is-danger:hover:not(:disabled) {
   background: var(--status-error-surface);
   color: var(--status-error-text);
+}
+
+
+/* --- Model Tiers Configuration Card --- */
+.model-tiers-card {
+  margin-bottom: 14px;
+}
+
+.model-tiers-card .card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.model-tiers-card .card-head h3 {
+  margin: 0;
+  font-family: var(--font-hand);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--chalk);
+}
+
+.model-tiers-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.model-tier-row {
+  background: var(--card-hi);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
+  padding: 14px 16px;
+  transition: border-color 0.15s ease;
+}
+
+.model-tier-row:focus-within {
+  border-color: var(--chalk-soft);
+}
+
+.model-tier-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.model-tier-title-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-tier-title {
+  font-family: var(--font-hand);
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--chalk);
+}
+
+.model-tier-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--input);
+  color: var(--chalk-soft);
+}
+
+.model-tier-tag.strong {
+  background: var(--blue-wash);
+  color: var(--blue-chalk);
+  border: 1px solid rgba(127, 176, 216, 0.3);
+}
+
+.model-tier-tag.cheap {
+  background: var(--gold-wash);
+  color: var(--gold-chalk);
+  border: 1px solid rgba(217, 177, 104, 0.3);
+}
+
+.model-tier-tag.vision {
+  background: var(--green-wash);
+  color: var(--green-chalk);
+  border: 1px solid rgba(134, 239, 172, 0.3);
+}
+
+.model-tier-desc {
+  font-size: 13px;
+  color: var(--chalk-soft);
+}
+
+.model-tier-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 600px) {
+  .model-tier-fields {
+    grid-template-columns: 1fr;
+  }
+}
+
+.model-tier-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.model-tier-field label {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--chalk-soft);
+  margin: 0;
+}
+
+.model-tier-field select,
+.model-tier-field input {
+  width: 100%;
+  background: var(--input);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--squircle-xs);
+  corner-shape: squircle;
+  color: var(--chalk);
+  padding: 8px 12px;
+  font-size: 14px;
+  font-family: var(--font-body);
+  transition: border-color 0.15s ease;
+}
+
+.model-tier-field select:focus,
+.model-tier-field input:focus {
+  outline: none;
+  border-color: var(--gold-chalk);
+  box-shadow: 0 0 0 2px var(--gold-wash);
+}
+
+.model-tier-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.model-tier-chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-soft);
+  background: var(--surface-card);
+  color: var(--chalk-soft);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.model-tier-chip:hover {
+  background: var(--input);
+  color: var(--chalk);
+  border-color: var(--chalk-soft);
+}
+
+.model-tier-chip.is-active {
+  background: var(--gold-chalk);
+  color: var(--paper-deep);
+  border-color: var(--gold-chalk);
+  font-weight: 700;
+}
+
+.model-tiers-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+
+.model-tiers-saved-notice {
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--green-chalk);
+  font-weight: 600;
 }

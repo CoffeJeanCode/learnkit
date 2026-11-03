@@ -84,29 +84,31 @@ export function ModelTiersCard() {
 
   return (
     <div className="card model-tiers-card">
-      <div className="card-header">
-        <div>
-          <h3>Asignación Dinámica de Modelos por Rol</h3>
-          <p className="muted text-xs">
-            Desacopla tareas pesadas (generación de temarios/clases), tareas rápidas (calificador de compuertas, asistente léxico) y multimodales.
-          </p>
-        </div>
+      <div className="card-head">
+        <h3>Asignación de modelos por rol</h3>
+        <span className="badge">3 roles activos</span>
       </div>
 
-      <div className="flex flex-col gap-md pt-3">
+      <p className="hint">
+        Desacopla tareas pesadas (temarios y clases), tareas rápidas (calificador de compuertas, asistente léxico) y multimodales (inspección de diagramas).
+      </p>
+
+      <div className="model-tiers-grid">
         {/* Tier Strong */}
-        <div className="tier-row p-sm rounded-md bg-paper-deep border border-soft">
-          <div className="flex items-center justify-between mb-2">
-            <span className="font-semibold text-sm text-blue">
-              ⚡ Modelo Fuerte (Strong)
-            </span>
-            <span className="text-2xs text-chalk-soft">Generación de bloques y temarios</span>
+        <div className="model-tier-row">
+          <div className="model-tier-header">
+            <div className="model-tier-title-group">
+              <span className="model-tier-title">Modelo Fuerte</span>
+              <span className="model-tier-tag strong">Strong</span>
+            </div>
+            <span className="model-tier-desc">Generación de bloques y temarios</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-xs">
-            <label className="text-xs text-chalk-soft">
-              Proveedor:
+
+          <div className="model-tier-fields">
+            <div className="model-tier-field">
+              <label htmlFor="tier-strong-provider">Proveedor:</label>
               <select
-                className="w-full mt-1 p-xs rounded bg-input text-xs text-chalk border border-soft"
+                id="tier-strong-provider"
                 value={strongPid}
                 onChange={(e) => {
                   setStrongPid(e.target.value);
@@ -122,24 +124,26 @@ export function ModelTiersCard() {
                   </option>
                 ))}
               </select>
-            </label>
-            <label className="text-xs text-chalk-soft">
-              Modelo:
+            </div>
+
+            <div className="model-tier-field">
+              <label htmlFor="tier-strong-model">Modelo:</label>
               <input
-                className="w-full mt-1 p-xs rounded bg-input text-xs text-chalk border border-soft"
+                id="tier-strong-model"
                 value={strongModel}
                 placeholder="Por defecto del proveedor"
                 onChange={(e) => setStrongModel(e.target.value)}
               />
-            </label>
+            </div>
           </div>
+
           {strongPid && (
-            <div className="flex flex-wrap gap-1 mt-2">
+            <div className="model-tier-chips">
               {(SUGGESTIONS[providers.find((p) => p.id === strongPid)?.provider || ""]?.strong || []).map((m) => (
                 <button
                   key={m}
                   type="button"
-                  className={`chip text-2xs ${strongModel === m ? "is-active" : ""}`}
+                  className={`model-tier-chip ${strongModel === m ? "is-active" : ""}`}
                   onClick={() => setStrongModel(m)}
                 >
                   {m}
@@ -150,18 +154,20 @@ export function ModelTiersCard() {
         </div>
 
         {/* Tier Cheap */}
-        <div className="tier-row p-sm rounded-md bg-paper-deep border border-soft">
-          <div className="flex items-center justify-between mb-2">
-            <span className="font-semibold text-sm text-gold">
-              🌱 Modelo Económico / Rápido (Cheap)
-            </span>
-            <span className="text-2xs text-chalk-soft">Calificadores, compuertas, pistas y asistente</span>
+        <div className="model-tier-row">
+          <div className="model-tier-header">
+            <div className="model-tier-title-group">
+              <span className="model-tier-title">Modelo Económico</span>
+              <span className="model-tier-tag cheap">Rápido</span>
+            </div>
+            <span className="model-tier-desc">Calificadores, compuertas, pistas y asistente</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-xs">
-            <label className="text-xs text-chalk-soft">
-              Proveedor:
+
+          <div className="model-tier-fields">
+            <div className="model-tier-field">
+              <label htmlFor="tier-cheap-provider">Proveedor:</label>
               <select
-                className="w-full mt-1 p-xs rounded bg-input text-xs text-chalk border border-soft"
+                id="tier-cheap-provider"
                 value={cheapPid}
                 onChange={(e) => {
                   setCheapPid(e.target.value);
@@ -177,24 +183,26 @@ export function ModelTiersCard() {
                   </option>
                 ))}
               </select>
-            </label>
-            <label className="text-xs text-chalk-soft">
-              Modelo:
+            </div>
+
+            <div className="model-tier-field">
+              <label htmlFor="tier-cheap-model">Modelo:</label>
               <input
-                className="w-full mt-1 p-xs rounded bg-input text-xs text-chalk border border-soft"
+                id="tier-cheap-model"
                 value={cheapModel}
                 placeholder="Por defecto rápido del proveedor"
                 onChange={(e) => setCheapModel(e.target.value)}
               />
-            </label>
+            </div>
           </div>
+
           {cheapPid && (
-            <div className="flex flex-wrap gap-1 mt-2">
+            <div className="model-tier-chips">
               {(SUGGESTIONS[providers.find((p) => p.id === cheapPid)?.provider || ""]?.cheap || []).map((m) => (
                 <button
                   key={m}
                   type="button"
-                  className={`chip text-2xs ${cheapModel === m ? "is-active" : ""}`}
+                  className={`model-tier-chip ${cheapModel === m ? "is-active" : ""}`}
                   onClick={() => setCheapModel(m)}
                 >
                   {m}
@@ -205,18 +213,20 @@ export function ModelTiersCard() {
         </div>
 
         {/* Tier Vision */}
-        <div className="tier-row p-sm rounded-md bg-paper-deep border border-soft">
-          <div className="flex items-center justify-between mb-2">
-            <span className="font-semibold text-sm text-green">
-              👁️ Modelo Multimodal (Vision)
-            </span>
-            <span className="text-2xs text-chalk-soft">Inspección de diagramas y capturas</span>
+        <div className="model-tier-row">
+          <div className="model-tier-header">
+            <div className="model-tier-title-group">
+              <span className="model-tier-title">Modelo Multimodal</span>
+              <span className="model-tier-tag vision">Visión</span>
+            </div>
+            <span className="model-tier-desc">Inspección de diagramas y capturas</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-xs">
-            <label className="text-xs text-chalk-soft">
-              Proveedor:
+
+          <div className="model-tier-fields">
+            <div className="model-tier-field">
+              <label htmlFor="tier-vision-provider">Proveedor:</label>
               <select
-                className="w-full mt-1 p-xs rounded bg-input text-xs text-chalk border border-soft"
+                id="tier-vision-provider"
                 value={visionPid}
                 onChange={(e) => {
                   setVisionPid(e.target.value);
@@ -232,24 +242,26 @@ export function ModelTiersCard() {
                   </option>
                 ))}
               </select>
-            </label>
-            <label className="text-xs text-chalk-soft">
-              Modelo:
+            </div>
+
+            <div className="model-tier-field">
+              <label htmlFor="tier-vision-model">Modelo:</label>
               <input
-                className="w-full mt-1 p-xs rounded bg-input text-xs text-chalk border border-soft"
+                id="tier-vision-model"
                 value={visionModel}
                 placeholder="Por defecto multimodal del proveedor"
                 onChange={(e) => setVisionModel(e.target.value)}
               />
-            </label>
+            </div>
           </div>
+
           {visionPid && (
-            <div className="flex flex-wrap gap-1 mt-2">
+            <div className="model-tier-chips">
               {(SUGGESTIONS[providers.find((p) => p.id === visionPid)?.provider || ""]?.vision || []).map((m) => (
                 <button
                   key={m}
                   type="button"
-                  className={`chip text-2xs ${visionModel === m ? "is-active" : ""}`}
+                  className={`model-tier-chip ${visionModel === m ? "is-active" : ""}`}
                   onClick={() => setVisionModel(m)}
                 >
                   {m}
@@ -260,12 +272,12 @@ export function ModelTiersCard() {
         </div>
       </div>
 
-      <div className="flex items-center justify-between pt-4 mt-2 border-t border-soft">
+      <div className="model-tiers-actions">
         <button className="btn-primary" onClick={handleSave}>
           Guardar asignación de modelos
         </button>
         {savedNotice && (
-          <span className="text-xs text-green font-medium">✓ Cambios guardados</span>
+          <span className="model-tiers-saved-notice">✓ Cambios guardados</span>
         )}
       </div>
     </div>

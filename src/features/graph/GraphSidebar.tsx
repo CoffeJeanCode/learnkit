@@ -605,7 +605,7 @@ export function GraphSidebar({
                               className="text-xs text-chalk-soft hover:text-gold text-left w-full truncate block py-0.5"
                               onClick={() => onSelect({ kind: "node", id: c.id })}
                             >
-                              • {truncate(c.label, 26)}
+                              • {truncate(c.label, 42)}
                             </button>
                           ))}
                         </div>

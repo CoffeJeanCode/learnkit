@@ -306,7 +306,7 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
             .strength((d) => (d.label ? 0.45 : 0.35)),
         )
         .force("charge", d3.forceManyBody().strength(-350).distanceMax(550))
-        .force("collide", d3.forceCollide().radius(78).strength(0.85))
+        .force("collide", d3.forceCollide<D3Node>().radius((d) => (d.w ? d.w / 2 + 18 : 85)).strength(0.85))
         .force("x", d3.forceX(width / 2).strength(0.03)) // Zero-curl orthogonal X centering
         .force("y", d3.forceY(height / 2).strength(0.03)) // Zero-curl orthogonal Y centering
         .alphaDecay(0.04);
@@ -861,7 +861,7 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
                       });
                     }}
                   >
-                    {truncate(formatRelationLabel(link.label), 28)}
+                    {truncate(formatRelationLabel(link.label), 36)}
                   </text>
                 );
               })}
