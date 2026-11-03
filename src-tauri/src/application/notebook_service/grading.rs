@@ -454,13 +454,89 @@ mod tests {
         assert!(parsed.passed);
         assert_eq!(parsed.rationale, "¡Excelente solución!");
     }
+
+    #[test]
+    fn unwraps_raw_json_scaffold_payload_into_clean_human_feedback() {
+        let raw_json_feedback = r#"{"scaffoldType": "worked_example", "content": "Tu componente ya sigue la idea central: ningún número escrito a mano, todo pasa por var(...). Un caso análogo con otro contrato de nombres: Contrato ajeno: --brand-font-h*, --brand-gap-*, --brand-h-control*. ```jsx const Chip = () => ( <Etiqueta /> ); ```"}"#;
+        let cleaned = clean_tool_and_xml_tags(raw_json_feedback);
+        assert!(!cleaned.contains("scaffoldType"));
+        assert!(!cleaned.starts_with('{'));
+        assert!(cleaned.contains("Tu componente ya sigue la idea central"));
+        assert!(cleaned.contains("<Etiqueta />"));
+    }
+
+    #[test]
+    fn parses_xml_tool_call_with_json_scaffold() {
+        let xml_sample = r#"<tool_call><function=grade_gate_submission><parameter=passed>false</parameter><parameter=rationale>Faltan tokens de escala</parameter><parameter=scaffold>{"scaffoldType": "worked_example", "content": "Usa var(--space-md) en vez de 12px."}</parameter></tool_call>"#;
+        let parsed = parse_gate_grade_from_text(xml_sample).expect("should parse tool call with json scaffold");
+        assert!(!parsed.passed);
+        let scaffold = parsed.scaffold.expect("must contain scaffold");
+        assert_eq!(scaffold.content, "Usa var(--space-md) en vez de 12px.");
+    }
 }
 
 
+/// Unwraps JSON object strings that carry scaffold / content / feedback payloads,
+/// extracting the student-facing human prose.
+fn unwrap_json_payload(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if !trimmed.contains('{') || !trimmed.contains('}') {
+        return None;
+    }
+    if !trimmed.contains("\"content\"")
+        && !trimmed.contains("\"feedback\"")
+        && !trimmed.contains("\"scaffold\"")
+        && !trimmed.contains("\"scaffoldType\"")
+    {
+        return None;
+    }
+
+    let first = trimmed.find('{')?;
+    let last = trimmed.rfind('}')?;
+    if last <= first {
+        return None;
+    }
+
+    let candidate = &trimmed[first..=last];
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(candidate) {
+        let target = val.get("arguments").unwrap_or(&val);
+        if let Some(c) = target.get("content").and_then(|v| v.as_str()) {
+            return Some(c.to_string());
+        }
+        if let Some(f) = target.get("feedback").and_then(|v| v.as_str()) {
+            return Some(f.to_string());
+        }
+        if let Some(sc) = target.get("scaffold") {
+            if let Some(c) = sc.get("content").and_then(|v| v.as_str()) {
+                return Some(c.to_string());
+            } else if let Some(s) = sc.as_str() {
+                if let Ok(nested) = serde_json::from_str::<serde_json::Value>(s) {
+                    if let Some(c) = nested.get("content").and_then(|v| v.as_str()) {
+                        return Some(c.to_string());
+                    }
+                }
+                return Some(s.to_string());
+            }
+        }
+        if let Some(r) = target.get("rationale").and_then(|v| v.as_str()) {
+            if !r.trim().is_empty() {
+                return Some(r.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Strips out XML tool-calling wrappers (<tool_call>, <function=...>, <parameter=...>,
-/// </parameter>, <invoke...>, <thought>...</thought>, etc.) and leftover markup,
-/// ensuring student-facing messages and feedbacks are always clean human-readable prose.
+/// </parameter>, <invoke...>, <thought>...</thought>, etc.), unwraps serialized JSON
+/// scaffold/feedback payloads, and ensures student-facing messages and feedbacks are
+/// always clean human-readable prose.
 pub fn clean_tool_and_xml_tags(text: &str) -> String {
+    // 0. Unwrap serialized JSON object if the string is or contains one
+    if let Some(unwrapped) = unwrap_json_payload(text) {
+        return clean_tool_and_xml_tags(&unwrapped);
+    }
+
     let mut s = text.to_string();
 
     // 1. Remove <thought>...</thought> and <thinking>...</thinking>
@@ -501,33 +577,66 @@ pub fn clean_tool_and_xml_tags(text: &str) -> String {
         }
     }
 
-    // 3. Strip all XML tags like <tool_call>, </tool_call>, <parameter=...>, </parameter>, <invoke...>, etc.
+    // 3. Strip all tool-calling XML tags (<tool_call>, </tool_call>, <parameter...>, </parameter>, <function...>, etc.)
+    // while preserving student prose, JSX tags, and language generics (<Etiqueta />, Vec<T>).
     let mut cleaned = String::with_capacity(s.len());
-    let mut in_tag = false;
-    for ch in s.chars() {
-        if ch == '<' {
-            in_tag = true;
-        } else if ch == '>' && in_tag {
-            in_tag = false;
-        } else if !in_tag {
+    let mut i = 0;
+    while i < s.len() {
+        if s.as_bytes()[i] == b'<' {
+            let rest = &s[i + 1..];
+            let tool_prefixes = [
+                "tool_call", "/tool_call",
+                "function", "/function",
+                "parameter", "/parameter",
+                "invoke", "/invoke",
+                "thought", "/thought",
+                "thinking", "/thinking",
+                "tool_response", "/tool_response",
+                "call:", "/call:",
+            ];
+            let is_tool_tag = tool_prefixes.iter().any(|&p| {
+                if rest.starts_with(p) {
+                    let after = &rest[p.len()..];
+                    after.is_empty() || after.starts_with('>') || after.starts_with(' ') || after.starts_with('=') || after.starts_with('/')
+                } else {
+                    false
+                }
+            });
+            if is_tool_tag {
+                if let Some(end_rel) = rest.find('>') {
+                    i += 1 + end_rel + 1;
+                    continue;
+                }
+            }
+        }
+        if let Some(ch) = s[i..].chars().next() {
             cleaned.push(ch);
+            i += ch.len_utf8();
+        } else {
+            break;
         }
     }
 
     // 4. Unwrap markdown code fence if the entire string was wrapped in ```
     let trimmed = cleaned.trim();
-    if trimmed.starts_with("```") && trimmed.ends_with("```") {
+    let unwrapped = if trimmed.starts_with("```") && trimmed.ends_with("```") {
         let inner = trimmed.trim_start_matches('`');
         let inner = if let Some(idx) = inner.find('\n') {
             &inner[idx + 1..]
         } else {
             inner
         };
-        let inner = inner.trim_end_matches('`').trim();
-        return inner.to_string();
+        inner.trim_end_matches('`').trim()
+    } else {
+        trimmed
+    };
+
+    // 5. If tag-stripping revealed a JSON payload, unwrap it:
+    if let Some(json_content) = unwrap_json_payload(unwrapped) {
+        return clean_tool_and_xml_tags(&json_content);
     }
 
-    trimmed.to_string()
+    unwrapped.to_string()
 }
 
 fn parse_xml_param(text: &str, name: &str) -> Option<String> {
@@ -677,11 +786,19 @@ fn parse_gate_grade_from_text(text: &str) -> Option<GateGradingResult> {
                             let scaffold_txt = target_val
                                 .get("scaffold")
                                 .and_then(|s| {
-                                    s.get("content")
-                                        .and_then(|c| c.as_str())
-                                        .or_else(|| s.as_str())
+                                    if let Some(c) = s.get("content").and_then(|c| c.as_str()) {
+                                        Some(c.to_string())
+                                    } else if let Some(str_val) = s.as_str() {
+                                        if let Ok(nested) = serde_json::from_str::<serde_json::Value>(str_val) {
+                                            if let Some(c) = nested.get("content").and_then(|c| c.as_str()) {
+                                                return Some(c.to_string());
+                                            }
+                                        }
+                                        Some(str_val.to_string())
+                                    } else {
+                                        None
+                                    }
                                 })
-                                .map(|s| s.to_string())
                                 .or_else(|| {
                                     if !rationale.is_empty() {
                                         Some(rationale.clone())
