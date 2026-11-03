@@ -527,9 +527,9 @@ export function BrickYard({
   return (
     <div
       ref={host}
-      className="yard relative"
+      className="yard"
       role="img"
-      aria-label={`Tu mesa: ${pieces.length} ${pieces.length === 1 ? "pieza" : "piezas"} para armar`}
+      aria-label={`Tu mesa: ${pieces.length} ${pieces.length === 1 ? "pieza" : "piezas"}`}
       onPointerLeave={() => setTooltip(null)}
     >
       {tooltip && (

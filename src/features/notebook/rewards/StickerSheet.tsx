@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { type PagePlacement, type Piece, STICKER_SIZE, tiltFor, toPagePlacement } from "../../../lib/rewards";
+import { type PagePlacement, type Piece, STICKER_SIZE, tiltFor, toSafePagePlacement } from "../../../lib/rewards";
 import { sfx } from "../../../lib/sound";
 import { PeelSticker } from "./PeelSticker";
 import { STICKER_LAYER_ATTR } from "./PageStickers";
@@ -24,7 +24,7 @@ export function StickerSheet({ stickers, onStick }: { stickers: readonly Piece[]
     const over = document.elementFromPoint(ev.clientX, ev.clientY);
     // Dropped back on the panel (or there is no page to stick it on): it stays on the sheet.
     if (!layer || (panel && over && panel.contains(over))) return;
-    onStick(p.piece.id, toPagePlacement(ev.clientX, ev.clientY, layer.getBoundingClientRect(), tiltFor(p.piece.id)));
+    onStick(p.piece.id, toSafePagePlacement(ev.clientX, ev.clientY, layer.getBoundingClientRect(), tiltFor(p.piece.id)));
     sfx.stick();
   };
 

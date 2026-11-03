@@ -7,6 +7,7 @@ import {
   type RewardEvent,
   addPiece,
   browserStore,
+  loadAllEarnedPieces,
   loadPieces,
   pieceFor,
   savePieces,
@@ -35,8 +36,24 @@ export const useRewards = create<RewardsState>((set, get) => ({
   lastEarned: null,
 
   load: (notebookId) => {
-    if (get().byNotebook[notebookId]) return;
-    set((s) => ({ byNotebook: { ...s.byNotebook, [notebookId]: loadPieces(browserStore(), notebookId) } }));
+    const store = browserStore();
+    const stored = loadPieces(store, notebookId);
+    const inMemory = get().byNotebook[notebookId] ?? [];
+    const existing = stored.length > 0 ? stored : inMemory;
+    // Also collect all unplaced stickers earned anywhere across the student's notebook sessions
+    const allPieces = loadAllEarnedPieces(store);
+    const unplacedStickers = allPieces.filter((p) => p.shape !== "brick" && !p.page);
+
+    const existingIds = new Set(existing.map((p) => p.id));
+    const merged = [...existing];
+    for (const sticker of unplacedStickers) {
+      if (!existingIds.has(sticker.id)) {
+        merged.push(sticker);
+        existingIds.add(sticker.id);
+      }
+    }
+
+    set((s) => ({ byNotebook: { ...s.byNotebook, [notebookId]: merged } }));
   },
 
   earn: (notebookId, event) => {
@@ -60,9 +77,25 @@ export const useRewards = create<RewardsState>((set, get) => ({
   },
 
   placeSticker: (notebookId, id, page) => {
-    const next = withPage(get().byNotebook[notebookId] ?? [], id, page);
-    savePieces(browserStore(), notebookId, next);
-    set((s) => ({ byNotebook: { ...s.byNotebook, [notebookId]: next } }));
+    const store = browserStore();
+    const current = get().byNotebook[notebookId] ?? [];
+    const next = withPage(current, id, page);
+    savePieces(store, notebookId, next);
+
+    if (page) {
+      // Remove from any other notebook if it was placed there previously
+      const otherNotebooks = { ...get().byNotebook };
+      for (const [otherId, pieces] of Object.entries(otherNotebooks)) {
+        if (otherId !== notebookId && pieces.some((p) => p.id === id)) {
+          const cleaned = pieces.filter((p) => p.id !== id);
+          otherNotebooks[otherId] = cleaned;
+          savePieces(store, otherId, cleaned);
+        }
+      }
+      set({ byNotebook: { ...otherNotebooks, [notebookId]: next } });
+    } else {
+      set((s) => ({ byNotebook: { ...s.byNotebook, [notebookId]: next } }));
+    }
   },
 
   setOpen: (open) => set({ open, lastEarned: open ? get().lastEarned : null }),

@@ -200,15 +200,89 @@ export function browserStore(): KeyValueStore | null {
 export const STICKER_SIZE = 72;
 const PAGE_MARGIN = 0.02;
 
+/** Collects all earned pieces across all notebooks stored on this device. */
+export function loadAllEarnedPieces(store: KeyValueStore | null): Piece[] {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  const map = new Map<string, Piece>();
+  try {
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const k = window.localStorage.key(i);
+      if (k && k.startsWith("learnkit.pieces.")) {
+        const raw = window.localStorage.getItem(k);
+        if (raw) {
+          try {
+            const parsed: unknown = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              for (const p of parsed) {
+                if (isPiece(p)) {
+                  const existing = map.get(p.id);
+                  if (!existing || (!existing.page && p.page)) {
+                    map.set(p.id, p);
+                  }
+                }
+              }
+            }
+          } catch {
+            /* ignore corrupted cache */
+          }
+        }
+      }
+    }
+  } catch {
+    /* storage access error */
+  }
+  return Array.from(map.values());
+}
+
+/** Options for placing a sticker on a notebook page. */
+export interface PagePlacementOptions {
+  /** When true, snaps stickers to the lateral margin gutters (or top cover) so reading text is never obscured. */
+  restrictToMargins?: boolean;
+}
+
 /** Where a sticker dropped at (`clientX`, `clientY`) lands on a page whose box is `rect`: x as a fraction of
- *  the page width (kept inside it), y in px from the top of the page (so it scrolls with the content). */
-export function toPagePlacement(clientX: number, clientY: number, rect: { left: number; top: number; width: number }, rot: number): PagePlacement {
-  const x = rect.width > 0 ? (clientX - rect.left) / rect.width : 0.5;
+ *  the page width (kept inside it), y in px from the top of the page (so it scrolls with the content).
+ *  When `restrictToMargins` is enabled, content safety restriction is strictly enforced. */
+export function toPagePlacement(
+  clientX: number,
+  clientY: number,
+  rect: { left: number; top: number; width: number },
+  rot: number,
+  options?: PagePlacementOptions,
+): PagePlacement {
+  const rawX = rect.width > 0 ? (clientX - rect.left) / rect.width : 0.5;
+  const boundedX = Math.min(1 - PAGE_MARGIN, Math.max(PAGE_MARGIN, rawX));
+  const y = Math.max(0, Math.round(clientY - rect.top));
+
+  let finalX = boundedX;
+  if (options?.restrictToMargins) {
+    // Content safety protection:
+    // If y is in the top header/cover strip (y <= 85), stickers can sit across the top.
+    // In reading body (y > 85), snap to left margin (0.04 - 0.08) or right margin (0.92 - 0.96)
+    if (y > 85) {
+      if (boundedX < 0.5) {
+        finalX = Math.min(0.08, Math.max(0.04, boundedX));
+      } else {
+        finalX = Math.max(0.92, Math.min(0.96, boundedX));
+      }
+    }
+  }
+
   return {
-    x: Math.round(Math.min(1 - PAGE_MARGIN, Math.max(PAGE_MARGIN, x)) * 1000) / 1000,
-    y: Math.max(0, Math.round(clientY - rect.top)),
+    x: Math.round(finalX * 1000) / 1000,
+    y,
     rot: Math.round(rot * 10) / 10,
   };
+}
+
+/** Content-safe placement that guarantees stickers never cover lesson reading text or inputs. */
+export function toSafePagePlacement(
+  clientX: number,
+  clientY: number,
+  rect: { left: number; top: number; width: number },
+  rot: number,
+): PagePlacement {
+  return toPagePlacement(clientX, clientY, rect, rot, { restrictToMargins: true });
 }
 
 /** A small, repeatable tilt for a sticker (-9 to 9 degrees) from its id, so stickers do not all sit straight. */

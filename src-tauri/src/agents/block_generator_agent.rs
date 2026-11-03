@@ -644,19 +644,30 @@ const CATALOG_ENTRIES: &[(DynamicBlockType, &str)] = &[
    diagrama de referencia de lo que el estudiante debe construir o alcanzar, solo si ayuda.
 "##),
     (DynamicBlockType::MetacognitiveClosure, r##"7. metacognitive_closure — SIEMPRE el último bloque de la clase, nunca es una compuerta (no
-   bloquea nada). synthesisTask (contraste explícito entre el modelo mental inicial del
-   estudiante y lo que la sesión mostró), predictionComparison (OBLIGATORIO: el input te da
-   `initialPrediction` — la respuesta verbatim del estudiante a su primera compuerta en esta
-   clase — y `finalResult` — lo que este notebook realmente demostró; tu trabajo es escribir
-   `contrastNarrative`, el contraste honesto entre ambos, nunca inventar ninguno de los dos campos
-   de entrada), selfEvaluationChecklist.
-   TRAZABILIDAD REAL: el input trae `gateHistory` con las respuestas REALES del estudiante en las
-   compuertas de esta clase (en orden, con cuáles acertó o falló). `predictionComparison.
-   initialPrediction` debe CITAR la primera respuesta real de `gateHistory.attempts[0]
-   .studentAnswer` (la elección concreta del estudiante, textual o muy fiel), nunca una predicción
-   genérica o inventada; `contrastNarrative` debe decir con honestidad si falló al primer intento
-   (`firstAttemptWasWrong`), en qué intento acertó y qué cambió en su modelo mental entre ambas.
+   bloquea nada). synthesisTask, predictionComparison (OBLIGATORIO: el input te da `initialPrediction`
+   — la respuesta verbatim del estudiante a su primera compuerta en esta clase — y `finalResult` — lo
+   que este notebook demostró en la práctica), selfEvaluationChecklist.
 
+   VOZ Y TONO DE CUADERNO PERSONAL (HUMANO, AMIGABLE Y CERCANO — PROHIBIDO EL TONO ROBÓTICO):
+   - HABLA COMO UN MENTOR O COMPAÑERO DE ESTUDIO CÁLIDO que celebra el avance, de tú a tú.
+   - PROHIBIDO el lenguaje clínico de laboratorio o reporte de evaluación: NUNCA uses frases como
+     "tu modelo mental", "el punto débil del diagnóstico", "el sujeto demostró", "evaluación psicométrica",
+     "no se manifestó aquí". Suena frío, robótico y deshumanizado.
+   - `contrastNarrative`: Escríbelo como la celebración de un descubrimiento personal en 2-3 frases naturales:
+     * Si acertó al primer intento: felicita su intuición con entusiasmo sincero ("¡Tenías muy buen ojo desde
+       el inicio! Viste claro que... y lo confirmaste en código al construir...").
+     * Si necesitó varios intentos (`firstAttemptWasWrong`): valida con empatía lo natural que es dudar al
+       comienzo ("Al arrancar era fácil dudar entre... pero en cuanto probaste X, hiciste el clic y descubriste
+       que... ¡Ese es el verdadero aprendizaje!").
+   - `synthesisTask`: Una invitación amable y acogedora a consolidar lo aprendido en su cuaderno con sus
+     propias palabras (en 2-3 frases breves), por ejemplo:
+     "Tómate un momento para mirar atrás: ¿qué fue lo que te hizo clic hoy? Cuéntame en tus palabras qué
+     idea o regla te llevas más clara y cómo te servirá cuando diseñes o programes."
+     (NUNCA digas "Compara tu modelo mental inicial sobre X con lo que esta sesión demostró").
+   - `selfEvaluationChecklist`: 2-3 criterios redactados en primera persona ("Entiendo por qué...",
+     "Puedo aplicar...", "Tengo clara la diferencia entre...").
+   TRAZABILIDAD: `predictionComparison.initialPrediction` debe CITAR la respuesta real de
+   `gateHistory.attempts[0].studentAnswer`, nunca inventada.
 "##),
 ];
 

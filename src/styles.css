@@ -1568,15 +1568,250 @@ pre.output, .quickrun pre {
 .hint-warn { color: var(--red-chalk); }
 .hint-ok { color: var(--green-chalk); }
 .notebook-continue { justify-content: center; margin: 4px 0; }
-.prediction-comparison {
-  background: var(--paper-deep);
-  border: none;
-  border-radius: var(--squircle-sm);
-  corner-shape: squircle;
-  padding: 10px 12px;
+/* --- Metacognitive Closure: Personal Notebook Journal / Sketchbook reflection ---
+   Zero burned pixels. Warm, encouraging, human presentation. No robotic clinical tone. */
+.closure-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  padding-bottom: var(--space-xs);
+  border-bottom: 1px dashed var(--text-faint);
+}
+
+.closure-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--status-warn-text);
+}
+
+.closure-subtitle {
+  font-size: var(--font-2xs);
+  color: var(--text-soft);
+}
+
+.closure-evolution-container {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-sm);
+}
+
+.closure-evolution-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-sm);
+}
+
+@media (min-width: 640px) {
+  .closure-evolution-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.closure-evolution-card {
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface-deep);
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
+  gap: var(--space-xs);
+}
+
+.closure-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: var(--space-2xs);
+  border-bottom: 1px dashed var(--text-faint);
+}
+
+.closure-pill {
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.closure-evolution-card.starting .closure-pill {
+  color: var(--status-info-text);
+}
+
+.closure-evolution-card.demonstrated .closure-pill {
+  color: var(--status-success-text);
+}
+
+.closure-tag {
+  font-size: var(--font-2xs);
+  padding: var(--space-3xs) var(--space-xs);
+  border-radius: var(--squircle-pill);
+  background: var(--surface-card);
+  color: var(--text-soft);
+}
+
+.closure-card-body {
+  font-size: var(--font-sm);
+  line-height: var(--read-leading);
+  color: var(--text-normal);
+}
+
+.closure-evolution-narrative {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface-card);
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
+  border-left: 3px solid var(--status-warn-text);
+}
+
+.closure-narrative-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--status-warn-text);
+}
+
+.closure-narrative-text {
+  font-size: var(--font-sm);
+  line-height: var(--read-leading);
+  color: var(--text-normal);
+}
+
+.closure-narrative-title {
+  display: block;
+  font-size: var(--font-2xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--status-warn-text);
+  margin-bottom: var(--space-3xs);
+}
+
+.closure-prompt-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  background: var(--surface-deep);
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
+}
+
+.closure-prompt-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--status-info-text);
+}
+
+.closure-prompt-text {
+  font-size: var(--font-sm);
+  line-height: var(--read-leading);
+  color: var(--text-normal);
+}
+
+.closure-checklist-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.closure-checklist-title {
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text-soft);
+}
+
+.closure-checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.closure-checklist-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-xs);
+  font-size: var(--font-xs);
+  line-height: var(--read-leading);
+  color: var(--text-soft);
+  background: var(--surface-card);
+  padding: var(--space-2xs) var(--space-sm);
+  border-radius: var(--squircle-xs);
+  corner-shape: squircle;
+}
+
+.closure-check-bullet {
+  color: var(--status-success-text);
+  font-weight: 700;
+}
+
+.closure-textarea {
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface-input);
+  color: var(--text-normal);
+  font-family: var(--font-read);
+  font-size: var(--font-sm);
+  line-height: var(--read-leading);
+  border-radius: var(--squircle-xs);
+  corner-shape: squircle;
+  border: none;
+  outline: none;
+  resize: vertical;
+  transition: background 0.15s ease;
+}
+
+.closure-textarea:focus {
+  background: var(--surface-card);
+}
+
+.closure-feedback-box {
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+.closure-feedback-box.is-ok {
+  background: var(--status-success-surface);
+  color: var(--status-success-text);
+}
+
+.closure-feedback-box.is-warn {
+  background: var(--status-warn-surface);
+  color: var(--status-warn-text);
+}
+
+.closure-feedback-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--font-xs);
+  font-weight: 600;
+}
+
+.closure-feedback-body {
+  font-size: var(--font-sm);
+  line-height: var(--read-leading);
 }
 
 /* Per-block ¿Dudas? trigger — the button only. Clicking it opens the block's

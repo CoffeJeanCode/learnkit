@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { type Piece, STICKER_SIZE, isSticker, toPagePlacement } from "../../../lib/rewards";
+import { type Piece, STICKER_SIZE, isSticker, toSafePagePlacement } from "../../../lib/rewards";
 import { sfx } from "../../../lib/sound";
 import { useRewards } from "../../../stores/rewards";
 import { PeelSticker } from "./PeelSticker";
@@ -66,7 +66,7 @@ function PageSticker({ notebookId, piece }: { notebookId: string; piece: Piece }
         press.current = null;
         if (!p?.moved) return;
         setDrag(null);
-        place(notebookId, piece.id, toPagePlacement(e.clientX - p.dx, e.clientY - p.dy, p.rect, page.rot));
+        place(notebookId, piece.id, toSafePagePlacement(e.clientX - p.dx, e.clientY - p.dy, p.rect, page.rot));
         sfx.stick();
       }}
       onPointerCancel={() => {
