@@ -26,39 +26,10 @@ let mermaidRenderCounter = 0;
 // what we hand to `mermaid.render`, so a fix here also repairs notebooks that
 // were generated before the grounding rule existed.
 export function repairMermaid(code: string): string {
-  let fixed = (code || "").trim();
-
-  // 1. Strip markdown fences if present
-  fixed = fixed.replace(/^\`\`\`(?:mermaid)?\s*\r?\n?/i, "").replace(/\r?\n?\`\`\`\s*$/i, "").trim();
-
-  // 2. Fix :: in state diagrams
-  if (fixed.includes("::") && /^\s*stateDiagram/.test(fixed)) {
-    fixed = fixed.replace(/::/g, "\u2236\u2236");
+  if (code.includes("::") && /^\s*stateDiagram/.test(code)) {
+    return code.replace(/::/g, "\u2236\u2236");
   }
-
-  // 3. Auto-quote pipe edge labels: -->|text| => -->|"text"|
-  fixed = fixed.replace(/(-->|-\.->|==>)\|([^"|\n]+)\|/g, (_m, arrow, label) => {
-    return `${arrow}|"${label.replace(/"/g, "'")}"|`;
-  });
-
-  // 4. Auto-quote rectangle node labels: A[text without leading quote] => A["text"]
-  // Exclude cylinders [("...")] and subroutines [["..."]]
-  fixed = fixed.replace(/(?<=^|[\s;])([A-Za-z0-9_-]+)\[(?!["(\[])([^"\n\]]+)\]/gm, (_m, id, label) => {
-    return `${id}["${label.replace(/"/g, "'")}"]`;
-  });
-
-  // 5. Auto-quote diamond labels: A{text} => A{"text"}
-  fixed = fixed.replace(/(?<=^|[\s;])([A-Za-z0-9_-]+)\{(?!")([^"\n\}]+)\}/gm, (_m, id, label) => {
-    return `${id}{"${label.replace(/"/g, "'")}"}`;
-  });
-
-  // 6. Auto-quote rounded node labels: A(text) => A("text")
-  // Exclude circle ((...))
-  fixed = fixed.replace(/(?<=^|[\s;])([A-Za-z0-9_-]+)\((?!["(])([^"\n\)]+)\)/gm, (_m, id, label) => {
-    return `${id}("${label.replace(/"/g, "'")}")`;
-  });
-
-  return fixed;
+  return code;
 }
 
 /** Node id of a rendered Mermaid node element (`flowchart-cache-3` → `cache`). */
