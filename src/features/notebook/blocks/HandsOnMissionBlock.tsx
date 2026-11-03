@@ -357,7 +357,7 @@ export function HandsOnMissionBlock({
         </p>
       )}
       {level && <span className="badge mission-level">{level}</span>}
-      <RichText className="block-question text-base text-slate-100 font-medium leading-relaxed" text={formattedChallenge} />
+      <RichText className="block-question text-base text-chalk font-medium leading-relaxed" text={formattedChallenge} />
       {content.visualAid && <StaticVisual visual={content.visualAid} />}
 
       {/* Tarjetas estructuradas de entregable y restricciones sin gradientes ni bordes artificiales */}
@@ -430,8 +430,8 @@ export function HandsOnMissionBlock({
       ) : (
         <>
           {steps.length > 0 && (
-            <div className="cloze-steps bg-slate-900/60 p-3 rounded-lg border border-slate-800">
-              <div className="section-label text-xs font-semibold text-amber-300 mb-2">Micro-pasos de preparación:</div>
+            <div className="cloze-steps bg-paper-deep p-3 rounded-md border border-soft">
+              <div className="section-label text-xs font-semibold text-gold mb-2">Micro-pasos de preparación:</div>
               <ol className="cloze-list space-y-2">
                 {steps.map((step, i) => (
                   <ClozeStep
@@ -449,14 +449,14 @@ export function HandsOnMissionBlock({
 
           {/* Cajón de Pistas y Ayuda */}
           {hints.length > 0 && (
-            <div className="rounded-lg overflow-hidden bg-card/60">
+            <div className="rounded-md overflow-hidden bg-card/60">
               <button
                 type="button"
                 onClick={() => setHintsExpanded(!hintsExpanded)}
-                className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-slate-300 hover:bg-card transition-colors border-none cursor-pointer"
+                className="w-full flex items-center justify-between px-3 py-2 text-xs font-medium text-chalk-soft hover:bg-card transition-colors border-none cursor-pointer"
               >
                 <span className="flex items-center gap-1.5">
-                  <IconLightbulb className="text-amber-300" />
+                  <IconLightbulb className="text-gold" />
                   <span>Pistas y conceptos clave ({hintsShown}/{hints.length} desbloqueadas)</span>
                 </span>
                 <span>{hintsExpanded ? "▲ Ocultar" : "▼ Desplegar"}</span>
@@ -487,7 +487,7 @@ export function HandsOnMissionBlock({
               {/* Barra de herramientas del editor */}
               <div className="flex flex-wrap items-center justify-between gap-2 pb-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold text-slate-200">Tu Solución</span>
+                  <span className="text-xs font-semibold text-chalk">Tu Solución</span>
                   {hasSlots && (
                     <div className="editor-mode-toggle">
                       <button
@@ -541,7 +541,7 @@ export function HandsOnMissionBlock({
                 <div className="cloze-code-shell">
                   <div className="cloze-code-shell-header">
                     <div className="flex items-center gap-2">
-                      <span className="font-semibold text-slate-200">Completa los huecos de la plantilla:</span>
+                      <span className="font-semibold text-chalk">Completa los huecos de la plantilla:</span>
                       <span
                         className="mission-brief-badge"
                         style={{
@@ -588,12 +588,12 @@ export function HandsOnMissionBlock({
                   placeholder="Escribe, modifica o pega tu solución aquí libremente..."
                   rows={template ? 10 : 6}
                   disabled={!isActive || busy || easing}
-                  className="mission-editor w-full p-4 font-mono text-xs rounded-xl bg-input text-slate-200 leading-relaxed border-none focus:outline-none"
+                  className="mission-editor w-full p-4 font-mono text-xs rounded-lg bg-input text-chalk leading-relaxed border-none focus:outline-none"
                 />
               )}
             </div>
           ) : (
-            <p className="text-xs text-slate-400 italic bg-paper-deep p-3 rounded-lg">
+            <p className="text-xs text-chalk-soft italic bg-paper-deep p-3 rounded-md">
               Resuelve primero los micro-pasos preparatorios para habilitar el área de solución.
             </p>
           )}

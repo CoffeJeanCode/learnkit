@@ -655,7 +655,7 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
 
         {/* Floating Hint Overlay (Bottom Left) */}
         <div className="graph-canvas-overlay-bottomleft">
-          <span className="text-2xs text-slate-400">
+          <span className="text-2xs text-chalk-soft">
             💡 Arrastra los 4 puntos azules de cualquier nodo para conectar como en Figma · Clic derecho para opciones
           </span>
         </div>
@@ -676,7 +676,7 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
               markerHeight="7"
               orient="auto"
             >
-              <path d="M 0 -4 L 8 0 L 0 4 z" fill="#64748b" />
+              <path d="M 0 -4 L 8 0 L 0 4 z" fill="var(--chalk-soft)" />
             </marker>
 
             <marker
@@ -688,7 +688,7 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
               markerHeight="8"
               orient="auto"
             >
-              <path d="M 0 -4 L 8 0 L 0 4 z" fill="#fbbf24" />
+              <path d="M 0 -4 L 8 0 L 0 4 z" fill="var(--gold-chalk)" />
             </marker>
           </defs>
 
@@ -739,12 +739,12 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
                     fill="none"
                     stroke={
                       isSelected
-                        ? "#f59e0b"
+                        ? "var(--gold-chalk)"
                         : isConnected
-                          ? "#d9b168"
+                          ? "var(--gold-chalk)"
                           : isExplicit
-                            ? "#64748b"
-                            : "#334155"
+                            ? "var(--chalk-soft)"
+                            : "var(--border-soft)"
                     }
                     strokeWidth={isSelected ? 2.5 : isExplicit ? 1.8 : 1.2}
                     strokeDasharray={isExplicit ? undefined : "4 4"}
@@ -790,12 +790,12 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
                       dimmed ? "opacity-20" : "opacity-100"
                     }`}
                     textAnchor="middle"
-                    fill={isSelected ? "#fbbf24" : "#e2e8f0"}
+                    fill={isSelected ? "var(--gold-chalk)" : "var(--chalk)"}
                     fontSize={11}
-                    fontFamily="monospace"
+                    fontFamily="var(--font-mono)"
                     fontWeight={isSelected ? 700 : 500}
                     paintOrder="stroke"
-                    stroke="#0f172a"
+                    stroke="var(--paper-deep)"
                     strokeWidth={3}
                     strokeLinejoin="round"
                     style={{ userSelect: "none", transition: "opacity 0.2s ease" }}
@@ -887,25 +887,25 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
                     fill={
                       isClass
                         ? isSelected
-                          ? "#0c2847"
-                          : "#14253d"
+                          ? "var(--sky-dark)"
+                          : "var(--surface-card-hi)"
                         : isSelected
-                          ? "#382306"
-                          : "#1e293b"
+                          ? "var(--amber-dark)"
+                          : "var(--surface-card)"
                     }
                     stroke={
                       isSelected
-                        ? "#f59e0b"
+                        ? "var(--gold-chalk)"
                         : isClass
-                          ? "#38bdf8"
+                          ? "var(--blue-chalk)"
                           : isConnected
-                            ? "#d9b168"
-                            : "#334155"
+                            ? "var(--gold-chalk)"
+                            : "var(--border-soft)"
                     }
                     strokeWidth={isSelected ? 2.5 : isClass ? 1.8 : 1.2}
                     style={{
                       filter: isSelected
-                        ? "drop-shadow(0 0 10px rgba(245, 158, 11, 0.45))"
+                        ? "drop-shadow(0 0 10px rgba(217, 177, 104, 0.45))"
                         : isHovered
                           ? "drop-shadow(0 4px 12px rgba(0, 0, 0, 0.35))"
                           : undefined,
@@ -920,17 +920,17 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
                         width={44}
                         height={15}
                         rx={4}
-                        fill="rgba(56, 189, 248, 0.2)"
-                        stroke="#38bdf8"
+                        fill="var(--blue-wash)"
+                        stroke="var(--blue-chalk)"
                         strokeWidth={0.8}
                       />
                       <text
                         x={22}
                         y={11}
                         textAnchor="middle"
-                        fill="#7dd3fc"
+                        fill="var(--blue-chalk)"
                         fontSize={9}
-                        fontFamily="monospace"
+                        fontFamily="var(--font-mono)"
                         fontWeight={700}
                         letterSpacing="0.05em"
                         style={{ userSelect: "none", pointerEvents: "none" }}
@@ -946,7 +946,7 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
                       cx={-node.w / 2 + 18}
                       cy={0}
                       r={5}
-                      fill={isSelected ? "#f59e0b" : "#fbbf24"}
+                      fill="var(--gold-chalk)"
                       opacity={0.9}
                     />
                   )}
@@ -955,9 +955,9 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
                   <text
                     x={isClass ? -node.w / 2 + 14 : -node.w / 2 + 30}
                     y={isClass ? 12 : 5}
-                    fill={isClass ? "#f0f9ff" : "#f8fafc"}
+                    fill="var(--chalk)"
                     fontSize={isClass ? 12 : 13}
-                    fontFamily="system-ui, sans-serif"
+                    fontFamily="var(--font-body)"
                     fontWeight={isClass ? 600 : 500}
                     style={{ userSelect: "none", pointerEvents: "none" }}
                   >
@@ -973,8 +973,8 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
                           cx={h.cx}
                           cy={h.cy}
                           r={7}
-                          fill="#38bdf8"
-                          stroke="#0f172a"
+                          fill="var(--blue-chalk)"
+                          stroke="var(--paper-deep)"
                           strokeWidth={2}
                           cursor="crosshair"
                           style={{ transition: "all 0.15s ease" }}

@@ -50,8 +50,8 @@ export function CommentsSidebar() {
       <aside className="comments-sidebar-panel" aria-label="Notas y dudas de la clase">
         <div className="comments-sidebar-header">
           <div className="flex items-center gap-2">
-            <IconNotes className="text-amber-300" />
-            <h3 className="m-0 text-sm font-semibold text-slate-200">Comentarios y Notas</h3>
+            <IconNotes className="text-gold" />
+            <h3 className="m-0 text-sm font-semibold text-chalk">Comentarios y Notas</h3>
           </div>
           <button
             type="button"

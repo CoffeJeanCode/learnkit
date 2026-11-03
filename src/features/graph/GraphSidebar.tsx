@@ -122,8 +122,8 @@ export function GraphSidebar({
       {/* Top Header */}
       <div className="graph-sidebar-header">
         <div className="flex items-center gap-2 min-w-0">
-          <IconSidebar className="text-slate-400 shrink-0" />
-          <h3 className="text-sm font-semibold text-slate-100 truncate">
+          <IconSidebar className="text-chalk-soft shrink-0" />
+          <h3 className="text-sm font-semibold text-chalk truncate">
             {selectedConcept
               ? "Concepto"
               : selectedClass
@@ -147,14 +147,14 @@ export function GraphSidebar({
       <div className="graph-sidebar-body">
         {/* ===================== CONCEPT SELECTED ===================== */}
         {selectedConcept && (
-          <div className="space-y-4">
+          <div className="flex flex-col gap-md">
             <div className="graph-sidebar-card">
               <span className="badge is-amber">Concepto propio</span>
               {editingConceptLabel !== null ? (
-                <div className="mt-2 space-y-2">
+                <div className="mt-2 flex flex-col gap-xs">
                   <input
                     type="text"
-                    className="w-full text-xs p-2 rounded bg-input text-slate-100 border border-slate-700"
+                    className="w-full text-xs p-2 rounded bg-input text-chalk border border-soft"
                     value={editingConceptLabel}
                     onChange={(e) => setEditingConceptLabel(e.target.value)}
                     autoFocus
@@ -180,12 +180,12 @@ export function GraphSidebar({
                 </div>
               ) : (
                 <div className="mt-2 flex items-start justify-between gap-2">
-                  <h4 className="text-base font-semibold text-slate-100 leading-snug">
+                  <h4 className="text-base font-semibold text-chalk leading-snug">
                     {selectedConcept.label}
                   </h4>
                   <button
                     type="button"
-                    className="btn-quiet p-1 text-slate-400 hover:text-slate-200"
+                    className="btn-quiet p-1 text-chalk-soft hover:text-chalk"
                     onClick={() => setEditingConceptLabel(selectedConcept.label)}
                     title="Editar nombre del concepto"
                   >
@@ -195,11 +195,11 @@ export function GraphSidebar({
               )}
 
               {/* Class origin */}
-              <div className="mt-3 pt-3 border-t border-slate-800/80 text-xs text-slate-400">
-                <span className="text-slate-400">Creado en: </span>
+              <div className="mt-3 pt-3 border-t border-soft text-xs text-chalk-soft">
+                <span className="text-chalk-soft">Creado en: </span>
                 <button
                   type="button"
-                  className="text-sky-400 hover:underline font-medium inline-flex items-center gap-1"
+                  className="text-blue hover:underline font-medium inline-flex items-center gap-1"
                   onClick={() => onSelect({ kind: "node", id: selectedConcept.classId })}
                 >
                   {nodeNameMap.get(selectedConcept.classId) || "Clase"}
@@ -210,7 +210,7 @@ export function GraphSidebar({
             {/* Relations of this concept */}
             <div className="graph-sidebar-section">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-slate-300">
+                <span className="text-xs font-semibold text-chalk-soft">
                   Relaciones ({nodeLinks.length})
                 </span>
                 <button
@@ -224,11 +224,11 @@ export function GraphSidebar({
               </div>
 
               {nodeLinks.length === 0 ? (
-                <p className="text-xs text-slate-400 italic bg-paper-deep/60 p-2.5 rounded-lg border border-slate-800">
+                <p className="text-xs text-chalk-soft italic bg-paper-deep p-2.5 rounded-md border border-soft">
                   Este concepto aún no está conectado. Arrastra desde sus puntos azules como en Figma para relacionarlo.
                 </p>
               ) : (
-                <ul className="space-y-1.5">
+                <ul className="flex flex-col gap-2xs">
                   {nodeLinks.map((l) => {
                     const isOutgoing = l.fromId === selectedConcept.id;
                     const otherId = isOutgoing ? l.toId : l.fromId;
@@ -237,23 +237,23 @@ export function GraphSidebar({
                     return (
                       <li
                         key={l.id}
-                        className="flex items-center justify-between gap-2 p-2 rounded-lg bg-paper-deep/80 border border-slate-800/90 text-xs hover:border-slate-700 transition-colors"
+                        className="flex items-center justify-between gap-2 p-2 rounded-md bg-paper-deep border border-soft text-xs hover:border-soft transition-colors"
                       >
                         <button
                           type="button"
                           className="flex-1 text-left min-w-0"
                           onClick={() => onSelect({ kind: "link", id: l.id })}
                         >
-                          <span className="text-2xs text-amber-300 font-mono block">
+                          <span className="text-2xs text-gold font-mono block">
                             {isOutgoing ? `→ ${formatRelationLabel(l.label)}` : `← ${formatRelationLabel(l.label)}`}
                           </span>
-                          <span className="text-slate-200 font-medium truncate block">
+                          <span className="text-chalk font-medium truncate block">
                             {otherName}
                           </span>
                         </button>
                         <button
                           type="button"
-                          className="text-slate-400 hover:text-red-400 p-1 rounded"
+                          className="text-chalk-soft hover:text-red p-1 rounded"
                           onClick={() => onRemoveLink(l.id)}
                           title="Eliminar esta relación"
                         >
@@ -267,7 +267,7 @@ export function GraphSidebar({
             </div>
 
             {/* Actions / Danger Zone */}
-            <div className="pt-3 border-t border-slate-800 space-y-2">
+            <div className="pt-3 border-t border-soft flex flex-col gap-xs">
               <button
                 type="button"
                 className="btn-primary w-full text-xs py-2 flex items-center justify-center gap-1.5"
@@ -277,8 +277,8 @@ export function GraphSidebar({
               </button>
 
               {confirmDeleteId === selectedConcept.id ? (
-                <div className="p-2.5 rounded-lg bg-red-950/40 border border-red-900/60 space-y-2 text-xs">
-                  <p className="text-red-200">
+                <div className="p-2.5 rounded-md p-xs rounded-sm flex flex-col gap-xs text-xs">
+                  <p className="text-red font-medium">
                     ¿Eliminar este concepto y todas sus relaciones?
                   </p>
                   <div className="flex gap-2">
@@ -303,7 +303,7 @@ export function GraphSidebar({
               ) : (
                 <button
                   type="button"
-                  className="btn-quiet w-full text-xs text-red-400 hover:text-red-300 py-1.5 flex items-center justify-center gap-1.5"
+                  className="btn-quiet w-full text-xs text-red py-1.5 flex items-center justify-center gap-1.5"
                   onClick={() => setConfirmDeleteId(selectedConcept.id)}
                 >
                   <IconTrash /> Eliminar concepto
@@ -315,14 +315,14 @@ export function GraphSidebar({
 
         {/* ===================== CLASS SELECTED ===================== */}
         {selectedClass && (
-          <div className="space-y-4">
+          <div className="flex flex-col gap-md">
             <div className="graph-sidebar-card">
               <span className="badge is-blue">Clase del curso</span>
-              <h4 className="mt-2 text-base font-semibold text-slate-100 leading-snug">
+              <h4 className="mt-2 text-base font-semibold text-chalk leading-snug">
                 {classLabel(selectedClass.title)}
               </h4>
               {selectedClass.objective && (
-                <p className="mt-2 text-xs text-slate-400 leading-relaxed">
+                <p className="mt-2 text-xs text-chalk-soft leading-relaxed">
                   {selectedClass.objective}
                 </p>
               )}
@@ -331,7 +331,7 @@ export function GraphSidebar({
             {/* Concepts under this class */}
             <div className="graph-sidebar-section">
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-slate-300">
+                <span className="text-xs font-semibold text-chalk-soft">
                   Conceptos de esta clase
                 </span>
                 <button
@@ -345,23 +345,23 @@ export function GraphSidebar({
               </div>
 
               {concepts.filter((c) => c.classId === selectedClass.id).length === 0 ? (
-                <p className="text-xs text-slate-400 italic bg-paper-deep/60 p-2.5 rounded-lg border border-slate-800">
+                <p className="text-xs text-chalk-soft italic bg-paper-deep p-2.5 rounded-md border border-soft">
                   Aún no has registrado conceptos en esta clase.
                 </p>
               ) : (
-                <ul className="space-y-1.5">
+                <ul className="flex flex-col gap-2xs">
                   {concepts
                     .filter((c) => c.classId === selectedClass.id)
                     .map((c) => (
                       <li
                         key={c.id}
-                        className="flex items-center justify-between gap-2 p-2 rounded-lg bg-paper-deep/80 border border-slate-800/90 text-xs hover:border-slate-700 cursor-pointer transition-colors"
+                        className="flex items-center justify-between gap-2 p-2 rounded-md bg-paper-deep border border-soft text-xs hover:border-soft cursor-pointer transition-colors"
                         onClick={() => onSelect({ kind: "node", id: c.id })}
                       >
-                        <span className="text-slate-200 font-medium truncate">
+                        <span className="text-chalk font-medium truncate">
                           {c.label}
                         </span>
-                        <span className="text-2xs text-amber-400 font-mono">
+                        <span className="text-2xs text-gold font-mono">
                           {links.filter((l) => l.fromId === c.id || l.toId === c.id).length} rel
                         </span>
                       </li>
@@ -371,7 +371,7 @@ export function GraphSidebar({
             </div>
 
             {/* Actions */}
-            <div className="pt-3 border-t border-slate-800 space-y-2">
+            <div className="pt-3 border-t border-soft flex flex-col gap-xs">
               <button
                 type="button"
                 className="btn-primary w-full text-xs py-2 flex items-center justify-center gap-1.5"
@@ -392,32 +392,32 @@ export function GraphSidebar({
 
         {/* ===================== LINK SELECTED ===================== */}
         {selectedLink && (
-          <div className="space-y-4">
+          <div className="flex flex-col gap-md">
             <div className="graph-sidebar-card">
               <span className="badge is-amber">Relación entre ideas</span>
 
               {/* Source & Target Nodes */}
-              <div className="mt-3 space-y-2">
-                <div className="p-2 rounded bg-paper-deep border border-slate-800 text-xs">
-                  <span className="text-2xs text-slate-400 block uppercase tracking-wider">
+              <div className="mt-3 flex flex-col gap-xs">
+                <div className="p-2 rounded bg-paper-deep border border-soft text-xs">
+                  <span className="text-2xs text-chalk-soft block uppercase tracking-wider">
                     Desde (Origen)
                   </span>
                   <button
                     type="button"
-                    className="font-medium text-slate-100 hover:text-sky-300 truncate block text-left w-full"
+                    className="font-medium text-chalk hover:text-blue truncate block text-left w-full"
                     onClick={() => onSelect({ kind: "node", id: selectedLink.fromId })}
                   >
                     {nodeNameMap.get(selectedLink.fromId) || selectedLink.fromId}
                   </button>
                 </div>
 
-                <div className="p-2 rounded bg-paper-deep border border-slate-800 text-xs">
-                  <span className="text-2xs text-slate-400 block uppercase tracking-wider">
+                <div className="p-2 rounded bg-paper-deep border border-soft text-xs">
+                  <span className="text-2xs text-chalk-soft block uppercase tracking-wider">
                     Hacia (Destino)
                   </span>
                   <button
                     type="button"
-                    className="font-medium text-slate-100 hover:text-sky-300 truncate block text-left w-full"
+                    className="font-medium text-chalk hover:text-blue truncate block text-left w-full"
                     onClick={() => onSelect({ kind: "node", id: selectedLink.toId })}
                   >
                     {nodeNameMap.get(selectedLink.toId) || selectedLink.toId}
@@ -426,13 +426,13 @@ export function GraphSidebar({
               </div>
 
               {/* Relation Label Editor */}
-              <div className="mt-3 pt-3 border-t border-slate-800">
-                <label className="block text-2xs text-slate-400 uppercase tracking-wider mb-1.5">
+              <div className="mt-3 pt-3 border-t border-soft">
+                <label className="block text-2xs text-chalk-soft uppercase tracking-wider mb-1.5">
                   Significado de la unión
                 </label>
                 <input
                   type="text"
-                  className="w-full text-xs p-2 rounded bg-input text-slate-100 border border-slate-700 font-mono"
+                  className="w-full text-xs p-2 rounded bg-input text-chalk border border-soft font-mono"
                   value={editingLinkLabel ?? selectedLink.label}
                   placeholder="Ej. causa, deriva de, contrasta con…"
                   onChange={(e) => setEditingLinkLabel(e.target.value)}
@@ -450,7 +450,7 @@ export function GraphSidebar({
                       onClick={() => setEditingLinkLabel(c.value)}
                       title={c.description}
                     >
-                      <span className="font-mono text-amber-300 font-bold">{c.glyph}</span>
+                      <span className="font-mono text-gold font-bold">{c.glyph}</span>
                       <span className="truncate">{c.label}</span>
                     </button>
                   ))}
@@ -480,10 +480,10 @@ export function GraphSidebar({
             </div>
 
             {/* Delete Relation */}
-            <div className="pt-2 border-t border-slate-800">
+            <div className="pt-2 border-t border-soft">
               {confirmDeleteId === selectedLink.id ? (
-                <div className="p-2.5 rounded-lg bg-red-950/40 border border-red-900/60 space-y-2 text-xs">
-                  <p className="text-red-200">¿Borrar esta relación?</p>
+                <div className="p-2.5 rounded-md p-xs rounded-sm flex flex-col gap-xs text-xs">
+                  <p className="text-red font-medium">¿Borrar esta relación?</p>
                   <div className="flex gap-2">
                     <button
                       type="button"
@@ -506,7 +506,7 @@ export function GraphSidebar({
               ) : (
                 <button
                   type="button"
-                  className="btn-quiet w-full text-xs text-red-400 hover:text-red-300 py-1.5 flex items-center justify-center gap-1.5"
+                  className="btn-quiet w-full text-xs text-red py-1.5 flex items-center justify-center gap-1.5"
                   onClick={() => setConfirmDeleteId(selectedLink.id)}
                 >
                   <IconTrash /> Borrar relación
@@ -518,13 +518,13 @@ export function GraphSidebar({
 
         {/* ===================== OVERVIEW & SEARCH (NOTHING SELECTED) ===================== */}
         {!selectedConcept && !selectedClass && !selectedLink && (
-          <div className="space-y-4">
+          <div className="flex flex-col gap-md">
             {/* Search Input */}
             <div className="relative">
-              <IconSearch className="absolute left-2.5 top-2.5 text-slate-400 pointer-events-none" />
+              <IconSearch className="absolute left-2.5 top-2.5 text-chalk-soft pointer-events-none" />
               <input
                 type="text"
-                className="w-full text-xs pl-8 pr-3 py-2 rounded-lg bg-input text-slate-100 border border-slate-700 placeholder:text-slate-500"
+                className="w-full text-xs pl-8 pr-3 py-2 rounded-md bg-input text-chalk border border-soft placeholder:text-chalk-faint"
                 placeholder="Buscar conceptos o clases…"
                 value={searchQuery}
                 onChange={(e) => onSearchChange(e.target.value)}
@@ -532,7 +532,7 @@ export function GraphSidebar({
               {searchQuery && (
                 <button
                   type="button"
-                  className="absolute right-2 top-2 text-slate-400 hover:text-slate-200"
+                  className="absolute right-2 top-2 text-chalk-soft hover:text-chalk"
                   onClick={() => onSearchChange("")}
                 >
                   <IconClose />
@@ -542,17 +542,17 @@ export function GraphSidebar({
 
             {/* Metrics Tiles */}
             <div className="grid grid-cols-3 gap-2">
-              <div className="p-2.5 rounded-lg bg-paper-deep border border-slate-800 text-center">
-                <span className="block text-lg font-bold text-sky-400">{classes.length}</span>
-                <span className="text-2xs text-slate-400">Clases</span>
+              <div className="p-2.5 rounded-md bg-paper-deep border border-soft text-center">
+                <span className="block text-lg font-bold text-blue">{classes.length}</span>
+                <span className="text-2xs text-chalk-soft">Clases</span>
               </div>
-              <div className="p-2.5 rounded-lg bg-paper-deep border border-slate-800 text-center">
-                <span className="block text-lg font-bold text-amber-400">{concepts.length}</span>
-                <span className="text-2xs text-slate-400">Conceptos</span>
+              <div className="p-2.5 rounded-md bg-paper-deep border border-soft text-center">
+                <span className="block text-lg font-bold text-gold">{concepts.length}</span>
+                <span className="text-2xs text-chalk-soft">Conceptos</span>
               </div>
-              <div className="p-2.5 rounded-lg bg-paper-deep border border-slate-800 text-center">
-                <span className="block text-lg font-bold text-emerald-400">{links.length}</span>
-                <span className="text-2xs text-slate-400">Relaciones</span>
+              <div className="p-2.5 rounded-md bg-paper-deep border border-soft text-center">
+                <span className="block text-lg font-bold text-green">{links.length}</span>
+                <span className="text-2xs text-chalk-soft">Relaciones</span>
               </div>
             </div>
 
@@ -566,11 +566,11 @@ export function GraphSidebar({
 
             {/* Classes & Concepts Tree List */}
             <div className="graph-sidebar-section">
-              <span className="text-2xs font-semibold text-slate-400 uppercase tracking-wider mb-2 block">
+              <span className="text-2xs font-semibold text-chalk-soft uppercase tracking-wider mb-2 block">
                 Ideas organizadas por clase
               </span>
 
-              <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
+              <div className="flex flex-col gap-xs max-h-[340px] overflow-y-auto pr-1">
                 {classes.map((cls) => {
                   const classConcepts = concepts.filter((c) => c.classId === cls.id);
                   const matchesSearch =
@@ -583,26 +583,26 @@ export function GraphSidebar({
                   return (
                     <div
                       key={cls.id}
-                      className="rounded-lg bg-paper-deep/60 border border-slate-800/80 p-2 space-y-1.5"
+                      className="rounded-md bg-paper-deep border border-soft p-2 flex flex-col gap-2xs"
                     >
                       <button
                         type="button"
-                        className="text-xs font-semibold text-sky-300 hover:text-sky-200 text-left w-full truncate flex items-center justify-between"
+                        className="text-xs font-semibold text-blue hover:text-blue text-left w-full truncate flex items-center justify-between"
                         onClick={() => onSelect({ kind: "node", id: cls.id })}
                       >
                         <span className="truncate">{classLabel(cls.title)}</span>
-                        <span className="text-2xs font-normal text-slate-400 shrink-0">
+                        <span className="text-2xs font-normal text-chalk-soft shrink-0">
                           {classConcepts.length} ideas
                         </span>
                       </button>
 
                       {classConcepts.length > 0 && (
-                        <div className="pl-2 space-y-1 border-l border-slate-800">
+                        <div className="pl-2 flex flex-col gap-3xs border-l border-soft">
                           {classConcepts.map((c) => (
                             <button
                               key={c.id}
                               type="button"
-                              className="text-xs text-slate-300 hover:text-amber-300 text-left w-full truncate block py-0.5"
+                              className="text-xs text-chalk-soft hover:text-gold text-left w-full truncate block py-0.5"
                               onClick={() => onSelect({ kind: "node", id: c.id })}
                             >
                               • {truncate(c.label, 26)}
@@ -617,8 +617,8 @@ export function GraphSidebar({
             </div>
 
             {/* Quick Tips / Shortcuts */}
-            <div className="p-3 rounded-lg bg-paper-deep/40 border border-slate-800/60 text-2xs text-slate-400 space-y-1.5">
-              <span className="font-semibold text-slate-300 block">Atajos del lienzo:</span>
+            <div className="p-3 rounded-md bg-paper-deep border border-soft text-2xs text-chalk-soft flex flex-col gap-2xs">
+              <span className="font-semibold text-chalk-soft block">Atajos del lienzo:</span>
               <p>• <strong>Conectar como Figma:</strong> Arrastra desde cualquiera de los 4 puntos de un nodo hacia otro.</p>
               <p>• <strong>Menú contextual:</strong> Clic derecho en el lienzo, un concepto o una línea.</p>
               <p>• <strong>Mover:</strong> Arrastra el fondo para desplazarte, rueda para zoom.</p>

@@ -54,14 +54,14 @@ export function ScrollJump() {
   return (
     <div
       aria-label="Navegación rápida de cuaderno"
-      className="fixed bottom-6 right-6 z-40 flex flex-col gap-2 print:hidden"
+      className="scroll-jump-container print:hidden"
     >
       {showTop && (
         <button
           type="button"
           onClick={scrollToTop}
           title="Ir al inicio de la clase (↑)"
-          className="flex items-center justify-center w-9 h-9 rounded-full bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700/80 shadow-lg backdrop-blur-sm transition-all hover:scale-105 active:scale-95"
+          className="scroll-jump-btn"
         >
           <span className="text-sm font-bold">↑</span>
         </button>
@@ -71,7 +71,7 @@ export function ScrollJump() {
           type="button"
           onClick={scrollToBottom}
           title="Ir al último bloque generado (↓)"
-          className="flex items-center justify-center w-9 h-9 rounded-full bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700/80 shadow-lg backdrop-blur-sm transition-all hover:scale-105 active:scale-95"
+          className="scroll-jump-btn"
         >
           <span className="text-sm font-bold">↓</span>
         </button>

@@ -32,38 +32,38 @@ export function SessionObserverBadge() {
       type="button"
       onClick={() => setModalOpen(true)}
       title="Observador de Sesión en Vivo (clic para ver desglose de latencia, tokens y métricas de modelos)"
-      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono rounded-full bg-slate-800/80 hover:bg-slate-700/90 text-slate-300 border border-slate-700/80 shadow-sm transition-colors cursor-pointer group"
+      className="session-observer-badge group"
     >
-      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-      <span className="font-semibold text-slate-200 group-hover:text-amber-300 transition-colors">
+      <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: "var(--green-chalk)" }} />
+      <span className="font-semibold text-chalk group-hover:text-gold transition-colors">
         {shortModel}
       </span>
       {lastTtft && (
         <>
-          <span className="text-slate-600">|</span>
-          <span className="text-slate-400">
-            TTFT <strong className="text-slate-200">{lastTtft}</strong>
+          <span className="text-chalk-faint">|</span>
+          <span className="text-chalk-soft">
+            TTFT <strong className="text-chalk">{lastTtft}</strong>
           </span>
         </>
       )}
       {lastDuration && (
         <>
-          <span className="text-slate-600">|</span>
-          <span className="text-slate-400">
-            Tot <strong className="text-slate-200">{lastDuration}</strong>
+          <span className="text-chalk-faint">|</span>
+          <span className="text-chalk-soft">
+            Tot <strong className="text-chalk">{lastDuration}</strong>
           </span>
         </>
       )}
       {completed.length > 0 && (
         <>
-          <span className="text-slate-600">|</span>
+          <span className="text-chalk-faint">|</span>
           <span
             className={
               nativePct === 100
-                ? "text-emerald-400 font-medium"
+                ? "text-green font-medium"
                 : nativePct >= 80
-                ? "text-amber-400 font-medium"
-                : "text-rose-400 font-medium"
+                ? "text-gold font-medium"
+                : "text-red font-medium"
             }
           >
             {nativePct}% tool

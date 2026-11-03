@@ -11,15 +11,15 @@ export function GalleryStudioView() {
       {/* Notebook-styled Header */}
       <nav className="gallery-studio-topbar" aria-label="Galería de Bloques">
         <div className="flex items-center gap-2">
-          <IconGallery className="text-amber-300 w-4 h-4" />
-          <h2 className="text-sm font-semibold tracking-wide uppercase text-slate-200 m-0">
+          <IconGallery className="text-gold w-4 h-4" />
+          <h2 className="text-sm font-semibold tracking-wide uppercase text-chalk m-0">
             Galería de Bloques Pedagógicos
           </h2>
         </div>
 
         <button
           type="button"
-          className="btn-quiet gallery-studio-close flex items-center gap-1.5 text-xs text-slate-300 hover:text-white"
+          className="btn-quiet gallery-studio-close flex items-center gap-1.5 text-xs text-chalk-soft hover:text-chalk"
           onClick={() => setView(lastMainView)}
           title="Regresar a la sesión o cuaderno"
         >

@@ -228,13 +228,13 @@ export function GraphView() {
       {conceptModal?.open && (
         <div className="graph-modal-backdrop">
           <div className="graph-modal-box">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-              <h4 className="text-sm font-semibold text-slate-100 flex items-center gap-1.5">
+            <div className="flex items-center justify-between pb-2 border-b border-soft">
+              <h4 className="text-sm font-semibold text-chalk flex items-center gap-1.5">
                 <IconPlus /> Nuevo concepto
               </h4>
               <button
                 type="button"
-                className="text-slate-400 hover:text-slate-200"
+                className="text-chalk-soft hover:text-chalk"
                 onClick={() => setConceptModal(null)}
               >
                 <IconClose />
@@ -243,11 +243,11 @@ export function GraphView() {
 
             <div className="space-y-3 pt-2">
               <div>
-                <label className="block text-2xs text-slate-400 uppercase tracking-wider mb-1">
+                <label className="block text-2xs text-chalk-soft uppercase tracking-wider mb-1">
                   Clase de origen
                 </label>
                 <select
-                  className="w-full text-xs p-2 rounded bg-input text-slate-100 border border-slate-700"
+                  className="w-full text-xs p-2 rounded bg-input text-chalk border border-soft"
                   value={conceptModal.classId}
                   onChange={(e) =>
                     setConceptModal({ ...conceptModal, classId: e.target.value })
@@ -262,13 +262,13 @@ export function GraphView() {
               </div>
 
               <div>
-                <label className="block text-2xs text-slate-400 uppercase tracking-wider mb-1">
+                <label className="block text-2xs text-chalk-soft uppercase tracking-wider mb-1">
                   Nombre o síntesis de la idea
                 </label>
                 <input
                   type="text"
                   autoFocus
-                  className="w-full text-xs p-2 rounded bg-input text-slate-100 border border-slate-700 placeholder:text-slate-500"
+                  className="w-full text-xs p-2 rounded bg-input text-chalk border border-soft placeholder:text-chalk-faint"
                   placeholder="Ej. La densidad multiplica el base sin sustituirlo…"
                   value={conceptModal.label}
                   onChange={(e) =>
@@ -283,7 +283,7 @@ export function GraphView() {
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-800">
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-soft">
               <button
                 type="button"
                 className="btn-quiet text-xs py-1 px-3"

@@ -93,20 +93,20 @@ export function ModelTiersCard() {
         </div>
       </div>
 
-      <div className="space-y-4 pt-3">
+      <div className="flex flex-col gap-md pt-3">
         {/* Tier Strong */}
-        <div className="tier-row p-3 rounded-lg bg-paper-deep border border-slate-800">
+        <div className="tier-row p-sm rounded-md bg-paper-deep border border-soft">
           <div className="flex items-center justify-between mb-2">
-            <span className="font-semibold text-sm text-sky-300">
+            <span className="font-semibold text-sm text-blue">
               ⚡ Modelo Fuerte (Strong)
             </span>
-            <span className="text-2xs text-slate-400">Generación de bloques y temarios</span>
+            <span className="text-2xs text-chalk-soft">Generación de bloques y temarios</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <label className="text-xs text-slate-300">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-xs">
+            <label className="text-xs text-chalk-soft">
               Proveedor:
               <select
-                className="w-full mt-1 p-2 rounded bg-input text-xs text-slate-200 border border-slate-700"
+                className="w-full mt-1 p-xs rounded bg-input text-xs text-chalk border border-soft"
                 value={strongPid}
                 onChange={(e) => {
                   setStrongPid(e.target.value);
@@ -123,10 +123,10 @@ export function ModelTiersCard() {
                 ))}
               </select>
             </label>
-            <label className="text-xs text-slate-300">
+            <label className="text-xs text-chalk-soft">
               Modelo:
               <input
-                className="w-full mt-1 p-2 rounded bg-input text-xs text-slate-200 border border-slate-700"
+                className="w-full mt-1 p-xs rounded bg-input text-xs text-chalk border border-soft"
                 value={strongModel}
                 placeholder="Por defecto del proveedor"
                 onChange={(e) => setStrongModel(e.target.value)}
@@ -150,18 +150,18 @@ export function ModelTiersCard() {
         </div>
 
         {/* Tier Cheap */}
-        <div className="tier-row p-3 rounded-lg bg-paper-deep border border-slate-800">
+        <div className="tier-row p-sm rounded-md bg-paper-deep border border-soft">
           <div className="flex items-center justify-between mb-2">
-            <span className="font-semibold text-sm text-amber-300">
+            <span className="font-semibold text-sm text-gold">
               🌱 Modelo Económico / Rápido (Cheap)
             </span>
-            <span className="text-2xs text-slate-400">Calificadores, compuertas, pistas y asistente</span>
+            <span className="text-2xs text-chalk-soft">Calificadores, compuertas, pistas y asistente</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <label className="text-xs text-slate-300">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-xs">
+            <label className="text-xs text-chalk-soft">
               Proveedor:
               <select
-                className="w-full mt-1 p-2 rounded bg-input text-xs text-slate-200 border border-slate-700"
+                className="w-full mt-1 p-xs rounded bg-input text-xs text-chalk border border-soft"
                 value={cheapPid}
                 onChange={(e) => {
                   setCheapPid(e.target.value);
@@ -178,10 +178,10 @@ export function ModelTiersCard() {
                 ))}
               </select>
             </label>
-            <label className="text-xs text-slate-300">
+            <label className="text-xs text-chalk-soft">
               Modelo:
               <input
-                className="w-full mt-1 p-2 rounded bg-input text-xs text-slate-200 border border-slate-700"
+                className="w-full mt-1 p-xs rounded bg-input text-xs text-chalk border border-soft"
                 value={cheapModel}
                 placeholder="Por defecto rápido del proveedor"
                 onChange={(e) => setCheapModel(e.target.value)}
@@ -205,18 +205,18 @@ export function ModelTiersCard() {
         </div>
 
         {/* Tier Vision */}
-        <div className="tier-row p-3 rounded-lg bg-paper-deep border border-slate-800">
+        <div className="tier-row p-sm rounded-md bg-paper-deep border border-soft">
           <div className="flex items-center justify-between mb-2">
-            <span className="font-semibold text-sm text-emerald-300">
+            <span className="font-semibold text-sm text-green">
               👁️ Modelo Multimodal (Vision)
             </span>
-            <span className="text-2xs text-slate-400">Inspección de diagramas y capturas</span>
+            <span className="text-2xs text-chalk-soft">Inspección de diagramas y capturas</span>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <label className="text-xs text-slate-300">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-xs">
+            <label className="text-xs text-chalk-soft">
               Proveedor:
               <select
-                className="w-full mt-1 p-2 rounded bg-input text-xs text-slate-200 border border-slate-700"
+                className="w-full mt-1 p-xs rounded bg-input text-xs text-chalk border border-soft"
                 value={visionPid}
                 onChange={(e) => {
                   setVisionPid(e.target.value);
@@ -233,10 +233,10 @@ export function ModelTiersCard() {
                 ))}
               </select>
             </label>
-            <label className="text-xs text-slate-300">
+            <label className="text-xs text-chalk-soft">
               Modelo:
               <input
-                className="w-full mt-1 p-2 rounded bg-input text-xs text-slate-200 border border-slate-700"
+                className="w-full mt-1 p-xs rounded bg-input text-xs text-chalk border border-soft"
                 value={visionModel}
                 placeholder="Por defecto multimodal del proveedor"
                 onChange={(e) => setVisionModel(e.target.value)}
@@ -260,12 +260,12 @@ export function ModelTiersCard() {
         </div>
       </div>
 
-      <div className="flex items-center justify-between pt-4 mt-2 border-t border-slate-800">
+      <div className="flex items-center justify-between pt-4 mt-2 border-t border-soft">
         <button className="btn-primary" onClick={handleSave}>
           Guardar asignación de modelos
         </button>
         {savedNotice && (
-          <span className="text-xs text-emerald-400 font-medium">✓ Cambios guardados</span>
+          <span className="text-xs text-green font-medium">✓ Cambios guardados</span>
         )}
       </div>
     </div>
