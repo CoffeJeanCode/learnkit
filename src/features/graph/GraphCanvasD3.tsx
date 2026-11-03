@@ -107,6 +107,11 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
     const [relationLabel, setRelationLabel] = useState("deriva en");
     const [creating, setCreating] = useState(false);
 
+    // Reactive render state for React DOM elements
+    const [renderNodes, setRenderNodes] = useState<D3Node[]>([]);
+    const [renderLinks, setRenderLinks] = useState<D3Link[]>([]);
+    const connectingFromRef = useRef<string | null>(null);
+
     // Zoom behavior reference
     const zoomBehaviorRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
     const currentTransformRef = useRef<d3.ZoomTransform>(d3.zoomIdentity);
@@ -120,12 +125,13 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
     const fitToCenter = () => {
       if (!svgRef.current || !zoomBehaviorRef.current || !containerRef.current) return;
       const svg = d3.select(svgRef.current);
-      const width = containerRef.current.clientWidth || 1000;
-      const height = containerRef.current.clientHeight || 700;
+      const width = containerRef.current.clientWidth || svgRef.current.clientWidth || 1000;
+      const height = containerRef.current.clientHeight || svgRef.current.clientHeight || 700;
 
       const nodes = nodesRef.current;
       if (nodes.length === 0) {
         svg
+          .interrupt()
           .transition()
           .duration(350)
           .call(zoomBehaviorRef.current.transform as any, d3.zoomIdentity);
@@ -146,20 +152,21 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
         maxY = Math.max(maxY, ny + n.h / 2);
       });
 
-      const padding = 100;
-      const boxW = Math.max(maxX - minX, 140) + padding * 2;
-      const boxH = Math.max(maxY - minY, 140) + padding * 2;
+      const padding = 120;
+      const boxW = Math.max(maxX - minX, 160) + padding * 2;
+      const boxH = Math.max(maxY - minY, 160) + padding * 2;
       const midX = (minX + maxX) / 2;
       const midY = (minY + maxY) / 2;
 
-      const scale = Math.min(Math.max(Math.min(width / boxW, height / boxH), 0.5), 1.3);
+      const scale = Math.min(Math.max(Math.min(width / boxW, height / boxH), 0.4), 1.25);
       const translateX = width / 2 - midX * scale;
       const translateY = height / 2 - midY * scale;
 
       const transform = d3.zoomIdentity.translate(translateX, translateY).scale(scale);
       svg
+        .interrupt()
         .transition()
-        .duration(400)
+        .duration(450)
         .call(zoomBehaviorRef.current.transform as any, transform);
     };
 
@@ -283,6 +290,8 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
 
       nodesRef.current = d3Nodes;
       linksRef.current = d3Links;
+      setRenderNodes(d3Nodes);
+      setRenderLinks(d3Links);
 
       // 3. Initialize Force Simulation with calm fluid damping & zero-torque centering
       const sim = d3
@@ -313,6 +322,28 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
       const zoom = d3
         .zoom<SVGSVGElement, unknown>()
         .scaleExtent([0.25, 3.5])
+        .filter((event) => {
+          if (event.type === "wheel") return true;
+          const target = event.target as Element | null;
+          if (target) {
+            if (
+              target.closest(".d3-node-group") ||
+              target.closest(".figma-connection-anchors") ||
+              target.closest(".d3-link-path") ||
+              target.closest(".d3-link-label") ||
+              target.closest("button") ||
+              target.closest(".graph-canvas-overlay-topleft") ||
+              target.closest(".graph-canvas-overlay-bottomright") ||
+              target.closest(".graph-canvas-overlay-bottomleft") ||
+              target.closest(".graph-modal-backdrop")
+            ) {
+              return false;
+            }
+          }
+          if (connectingFromRef.current) return false;
+          if (event.button === 1) return true;
+          return event.button === 0;
+        })
         .on("zoom", (event) => {
           currentTransformRef.current = event.transform;
           if (zoomValRef.current) {
@@ -431,6 +462,10 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
       }
     }, [connectingFromId]);
 
+    useEffect(() => {
+      connectingFromRef.current = connectingFrom;
+    }, [connectingFrom]);
+
     // Connected nodes map for spotlighting
     const connectedNodeIds = new Set<string>();
     if (selection?.kind === "node") {
@@ -513,6 +548,8 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
       anchorOffset: { dx: number; dy: number },
     ) => {
       e.stopPropagation();
+      e.preventDefault();
+      connectingFromRef.current = sourceId;
       setConnectingFrom(sourceId);
 
       const sourceNode = nodesRef.current.find((n) => n.id === sourceId);
@@ -540,6 +577,7 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
       const onPointerUp = (ev: PointerEvent) => {
         window.removeEventListener("pointermove", onPointerMove);
         window.removeEventListener("pointerup", onPointerUp);
+        connectingFromRef.current = null;
         setDragLine(null);
         setConnectingFrom(null);
         setSnapTargetId(null);
@@ -712,7 +750,7 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
             <g className="d3-hulls-layer" />
 
             {/* Link paths */}
-            {linksRef.current.map((link) => {
+            {renderLinks.map((link) => {
               const isExplicit = !!link.label;
               const isSelected = selection?.kind === "link" && selection.id === link.id;
               const isConnected =
@@ -785,7 +823,7 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
             )}
 
             {/* Link labels */}
-            {linksRef.current
+            {renderLinks
               .filter((l) => !!l.label)
               .map((link) => {
                 const isSelected = selection?.kind === "link" && selection.id === link.id;
@@ -829,7 +867,7 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
               })}
 
             {/* Nodes */}
-            {nodesRef.current.map((node) => {
+            {renderNodes.map((node) => {
               const isSelected = selection?.kind === "node" && selection.id === node.id;
               const isConnected = connectedNodeIds.has(node.id);
               const isSnapTarget = snapTargetId === node.id;
@@ -932,20 +970,25 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
                         width={44}
                         height={15}
                         rx={4}
-                        fill="var(--blue-wash)"
-                        stroke="var(--blue-chalk)"
-                        strokeWidth={0.8}
+                        style={{
+                          fill: "var(--blue-wash, rgba(37, 99, 235, 0.2))",
+                          stroke: "var(--blue-chalk, #7fb0d8)",
+                          strokeWidth: 0.8,
+                        }}
                       />
                       <text
                         x={22}
                         y={11}
                         textAnchor="middle"
-                        fill="var(--blue-chalk)"
                         fontSize={9}
-                        fontFamily="var(--font-mono)"
+                        fontFamily="var(--font-mono, monospace)"
                         fontWeight={700}
                         letterSpacing="0.05em"
-                        style={{ userSelect: "none", pointerEvents: "none" }}
+                        style={{
+                          fill: "var(--blue-chalk, #7fb0d8)",
+                          userSelect: "none",
+                          pointerEvents: "none",
+                        }}
                       >
                         CLASE
                       </text>
@@ -958,8 +1001,10 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
                       cx={-node.w / 2 + 18}
                       cy={0}
                       r={5}
-                      fill="var(--gold-chalk)"
-                      opacity={0.9}
+                      style={{
+                        fill: "var(--gold-chalk, #d9b168)",
+                        opacity: 0.9,
+                      }}
                     />
                   )}
 
@@ -967,11 +1012,11 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
                   <text
                     x={isClass ? -node.w / 2 + 14 : -node.w / 2 + 30}
                     y={isClass ? 12 : 5}
-                    fill="var(--chalk)"
+                    className="d3-node-text"
                     fontSize={isClass ? 12 : 13}
-                    fontFamily="var(--font-body)"
+                    fontFamily="var(--font-body, system-ui, sans-serif)"
                     fontWeight={isClass ? 600 : 500}
-                    style={{ userSelect: "none", pointerEvents: "none" }}
+                    style={{ fill: "var(--chalk, #e8e2d4)", userSelect: "none", pointerEvents: "none" }}
                   >
                     {truncate(node.label, isClass ? 24 : 20)}
                   </text>
@@ -985,11 +1030,13 @@ export const GraphCanvasD3 = forwardRef<GraphCanvasHandle, GraphCanvasD3Props>(
                           cx={h.cx}
                           cy={h.cy}
                           r={7}
-                          fill="var(--blue-chalk)"
-                          stroke="var(--paper-deep)"
-                          strokeWidth={2}
                           cursor="crosshair"
-                          style={{ transition: "all 0.15s ease" }}
+                          style={{
+                            fill: "var(--blue-chalk, #7fb0d8)",
+                            stroke: "var(--paper-deep, #121417)",
+                            strokeWidth: 2,
+                            transition: "all 0.15s ease",
+                          }}
                           onPointerDown={(e) =>
                             handleConnectorStart(e, node.id, { dx: h.dx, dy: h.dy })
                           }

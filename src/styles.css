@@ -2203,6 +2203,61 @@ body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16p
   display: block;
 }
 
+/* Knowledge Graph Canvas Elements */
+.d3-node-group {
+  outline: none;
+  cursor: grab;
+}
+
+.d3-node-group:active {
+  cursor: grabbing;
+}
+
+.d3-node-rect {
+  transition: stroke 0.15s ease, filter 0.15s ease, fill 0.15s ease;
+}
+
+.d3-node-rect.is-class {
+  fill: #1e2530;
+  stroke: var(--blue-chalk, #7fb0d8);
+}
+
+.d3-node-rect.is-class.is-selected {
+  fill: #14253d;
+  stroke: var(--gold-chalk, #d9b168);
+}
+
+.d3-node-rect.is-concept {
+  fill: #242a33;
+  stroke: var(--border-soft, rgba(232, 226, 212, 0.15));
+}
+
+.d3-node-rect.is-concept.is-selected {
+  fill: #382306;
+  stroke: var(--gold-chalk, #d9b168);
+}
+
+.d3-node-text {
+  fill: var(--chalk, #e8e2d4);
+  font-family: var(--font-body, system-ui, sans-serif);
+  user-select: none;
+  pointer-events: none;
+}
+
+.figma-connection-anchors circle {
+  fill: var(--blue-chalk, #7fb0d8);
+  stroke: var(--paper-deep, #121417);
+  stroke-width: 2px;
+  cursor: crosshair;
+  transition: transform 0.12s ease, fill 0.12s ease;
+}
+
+.figma-connection-anchors circle:hover {
+  fill: var(--gold-chalk, #d9b168);
+  stroke: #ffffff;
+}
+
+
 .d3-cluster-hull {
   fill: var(--card);
   fill-opacity: 0.18;
