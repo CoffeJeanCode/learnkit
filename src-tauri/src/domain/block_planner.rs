@@ -89,6 +89,7 @@ pub struct PlanInputs<'a> {
     pub profile: Option<DisciplineProfile>,
     pub scaffolding: &'a ScaffoldingPlan,
     pub learner: LearnerSignals,
+    pub dominant: &'a [DynamicBlockType],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -248,11 +249,33 @@ pub fn plan_next(i: &PlanInputs<'_>) -> BlockPlan {
     if mastery_complete && scaffolding::transfer_attempted(i.existing) {
         return firm(DynamicBlockType::MetacognitiveClosure, "mastery_complete");
     }
+    let pick_practice_gate = |avoid: &[DynamicBlockType], last: Option<DynamicBlockType>| -> DynamicBlockType {
+        let candidates = [
+            DynamicBlockType::HeuristicErrorAudit,
+            DynamicBlockType::BranchingScenarioChallenge,
+            DynamicBlockType::HandsOnMission,
+        ];
+        for &c in &candidates {
+            if !avoid.contains(&c) && Some(c) != last {
+                return c;
+            }
+        }
+        candidates.into_iter().find(|&c| Some(c) != last).unwrap_or(DynamicBlockType::HeuristicErrorAudit)
+    };
+
     // Never stack a third unchecked teaching block: check what was taught.
     let teaching_run = types.iter().rev().take_while(|t| is_teaching(**t)).count();
     if teaching_run >= 2 {
-        let gate = if i.has_passed_conceptual { DynamicBlockType::HandsOnMission } else { DynamicBlockType::InteractivePredictionGate };
-        return firm(gate, "check_before_stacking");
+        let gate = if i.has_passed_conceptual {
+            pick_practice_gate(i.dominant, last)
+        } else {
+            DynamicBlockType::InteractivePredictionGate
+        };
+        let mut p = firm(gate, "check_before_stacking");
+        if gate == DynamicBlockType::HandsOnMission {
+            p.mission_support = Some(MissionSupportLevel::Guided);
+        }
+        return p;
     }
     // The profile chain, corrected for the rules grounding would reject anyway.
     if let Some(suggested) = i.suggested {
@@ -260,10 +283,12 @@ pub fn plan_next(i: &PlanInputs<'_>) -> BlockPlan {
         let t = if suggested == DynamicBlockType::HeuristicErrorAudit && last == Some(DynamicBlockType::AnchoredMicroTheory) && non_retrieval == 1 {
             // Golden rule: never audit an error right after the first theory.
             DynamicBlockType::InteractivePredictionGate
+        } else if i.dominant.contains(&suggested) {
+            pick_practice_gate(i.dominant, last)
         } else {
             suggested
         };
-        if Some(t) != last && !(t == DynamicBlockType::MetacognitiveClosure && !mastery_complete) {
+        if !i.dominant.contains(&t) && Some(t) != last && !(t == DynamicBlockType::MetacognitiveClosure && !mastery_complete) {
             let reason = if t == suggested { "profile_chain" } else { "golden_rule" };
             return firm(t, reason);
         }
@@ -271,7 +296,11 @@ pub fn plan_next(i: &PlanInputs<'_>) -> BlockPlan {
     // Chain exhausted but a mastery dimension is still missing: go for it
     // unless that would repeat the previous block (then the model decides).
     if !mastery_complete {
-        let missing = if !i.has_passed_conceptual { DynamicBlockType::InteractivePredictionGate } else { DynamicBlockType::HandsOnMission };
+        let missing = if !i.has_passed_conceptual {
+            DynamicBlockType::InteractivePredictionGate
+        } else {
+            pick_practice_gate(i.dominant, last)
+        };
         let gated_last = last.is_some_and(|t| t.is_gate()) && i.existing.last().is_some_and(|b| b.status != BlockStatus::Passed);
         if Some(missing) != last && !gated_last && types.iter().any(|t| is_teaching(*t)) {
             return firm(missing, "missing_mastery");
@@ -312,6 +341,7 @@ mod tests {
             profile: None,
             scaffolding: &sp,
             learner: LearnerSignals::default(),
+            dominant: &[],
         };
         f(&mut inputs);
         plan_next(&inputs)
@@ -434,5 +464,20 @@ mod tests {
         assert_eq!((heavy.density, heavy.emphasis), (Density::Spacious, Emphasis::Visual), "heavy scaffolding beats a rising streak");
         let json = serde_json::to_value(calm).unwrap();
         assert_eq!(json, serde_json::json!({"density": "comfortable", "emphasis": "balanced", "layout": "stacked"}));
+    }
+
+    #[test]
+    fn dominant_practice_type_is_never_planned_as_a_normal_gate() {
+        let after_concept = [theory(), gate(DynamicBlockType::InteractivePredictionGate, BlockStatus::Passed)];
+        // Without dominant: plans HandsOnMission by default.
+        let p = plan_with(&after_concept, |_| {});
+        assert_eq!(p.block_type, Some(DynamicBlockType::HandsOnMission));
+
+        // When HandsOnMission dominates prior classes (>50%): plans HeuristicErrorAudit instead!
+        let p_avoid = plan_with(&after_concept, |i| {
+            i.dominant = &[DynamicBlockType::HandsOnMission];
+        });
+        assert_eq!(p_avoid.block_type, Some(DynamicBlockType::HeuristicErrorAudit));
+        assert_ne!(p_avoid.block_type, Some(DynamicBlockType::HandsOnMission));
     }
 }

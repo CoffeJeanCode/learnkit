@@ -1445,7 +1445,7 @@ mod tests {
         let args: PublishBlockArgs = serde_json::from_value(nested).expect("should unwrap and parse");
         assert!(matches!(args, PublishBlockArgs::Block(GeneratedSectionBlock::AnchoredMicroTheory { .. })));
 
-        let stringified = serde_json::json!("{"blockType":"tplOrdering","question":"q","stepsInOrder":["a","b"]}");
+        let stringified = serde_json::Value::String(r#"{"blockType":"tplOrdering","question":"q","stepsInOrder":["a","b"]}"#.to_string());
         let args_str: PublishBlockArgs = serde_json::from_value(stringified).expect("should parse stringified json");
         assert!(matches!(args_str, PublishBlockArgs::Template(BlockTemplate::Ordering { .. })));
     }

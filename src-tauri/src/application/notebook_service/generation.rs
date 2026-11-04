@@ -1274,6 +1274,7 @@ fn plan_block(
         .and_then(|p| p.get("weakPoints"))
         .and_then(|w| w.as_array())
         .is_some_and(|points| points.iter().any(|w| w.get("dimension").and_then(|d| d.as_str()) == Some("intuition")));
+    let dominant: &[DynamicBlockType] = suggestion.as_ref().map(|(_, d, _)| d.as_slice()).unwrap_or(&[]);
     block_planner::plan_next(&PlanInputs {
         existing,
         has_passed_conceptual: mastery.has_passed_conceptual,
@@ -1285,6 +1286,7 @@ fn plan_block(
         profile: suggestion.as_ref().map(|(p, _, _)| *p),
         scaffolding: &scaffolding_plan,
         learner: LearnerSignals { heavy_scaffolding: memory.needs_heavy_scaffolding(), friction_low: memory.friction_is_low(), intuition_weak },
+        dominant,
     })
 }
 

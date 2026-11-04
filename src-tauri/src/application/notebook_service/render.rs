@@ -287,11 +287,40 @@ pub(super) fn render_next_block_input(
             "classesUsingEachType": usage,
         });
     }
-    format!(
+    let dominant: Vec<DynamicBlockType> = if *total_classes >= 2 {
+        usage
+            .iter()
+            .filter(|(_, n)| (**n as f64) / (*total_classes as f64) > 0.5)
+            .filter_map(|(k, _)| DynamicBlockType::parse(k))
+            .filter(|t| {
+                matches!(t, DynamicBlockType::HeuristicErrorAudit | DynamicBlockType::HandsOnMission | DynamicBlockType::BranchingScenarioChallenge)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if !dominant.is_empty() {
+        context["forbiddenDominantBlockTypes"] = serde_json::json!(dominant.iter().map(|t| t.as_str()).collect::<Vec<_>>());
+    }
+    let mut rendered = format!(
         "Genera el SIGUIENTE bloque de esta clase, llamando a publish_notebook_block según tu system \
          prompt.\n\n{}",
         toon_payload(&context)
-    )
+    );
+    if let Some(last) = existing_blocks.last() {
+        rendered.push_str(&format!(
+            "\n\nREGLA_CONSECUTIVA: el bloque inmediatamente anterior fue '{}'. Está PROHIBIDO repetir '{}' de forma consecutiva.",
+            last.block_type.as_str(),
+            last.block_type.as_str()
+        ));
+    }
+    if !dominant.is_empty() {
+        let names = dominant.iter().map(|t| t.as_str()).collect::<Vec<_>>().join(", ");
+        rendered.push_str(&format!(
+            "\n\nREGLA_DE_VARIEDAD_ESTRICTA: los siguientes tipos ya dominan más del 50% de las clases anteriores de este curso: {names}. Está PROHIBIDO usar {names} (salvo si es reto de transferencia con isTransfer=true). Elige un bloque de práctica alternativo de la familia: heuristic_error_audit o branching_scenario_challenge."
+        ));
+    }
+    rendered
 }
 
 /// Input for a FORCED closure call — the safety-ceiling escape hatch (see
