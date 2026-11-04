@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "eval:models": "bun scripts/eval-block-models.ts",
+    "eval:blocks": "bun scripts/eval-block-generation.ts",
     "eval:session": "bun scripts/eval-block-models.ts --attach-session",
     "tauri": "tauri",
     "release": "bun scripts/release.ts",

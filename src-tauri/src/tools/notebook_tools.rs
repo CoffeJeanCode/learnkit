@@ -162,6 +162,9 @@ pub fn normalize_block_value(mut value: serde_json::Value) -> serde_json::Value 
         }
     }
 
+    // 3.5 Unwrap stringified inner fields (e.g. models emitting "predictionComparison": "{\"initialPrediction\": ...}")
+    unwrap_stringified_inner_fields(&mut value);
+
     // 4. Coerce common stringified numeric fields to numbers to prevent Serde rejection
     coerce_numeric_fields(&mut value);
 
@@ -182,30 +185,80 @@ fn ensure_required_block_fields(value: &mut serde_json::Value) {
             map.entry("frequentError").or_insert_with(|| serde_json::json!(""));
         }
         "declarative_visual_diagram" => {
-            map.entry("title").or_insert_with(|| serde_json::json!("Diagrama"));
+            map.entry("title").or_insert_with(|| serde_json::json!("Diagrama Conceptual"));
             map.entry("guidedWalkthrough").or_insert_with(|| serde_json::json!([]));
-            map.entry("visualAid").or_insert_with(|| {
-                serde_json::json!({
+            if !map.contains_key("visualAid") || !map["visualAid"].is_object() {
+                map.insert("visualAid".to_string(), serde_json::json!({
                     "type": "mermaid",
-                    "chartType": "flowchart_td",
-                    "spec": "graph TD\nA[Inicio] --> B[Fin]"
-                })
-            });
+                    "chartType": "flowchart",
+                    "code": "graph TD\nA[Inicio] --> B[Fin]",
+                    "caption": "Diagrama conceptual"
+                }));
+            } else if let Some(va) = map.get_mut("visualAid").and_then(|v| v.as_object_mut()) {
+                va.entry("type").or_insert_with(|| serde_json::json!("mermaid"));
+                va.entry("chartType").or_insert_with(|| serde_json::json!("flowchart"));
+                if !va.contains_key("code") {
+                    if let Some(spec) = va.remove("spec") {
+                        va.insert("code".to_string(), spec);
+                    } else {
+                        va.insert("code".to_string(), serde_json::json!("graph TD\nA[Inicio] --> B[Fin]"));
+                    }
+                }
+                va.entry("caption").or_insert_with(|| serde_json::json!("Diagrama"));
+            }
         }
         "branching_scenario_challenge" => {
-            map.entry("scenario").or_insert_with(|| serde_json::json!(""));
-            map.entry("decisionPoint").or_insert_with(|| serde_json::json!(""));
-            map.entry("branches").or_insert_with(|| serde_json::json!([]));
+            map.entry("scenario").or_insert_with(|| serde_json::json!("Escenario de decisión"));
+            map.entry("decisionPoint").or_insert_with(|| serde_json::json!("¿Qué camino decides tomar?"));
+            if !map.contains_key("branches") || !map["branches"].is_array() || map["branches"].as_array().unwrap().is_empty() {
+                map.insert("branches".to_string(), serde_json::json!([
+                    {"choice": "Opción A (Recomendada)", "consequence": "Solución con mejores prácticas.", "isOptimal": true},
+                    {"choice": "Opción B (Alternativa)", "consequence": "Resultado con efectos secundarios a considerar.", "isOptimal": false}
+                ]));
+            } else if let Some(branches) = map.get_mut("branches").and_then(|v| v.as_array_mut()) {
+                let mut has_optimal = false;
+                for b in branches.iter_mut() {
+                    if let Some(obj) = b.as_object_mut() {
+                        obj.entry("choice").or_insert_with(|| serde_json::json!("Opción"));
+                        obj.entry("consequence").or_insert_with(|| serde_json::json!("Consecuencia de la decisión."));
+                        if obj.get("isOptimal").and_then(|v| v.as_bool()) == Some(true) {
+                            has_optimal = true;
+                        } else if !obj.contains_key("isOptimal") {
+                            obj.insert("isOptimal".to_string(), serde_json::json!(false));
+                        }
+                    }
+                }
+                if !has_optimal && !branches.is_empty() {
+                    if let Some(first) = branches.first_mut().and_then(|v| v.as_object_mut()) {
+                        first.insert("isOptimal".to_string(), serde_json::json!(true));
+                    }
+                }
+            }
         }
         "heuristic_error_audit" => {
-            map.entry("artifactType").or_insert_with(|| serde_json::json!("código"));
-            map.entry("instruction").or_insert_with(|| serde_json::json!(""));
-            map.entry("flawedArtifact").or_insert_with(|| serde_json::json!(""));
-            map.entry("errorType").or_insert_with(|| serde_json::json!(""));
-            map.entry("correctVersion").or_insert_with(|| serde_json::json!(""));
+            map.entry("instruction").or_insert_with(|| serde_json::json!("Audita el siguiente fragmento e identifica el problema conceptual:"));
+            if !map.contains_key("flawedRepresentation") || !map["flawedRepresentation"].is_object() {
+                let context = map.remove("context").unwrap_or_else(|| serde_json::json!("Contexto del caso"));
+                let snippet = map.remove("buggySnippetOrDiagram")
+                    .or_else(|| map.remove("flawedArtifact"))
+                    .or_else(|| map.remove("flawedSnippet"))
+                    .unwrap_or_else(|| serde_json::json!("// Fragmento para auditar\n"));
+                let err_type = map.remove("errorType").unwrap_or_else(|| serde_json::json!("conceptual_misunderstanding"));
+                map.insert("flawedRepresentation".to_string(), serde_json::json!({
+                    "context": context,
+                    "buggySnippetOrDiagram": snippet,
+                    "errorType": err_type,
+                }));
+            } else if let Some(fr) = map.get_mut("flawedRepresentation").and_then(|v| v.as_object_mut()) {
+                fr.entry("context").or_insert_with(|| serde_json::json!("Contexto del caso"));
+                fr.entry("buggySnippetOrDiagram").or_insert_with(|| serde_json::json!("// Fragmento para auditar\n"));
+                fr.entry("errorType").or_insert_with(|| serde_json::json!("conceptual_misunderstanding"));
+            }
+            map.entry("guidingQuestions").or_insert_with(|| serde_json::json!(["¿Cuál es la causa raíz del problema?", "¿Cómo lo corregirías adecuadamente?"]));
+            map.entry("modelSolution").or_insert_with(|| serde_json::json!("Solución modelo identificando el error y la corrección recomendada."));
         }
         "interactive_prediction_gate" => {
-            map.entry("question").or_insert_with(|| serde_json::json!(""));
+            map.entry("question").or_insert_with(|| serde_json::json!("Pregunta de predicción conceptual:"));
             if !map.contains_key("options") || !map["options"].is_array() || map["options"].as_array().unwrap().is_empty() {
                 map.insert("options".to_string(), serde_json::json!(["Opción A", "Opción B"]));
             }
@@ -217,68 +270,146 @@ fn ensure_required_block_fields(value: &mut serde_json::Value) {
             map.entry("boundaryCases").or_insert_with(|| serde_json::json!([]));
         }
         "hands_on_mission" => {
-            map.entry("challengeStatement").or_insert_with(|| serde_json::json!(""));
-            map.entry("supportLevel").or_insert_with(|| serde_json::json!("guided"));
-            map.entry("isTransfer").or_insert_with(|| serde_json::json!(false));
+            map.entry("challengeStatement").or_insert_with(|| serde_json::json!("Misión práctica guiada:"));
+            map.entry("expectedMilestoneArtifact").or_insert_with(|| serde_json::json!("Artefacto de solución completado y verificado"));
             map.entry("constraints").or_insert_with(|| serde_json::json!([]));
-            map.entry("verificationChecklist").or_insert_with(|| serde_json::json!([]));
-            map.entry("interactiveSteps").or_insert_with(|| serde_json::json!([]));
-            map.entry("hints").or_insert_with(|| serde_json::json!([]));
+            if !map.contains_key("scaffoldingHints") {
+                if let Some(hints) = map.remove("hints") {
+                    map.insert("scaffoldingHints".to_string(), hints);
+                } else {
+                    map.insert("scaffoldingHints".to_string(), serde_json::json!([]));
+                }
+            }
+            map.entry("evaluationRubricSummary").or_insert_with(|| serde_json::json!(["Completitud del artefacto", "Cumplimiento de restricciones clave"]));
+            map.entry("isTransfer").or_insert_with(|| serde_json::json!(false));
         }
         "metacognitive_closure" => {
-            map.entry("synthesisTask").or_insert_with(|| serde_json::json!("Reflexión de cierre"));
-            map.entry("selfEvaluationChecklist").or_insert_with(|| serde_json::json!(["He comprendido los conceptos principales"]));
+            map.entry("synthesisTask").or_insert_with(|| serde_json::json!("Reflexión de cierre y síntesis de lo aprendido:"));
+            if !map.contains_key("predictionComparison") || !map["predictionComparison"].is_object() {
+                map.insert("predictionComparison".to_string(), serde_json::json!({
+                    "initialPrediction": "Predicción inicial sobre el funcionamiento del concepto",
+                    "finalResult": "Resultado real observado durante la práctica",
+                    "contrastNarrative": "Contraste entre lo esperado y lo verificado empíricamente"
+                }));
+            } else if let Some(pc) = map.get_mut("predictionComparison").and_then(|v| v.as_object_mut()) {
+                pc.entry("initialPrediction").or_insert_with(|| serde_json::json!("Predicción inicial"));
+                pc.entry("finalResult").or_insert_with(|| serde_json::json!("Resultado real"));
+                pc.entry("contrastNarrative").or_insert_with(|| serde_json::json!("Contraste observado"));
+            }
+            map.entry("selfEvaluationChecklist").or_insert_with(|| serde_json::json!(["He comprendido los conceptos principales y su aplicación práctica"]));
         }
         "spaced_interleaved_retrieval" => {
-            map.entry("items").or_insert_with(|| serde_json::json!([]));
+            if !map.contains_key("items") || !map["items"].is_array() || map["items"].as_array().unwrap().is_empty() {
+                map.insert("items".to_string(), serde_json::json!([
+                    {
+                        "conceptLabel": "Recuperación activa",
+                        "prompt": "¿Recuerdas el concepto principal abordado anteriormente?",
+                        "expectedAnswer": "Respuesta clave de recuperación"
+                    }
+                ]));
+            } else if let Some(items) = map.get_mut("items").and_then(|v| v.as_array_mut()) {
+                for item in items.iter_mut() {
+                    if let Some(obj) = item.as_object_mut() {
+                        obj.entry("conceptLabel").or_insert_with(|| serde_json::json!("Concepto previo"));
+                        obj.entry("prompt").or_insert_with(|| serde_json::json!("Pregunta de recuperación"));
+                        obj.entry("expectedAnswer").or_insert_with(|| serde_json::json!("Respuesta esperada"));
+                    }
+                }
+            }
         }
         "tpl_theory" => {
             map.entry("title").or_insert_with(|| serde_json::json!("Concepto Clave"));
             map.entry("intuitiveHook").or_insert_with(|| serde_json::json!(""));
+            map.entry("analogyBoundary").or_insert_with(|| serde_json::json!("Límite de la analogía"));
             map.entry("systemRule").or_insert_with(|| serde_json::json!(""));
             map.entry("frequentError").or_insert_with(|| serde_json::json!(""));
         }
         "tpl_multiple_choice" => {
-            map.entry("question").or_insert_with(|| serde_json::json!(""));
-            if !map.contains_key("options") || !map["options"].is_array() || map["options"].as_array().unwrap().is_empty() {
-                map.insert("options".to_string(), serde_json::json!(["Opción A", "Opción B"]));
+            map.entry("question").or_insert_with(|| serde_json::json!("Pregunta conceptual:"));
+            if !map.contains_key("correct") || !map["correct"].is_object() {
+                let correct_text = map.get("correctOption").and_then(|v| v.as_str()).unwrap_or("Opción Correcta");
+                let feedback = map.get("explanation").and_then(|v| v.as_str()).unwrap_or("Explicación de la opción correcta");
+                map.insert("correct".to_string(), serde_json::json!({ "text": correct_text, "feedback": feedback }));
             }
-            if !map.contains_key("correctOption") {
-                map.insert("correctOption".to_string(), serde_json::json!("Opción A"));
+            if !map.contains_key("distractors") || !map["distractors"].is_array() || map["distractors"].as_array().unwrap().is_empty() {
+                map.insert("distractors".to_string(), serde_json::json!([
+                    { "text": "Opción Incorrecta", "feedback": "Esta opción no satisface el criterio requerido." }
+                ]));
             }
-            map.entry("explanation").or_insert_with(|| serde_json::json!(""));
         }
         "tpl_true_false" => {
-            map.entry("statement").or_insert_with(|| serde_json::json!(""));
+            map.entry("statement").or_insert_with(|| serde_json::json!("Afirmación conceptual"));
             map.entry("isTrue").or_insert_with(|| serde_json::json!(true));
-            map.entry("explanation").or_insert_with(|| serde_json::json!(""));
+            map.entry("explanation").or_insert_with(|| serde_json::json!("Explicación"));
         }
         "tpl_ordering" => {
-            map.entry("question").or_insert_with(|| serde_json::json!(""));
+            map.entry("question").or_insert_with(|| serde_json::json!("Ordena los pasos correctamente:"));
             map.entry("stepsInOrder").or_insert_with(|| serde_json::json!(["Paso 1", "Paso 2"]));
-            map.entry("explanation").or_insert_with(|| serde_json::json!(""));
         }
         "tpl_boundary_cases" => {
-            map.entry("question").or_insert_with(|| serde_json::json!(""));
-            map.entry("boundaryCases").or_insert_with(|| serde_json::json!([]));
+            map.entry("question").or_insert_with(|| serde_json::json!("Identifica los casos límite:"));
+            map.entry("cases").or_insert_with(|| serde_json::json!([]));
         }
         "tpl_scenario_choice" => {
-            map.entry("scenario").or_insert_with(|| serde_json::json!(""));
-            map.entry("decisionPoint").or_insert_with(|| serde_json::json!(""));
-            if !map.contains_key("options") || !map["options"].is_array() || map["options"].as_array().unwrap().is_empty() {
-                map.insert("options".to_string(), serde_json::json!(["Opción A", "Opción B"]));
+            map.entry("scenario").or_insert_with(|| serde_json::json!("Escenario de decisión:"));
+            map.entry("decisionPoint").or_insert_with(|| serde_json::json!("¿Qué camino decides tomar?"));
+            if !map.contains_key("optimal") || !map["optimal"].is_object() {
+                map.insert("optimal".to_string(), serde_json::json!({
+                    "choice": "Decisión Óptima",
+                    "consequence": "Resultado positivo esperado"
+                }));
             }
-            map.entry("correctOption").or_insert_with(|| serde_json::json!("Opción A"));
-            map.entry("explanation").or_insert_with(|| serde_json::json!(""));
+            if !map.contains_key("alternatives") || !map["alternatives"].is_array() || map["alternatives"].as_array().unwrap().is_empty() {
+                map.insert("alternatives".to_string(), serde_json::json!([
+                    { "choice": "Decisión Alternativa", "consequence": "Consecuencia desfavorable a considerar" }
+                ]));
+            }
         }
         "tpl_quick_recall" => {
-            map.entry("prompt").or_insert_with(|| serde_json::json!(""));
-            map.entry("expectedAnswer").or_insert_with(|| serde_json::json!(""));
+            if !map.contains_key("items") || !map["items"].is_array() || map["items"].as_array().unwrap().is_empty() {
+                map.insert("items".to_string(), serde_json::json!([
+                    {
+                        "conceptLabel": "Recuperación activa",
+                        "prompt": "Pregunta de recuperación rápida",
+                        "expectedAnswer": "Respuesta clave"
+                    }
+                ]));
+            }
         }
         _ => {}
     }
 }
 
+
+fn unwrap_stringified_inner_fields(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (_k, v) in map.iter_mut() {
+                if let serde_json::Value::String(s) = v {
+                    let trimmed = s.trim();
+                    if (trimmed.starts_with('{') && trimmed.ends_with('}'))
+                        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+                    {
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                            *v = parsed;
+                        } else if let Ok(parsed) = crate::tools::json_repair::parse_repaired_value(trimmed) {
+                            *v = parsed;
+                        }
+                    }
+                }
+                if v.is_object() || v.is_array() {
+                    unwrap_stringified_inner_fields(v);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                unwrap_stringified_inner_fields(item);
+            }
+        }
+        _ => {}
+    }
+}
 fn coerce_numeric_fields(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
@@ -503,13 +634,211 @@ pub fn extract_block_from_text(text: &str) -> Option<PublishedBlock> {
 
     // 5. Final fallback: try partial_json::parse_partial on the text
     if let Some(partial_val) = crate::tools::partial_json::parse_partial(trimmed) {
-        if let Ok(args) = serde_json::from_value::<PublishBlockArgs>(partial_val) {
+        if let Ok(args) = serde_json::from_value::<PublishBlockArgs>(partial_val.clone()) {
             let args = repair_double_escaped(args);
             return Some(args.into_published());
+        }
+        if let Some(salvaged) = salvage_fallback_block(&partial_val) {
+            return Some(salvaged);
+        }
+    }
+
+    // 6. Direct fallback block construction if a known blockType is present
+    if let Ok(val) = crate::tools::json_repair::parse_repaired_value(trimmed) {
+        if let Some(published) = salvage_fallback_block(&val) {
+            return Some(published);
+        }
+    }
+
+    if let Some(bt_idx) = trimmed.find("blockType") {
+        if let Some(open_rel) = trimmed[..bt_idx].rfind('{') {
+            let candidate = &trimmed[open_rel..];
+            if let Ok(val) = crate::tools::json_repair::parse_repaired_value(candidate) {
+                if let Some(published) = salvage_fallback_block(&val) {
+                    return Some(published);
+                }
+            }
         }
     }
 
     None
+}
+
+/// Fallback reconstruction when serde strictly rejects a malformed or cut-off payload,
+/// ensuring that streamed content with a valid `blockType` is never discarded.
+pub fn salvage_fallback_block(value: &serde_json::Value) -> Option<PublishedBlock> {
+    let map = if let Some(obj) = value.as_object() {
+        obj
+    } else {
+        return None;
+    };
+
+    let bt = map.get("blockType").and_then(|v| v.as_str())?;
+    let normalized = match bt {
+        "anchoredMicroTheory" | "anchored-micro-theory" => "anchored_micro_theory",
+        "declarativeVisualDiagram" | "declarative-visual-diagram" => "declarative_visual_diagram",
+        "branchingScenarioChallenge" | "branching-scenario-challenge" => "branching_scenario_challenge",
+        "heuristicErrorAudit" | "heuristic-error-audit" => "heuristic_error_audit",
+        "interactivePredictionGate" | "interactive-prediction-gate" => "interactive_prediction_gate",
+        "handsOnMission" | "hands-on-mission" => "hands_on_mission",
+        "metacognitiveClosure" | "metacognitive-closure" => "metacognitive_closure",
+        "spacedInterleavedRetrieval" | "spaced-interleaved-retrieval" => "spaced_interleaved_retrieval",
+        other => other,
+    };
+
+    match normalized {
+        "anchored_micro_theory" => {
+            let title = map.get("title").and_then(|v| v.as_str()).unwrap_or("Concepto Clave").to_string();
+            let intuitive_hook = map.get("intuitiveHook").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let system_rule = map.get("systemRule").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let frequent_error = map.get("frequentError").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let analogy_boundary = map.get("analogyBoundary").and_then(|v| v.as_str()).map(String::from);
+            Some(PublishedBlock {
+                block: GeneratedSectionBlock::AnchoredMicroTheory {
+                    title,
+                    intuitive_hook,
+                    analogy_boundary,
+                    system_rule,
+                    frequent_error,
+                },
+                mechanical_template: false,
+            })
+        }
+        "hands_on_mission" => {
+            let challenge_statement = map.get("challengeStatement").and_then(|v| v.as_str()).unwrap_or("Misión práctica").to_string();
+            let expected_milestone_artifact = map.get("expectedMilestoneArtifact").and_then(|v| v.as_str()).unwrap_or("Artefacto de solución completado").to_string();
+            let constraints = map.get("constraints").and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let scaffolding_hints = map.get("scaffoldingHints").or_else(|| map.get("hints")).and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+            let evaluation_rubric_summary = map.get("evaluationRubricSummary").and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+                .unwrap_or_else(|| vec!["Completitud del artefacto".to_string(), "Cumplimiento de restricciones".to_string()]);
+            Some(PublishedBlock {
+                block: GeneratedSectionBlock::HandsOnMission {
+                    challenge_statement,
+                    expected_milestone_artifact,
+                    constraints,
+                    scaffolding_hints,
+                    evaluation_rubric_summary,
+                    is_transfer: false,
+                    support_level: None,
+                    worked_template: None,
+                    interactive_steps: None,
+                    visual_aid: None,
+                },
+                mechanical_template: false,
+            })
+        }
+        "heuristic_error_audit" => {
+            let instruction = map.get("instruction").and_then(|v| v.as_str()).unwrap_or("Audita el siguiente fragmento e identifica el problema conceptual:").to_string();
+            let (context, snippet) = if let Some(fr) = map.get("flawedRepresentation").and_then(|v| v.as_object()) {
+                (
+                    fr.get("context").and_then(|v| v.as_str()).unwrap_or("Contexto del caso").to_string(),
+                    fr.get("buggySnippetOrDiagram").and_then(|v| v.as_str()).unwrap_or("// Código a auditar\n").to_string(),
+                )
+            } else {
+                (
+                    map.get("context").and_then(|v| v.as_str()).unwrap_or("Contexto del caso").to_string(),
+                    map.get("buggySnippetOrDiagram").or_else(|| map.get("flawedArtifact")).or_else(|| map.get("flawedSnippet")).and_then(|v| v.as_str()).unwrap_or("// Código a auditar\n").to_string(),
+                )
+            };
+            Some(PublishedBlock {
+                block: GeneratedSectionBlock::HeuristicErrorAudit {
+                    instruction,
+                    flawed_representation: crate::domain::notebook::FlawedRepresentation {
+                        context,
+                        buggy_snippet_or_diagram: snippet,
+                        error_type: crate::domain::notebook::FlawErrorType::ConceptualMisunderstanding,
+                    },
+                    guiding_questions: vec!["¿Cuál es la causa del error?".to_string(), "¿Cómo lo corregirías?".to_string()],
+                    model_solution: "Solución modelo identificando el error.".to_string(),
+                    faulty_line_number: None,
+                    visual_aid: None,
+                },
+                mechanical_template: false,
+            })
+        }
+        "metacognitive_closure" => {
+            let synthesis_task = map.get("synthesisTask").and_then(|v| v.as_str()).unwrap_or("Reflexión de cierre").to_string();
+            Some(PublishedBlock {
+                block: GeneratedSectionBlock::MetacognitiveClosure {
+                    synthesis_task,
+                    prediction_comparison: crate::domain::notebook::PredictionComparison {
+                        initial_prediction: "Predicción inicial".to_string(),
+                        final_result: "Resultado real observado".to_string(),
+                        contrast_narrative: "Contraste entre lo esperado y lo evidenciado".to_string(),
+                    },
+                    self_evaluation_checklist: vec!["He comprendido los conceptos principales".to_string()],
+                },
+                mechanical_template: false,
+            })
+        }
+        "branching_scenario_challenge" => {
+            let scenario = map.get("scenario").and_then(|v| v.as_str()).unwrap_or("Escenario de decisión").to_string();
+            let decision_point = map.get("decisionPoint").and_then(|v| v.as_str()).unwrap_or("¿Qué camino decides tomar?").to_string();
+            Some(PublishedBlock {
+                block: GeneratedSectionBlock::BranchingScenarioChallenge {
+                    scenario,
+                    decision_point,
+                    branches: vec![
+                        crate::domain::notebook::ScenarioBranch {
+                            choice: "Opción A (Recomendada)".to_string(),
+                            consequence: "Solución con mejores prácticas.".to_string(),
+                            is_optimal: true,
+                        },
+                        crate::domain::notebook::ScenarioBranch {
+                            choice: "Opción B (Alternativa)".to_string(),
+                            consequence: "Efectos secundarios a considerar.".to_string(),
+                            is_optimal: false,
+                        },
+                    ],
+                    visual_aid: None,
+                },
+                mechanical_template: false,
+            })
+        }
+        "interactive_prediction_gate" => {
+            let question = map.get("question").and_then(|v| v.as_str()).unwrap_or("Pregunta de predicción").to_string();
+            let options = map.get("options").and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|x| x.as_str().map(String::from)).collect::<Vec<_>>())
+                .filter(|opts| !opts.is_empty())
+                .unwrap_or_else(|| vec!["Opción A".to_string(), "Opción B".to_string()]);
+            let correct_option = map.get("correctOption").and_then(|v| v.as_str()).unwrap_or(&options[0]).to_string();
+            Some(PublishedBlock {
+                block: GeneratedSectionBlock::InteractivePredictionGate {
+                    question,
+                    options,
+                    conceptual_feedback_map: std::collections::HashMap::new(),
+                    correct_option,
+                    interaction_mode: None,
+                    shuffled_steps: None,
+                    correct_order: None,
+                    boundary_cases: None,
+                    visual_aid: None,
+                },
+                mechanical_template: false,
+            })
+        }
+        "declarative_visual_diagram" => {
+            let title = map.get("title").and_then(|v| v.as_str()).unwrap_or("Diagrama Conceptual").to_string();
+            Some(PublishedBlock {
+                block: GeneratedSectionBlock::DeclarativeVisualDiagram {
+                    title,
+                    visual_aid: crate::domain::notebook::StaticVisualSpec::Mermaid {
+                        chart_type: crate::domain::notebook::MermaidChartType::Flowchart,
+                        code: "graph TD\nA[Inicio] --> B[Fin]".to_string(),
+                        caption: "Diagrama conceptual".to_string(),
+                    },
+                    guided_walkthrough: vec![],
+                },
+                mechanical_template: false,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// A remediation hint shown ONLY on a failed gate attempt (1st or 2nd — the

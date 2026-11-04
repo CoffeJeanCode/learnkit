@@ -229,12 +229,28 @@ body {
 /* Scroll Jump Floating Navigation */
 .scroll-jump-container {
   position: fixed;
-  bottom: 84px;
+  bottom: 72px;
   right: 20px;
-  z-index: 50;
+  z-index: 35;
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+/* When the reward dock table is open, fade out scroll jump so it doesn't obstruct the table panel */
+body:has(.reward-dock.is-open) .scroll-jump-container {
+  opacity: 0;
+  pointer-events: none;
+  transform: scale(0.9);
+}
+
+/* If dev panel is open, shift both reward dock and scroll jump away from the panel */
+body:has(.dev-panel) .reward-dock {
+  right: calc(var(--dev-sidebar-w) + 16px);
+}
+body:has(.dev-panel) .scroll-jump-container {
+  right: calc(var(--dev-sidebar-w) + 20px);
 }
 
 .scroll-jump-btn {
