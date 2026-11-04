@@ -174,8 +174,30 @@ pub fn normalize_block_value(mut value: serde_json::Value) -> serde_json::Value 
     value
 }
 
+fn normalize_visual_aid_object(va: &mut serde_json::Map<String, serde_json::Value>) {
+    if !va.contains_key("renderEngine") {
+        if let Some(engine) = va.remove("diagramType").or_else(|| va.remove("type")) {
+            va.insert("renderEngine".to_string(), engine);
+        } else {
+            va.insert("renderEngine".to_string(), serde_json::json!("mermaid"));
+        }
+    }
+    va.entry("chartType").or_insert_with(|| serde_json::json!("flowchart"));
+    if !va.contains_key("code") {
+        if let Some(c) = va.remove("source").or_else(|| va.remove("spec")) {
+            va.insert("code".to_string(), c);
+        } else {
+            va.insert("code".to_string(), serde_json::json!("graph TD\nA[Inicio] --> B[Fin]"));
+        }
+    }
+    va.entry("caption").or_insert_with(|| serde_json::json!("Diagrama"));
+}
+
 fn ensure_required_block_fields(value: &mut serde_json::Value) {
     let Some(map) = value.as_object_mut() else { return };
+    if let Some(va) = map.get_mut("visualAid").and_then(|v| v.as_object_mut()) {
+        normalize_visual_aid_object(va);
+    }
     let bt = map.get("blockType").and_then(|v| v.as_str()).unwrap_or("").to_string();
     match bt.as_str() {
         "anchored_micro_theory" => {
@@ -189,22 +211,11 @@ fn ensure_required_block_fields(value: &mut serde_json::Value) {
             map.entry("guidedWalkthrough").or_insert_with(|| serde_json::json!([]));
             if !map.contains_key("visualAid") || !map["visualAid"].is_object() {
                 map.insert("visualAid".to_string(), serde_json::json!({
-                    "type": "mermaid",
+                    "renderEngine": "mermaid",
                     "chartType": "flowchart",
                     "code": "graph TD\nA[Inicio] --> B[Fin]",
                     "caption": "Diagrama conceptual"
                 }));
-            } else if let Some(va) = map.get_mut("visualAid").and_then(|v| v.as_object_mut()) {
-                va.entry("type").or_insert_with(|| serde_json::json!("mermaid"));
-                va.entry("chartType").or_insert_with(|| serde_json::json!("flowchart"));
-                if !va.contains_key("code") {
-                    if let Some(spec) = va.remove("spec") {
-                        va.insert("code".to_string(), spec);
-                    } else {
-                        va.insert("code".to_string(), serde_json::json!("graph TD\nA[Inicio] --> B[Fin]"));
-                    }
-                }
-                va.entry("caption").or_insert_with(|| serde_json::json!("Diagrama"));
             }
         }
         "branching_scenario_challenge" => {
@@ -1920,7 +1931,7 @@ mod tests {
         let args: PublishBlockArgs = serde_json::from_value(nested).expect("should unwrap and parse");
         assert!(matches!(args, PublishBlockArgs::Block(GeneratedSectionBlock::AnchoredMicroTheory { .. })));
 
-        let stringified = serde_json::Value::String(r#"{"blockType":"tplOrdering","question":"q","stepsInOrder":["a","b"]}"#.to_string());
+        let stringified = serde_json::Value::String(r#"{"blockType":"tplOrdering","question":"q","stepsInOrder":["a","b","c"]}"#.to_string());
         let args_str: PublishBlockArgs = serde_json::from_value(stringified).expect("should parse stringified json");
         assert!(matches!(args_str, PublishBlockArgs::Template(BlockTemplate::Ordering { .. })));
     }

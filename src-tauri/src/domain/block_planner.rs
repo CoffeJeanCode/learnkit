@@ -251,16 +251,16 @@ pub fn plan_next(i: &PlanInputs<'_>) -> BlockPlan {
     }
     let pick_practice_gate = |avoid: &[DynamicBlockType], last: Option<DynamicBlockType>| -> DynamicBlockType {
         let candidates = [
+            DynamicBlockType::HandsOnMission,
             DynamicBlockType::HeuristicErrorAudit,
             DynamicBlockType::BranchingScenarioChallenge,
-            DynamicBlockType::HandsOnMission,
         ];
         for &c in &candidates {
             if !avoid.contains(&c) && Some(c) != last {
                 return c;
             }
         }
-        candidates.into_iter().find(|&c| Some(c) != last).unwrap_or(DynamicBlockType::HeuristicErrorAudit)
+        candidates.into_iter().find(|&c| Some(c) != last).unwrap_or(DynamicBlockType::HandsOnMission)
     };
 
     // Never stack a third unchecked teaching block: check what was taught.
