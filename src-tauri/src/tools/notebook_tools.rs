@@ -71,15 +71,118 @@ impl From<GeneratedSectionBlock> for PublishBlockArgs {
 impl<'de> Deserialize<'de> for PublishBlockArgs {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error;
-        let value = serde_json::Value::deserialize(deserializer)?;
+        let raw = serde_json::Value::deserialize(deserializer)?;
+        let value = normalize_block_value(raw);
         let is_template = value.get("blockType").and_then(|t| t.as_str()).is_some_and(BlockTemplate::is_template_tag);
         if is_template {
-            let template: BlockTemplate = serde_json::from_value(value).map_err(D::Error::custom)?;
-            template.validate().map_err(D::Error::custom)?;
+            let template: BlockTemplate = serde_json::from_value(value.clone()).map_err(|e| {
+                let bt = value.get("blockType").and_then(|t| t.as_str()).unwrap_or("tpl");
+                D::Error::custom(format!("Error en plantilla '{bt}': {e}. Revisa los parámetros requeridos."))
+            })?;
+            template.validate().map_err(|e| {
+                D::Error::custom(format!("Validación fallida en plantilla: {e}"))
+            })?;
             Ok(Self::Template(template))
         } else {
-            serde_json::from_value(value).map(Self::Block).map_err(D::Error::custom)
+            match serde_json::from_value::<GeneratedSectionBlock>(value.clone()) {
+                Ok(block) => Ok(Self::Block(block)),
+                Err(err) => {
+                    let bt = value.get("blockType").and_then(|t| t.as_str()).unwrap_or("desconocido");
+                    Err(D::Error::custom(format!(
+                        "Error en publish_notebook_block para '{bt}': {err}. Asegúrate de suministrar todos los campos requeridos en camelCase con sus tipos exactos."
+                    )))
+                }
+            }
         }
+    }
+}
+
+/// Normalizes model payloads: unwraps wrapper objects (e.g. `{"arguments": {...}}`),
+/// parses stringified JSON, standardizes `blockType` casing to snake_case, and
+/// coerces string numbers to numeric JSON values.
+pub fn normalize_block_value(mut value: serde_json::Value) -> serde_json::Value {
+    // 1. If wrapped in stringified JSON, parse it
+    if let serde_json::Value::String(ref s) = value {
+        let trimmed = s.trim();
+        if (trimmed.starts_with('{') && trimmed.ends_with('}'))
+            || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                value = parsed;
+            }
+        }
+    }
+
+    // 2. Unwrap wrapper objects {"arguments": ...}, {"block": ...}, {"parameters": ...}, {"payload": ...}, {"data": ...}
+    for key in ["arguments", "block", "parameters", "payload", "data"] {
+        if let Some(inner) = value.get(key) {
+            if inner.is_object() {
+                value = inner.clone();
+                break;
+            } else if let Some(s) = inner.as_str() {
+                let trimmed = s.trim();
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    value = parsed;
+                    break;
+                }
+            }
+        }
+    }
+
+    // 3. Normalize blockType casing to snake_case
+    if let Some(bt) = value.get("blockType").and_then(|v| v.as_str()).map(str::to_string) {
+        let normalized = match bt.as_str() {
+            "anchoredMicroTheory" | "anchored-micro-theory" => "anchored_micro_theory",
+            "spacedInterleavedRetrieval" | "spaced-interleaved-retrieval" => "spaced_interleaved_retrieval",
+            "declarativeVisualDiagram" | "declarative-visual-diagram" => "declarative_visual_diagram",
+            "branchingScenarioChallenge" | "branching-scenario-challenge" => "branching_scenario_challenge",
+            "heuristicErrorAudit" | "heuristic-error-audit" => "heuristic_error_audit",
+            "interactivePredictionGate" | "interactive-prediction-gate" => "interactive_prediction_gate",
+            "handsOnMission" | "hands-on-mission" => "hands_on_mission",
+            "metacognitiveClosure" | "metacognitive-closure" => "metacognitive_closure",
+            "tplMultipleChoice" | "tpl-multiple-choice" => "tpl_multiple_choice",
+            "tplTrueFalse" | "tpl-true-false" => "tpl_true_false",
+            "tplOrdering" | "tpl-ordering" => "tpl_ordering",
+            "tplScenarioChoice" | "tpl-scenario-choice" => "tpl_scenario_choice",
+            "tplQuickRecall" | "tpl-quick-recall" => "tpl_quick_recall",
+            "tplTheory" | "tpl-theory" => "tpl_theory",
+            "tplBoundaryCases" | "tpl-boundary-cases" => "tpl_boundary_cases",
+            other => other,
+        };
+        if normalized != bt {
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("blockType".to_string(), serde_json::Value::String(normalized.to_string()));
+            }
+        }
+    }
+
+    // 4. Coerce common stringified numeric fields to numbers to prevent Serde rejection
+    coerce_numeric_fields(&mut value);
+
+    value
+}
+
+fn coerce_numeric_fields(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                if k == "stepNumber" || k == "faultyLineNumber" || k == "durationMinutes" || k == "targetStep" {
+                    if let serde_json::Value::String(s) = v {
+                        if let Ok(num) = s.trim().parse::<i64>() {
+                            *v = serde_json::Value::Number(num.into());
+                        }
+                    }
+                } else {
+                    coerce_numeric_fields(v);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                coerce_numeric_fields(item);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1326,5 +1429,46 @@ mod tests {
         ```"#;
         let extracted_tpl = extract_block_from_text(tpl_str).expect("template block should extract");
         assert!(extracted_tpl.mechanical_template);
+    }
+
+    #[test]
+    fn normalize_block_value_unwraps_arguments_and_normalizes_casing() {
+        let nested = serde_json::json!({
+            "arguments": {
+                "blockType": "anchoredMicroTheory",
+                "title": "Prueba",
+                "intuitiveHook": "Gancho",
+                "systemRule": "Regla",
+                "frequentError": "Error"
+            }
+        });
+        let args: PublishBlockArgs = serde_json::from_value(nested).expect("should unwrap and parse");
+        assert!(matches!(args, PublishBlockArgs::Block(GeneratedSectionBlock::AnchoredMicroTheory { .. })));
+
+        let stringified = serde_json::json!("{"blockType":"tplOrdering","question":"q","stepsInOrder":["a","b"]}");
+        let args_str: PublishBlockArgs = serde_json::from_value(stringified).expect("should parse stringified json");
+        assert!(matches!(args_str, PublishBlockArgs::Template(BlockTemplate::Ordering { .. })));
+    }
+
+    #[test]
+    fn deserialize_coerces_string_numbers() {
+        let json_with_str_num = serde_json::json!({
+            "blockType": "declarative_visual_diagram",
+            "title": "Diagrama",
+            "visualAid": {
+                "diagramType": "mermaid",
+                "chartType": "flowchart",
+                "source": "graph TD; A-->B;"
+            },
+            "guidedWalkthrough": [
+                {
+                    "stepNumber": "1",
+                    "targetVisualElement": "A",
+                    "pedagogicalInsight": "Insight"
+                }
+            ]
+        });
+        let args: PublishBlockArgs = serde_json::from_value(json_with_str_num).expect("should coerce string stepNumber");
+        assert!(matches!(args, PublishBlockArgs::Block(GeneratedSectionBlock::DeclarativeVisualDiagram { .. })));
     }
 }

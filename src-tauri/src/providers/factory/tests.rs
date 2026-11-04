@@ -231,9 +231,9 @@
     #[test]
     fn block_call_params_default_and_clamp() {
         let d = BlockCallParams::resolve(None, None, None);
-        assert_eq!((d.max_turns, d.timeout_secs, d.require_tool), (6, 420, true));
+        assert_eq!((d.max_turns, d.timeout_secs, d.require_tool), (10, 420, true));
         let o = BlockCallParams::resolve(Some("600"), Some("50"), Some(" auto "));
-        assert_eq!((o.max_turns, o.timeout_secs, o.require_tool), (10, 600, false));
+        assert_eq!((o.max_turns, o.timeout_secs, o.require_tool), (16, 600, false));
         let bad = BlockCallParams::resolve(Some("x"), Some("0"), Some("required"));
         assert_eq!((bad.max_turns, bad.timeout_secs, bad.require_tool), (1, 420, true));
     }

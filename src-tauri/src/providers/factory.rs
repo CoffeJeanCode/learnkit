@@ -59,14 +59,14 @@ struct BlockCallParams {
 }
 
 impl BlockCallParams {
-    const DEFAULT_MAX_TURNS: usize = 6;
+    const DEFAULT_MAX_TURNS: usize = 10;
     const DEFAULT_TIMEOUT_SECS: u64 = 420;
 
     fn resolve(timeout: Option<&str>, turns: Option<&str>, tool_choice: Option<&str>) -> Self {
         Self {
             max_turns: turns
                 .and_then(|v| v.trim().parse::<usize>().ok())
-                .map(|v| v.clamp(1, 10))
+                .map(|v| v.clamp(1, 16))
                 .unwrap_or(Self::DEFAULT_MAX_TURNS),
             timeout_secs: timeout
                 .and_then(|v| v.trim().parse::<u64>().ok())
@@ -509,11 +509,15 @@ impl ProviderFactory {
         // since the model sees each result before deciding the next call —
         // plus a final turn, or Rig aborts with `MaxTurnsError` before the
         // last call ever happens.
-        const DIAGNOSTIC_MAX_TURNS: usize = 6;
+        let diagnostic_max_turns = std::env::var("LEARNKIT_DIAGNOSTIC_MAX_TURNS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .map(|v| v.clamp(1, 16))
+            .unwrap_or(10);
         let timeout_secs = diagnostic_timeout_secs(scope);
         let text = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
-            agent.prompt(input).max_turns(DIAGNOSTIC_MAX_TURNS).add_hook(hook),
+            agent.prompt(input).max_turns(diagnostic_max_turns).add_hook(hook),
         )
         .await
         .map_err(|_| AppError::Timeout(format!("el proveedor no respondió en {timeout_secs}s")))?;
@@ -825,7 +829,7 @@ impl ProviderFactory {
             ResearchStep::Outline => base.tool(SubmitPlanOutlineTool(capture)).build(),
             ResearchStep::Week => base.tool(SubmitWeekSessionsTool(capture)).build(),
         };
-        const RESEARCH_MAX_TURNS: usize = 4;
+        const RESEARCH_MAX_TURNS: usize = 6;
         let text = tokio::time::timeout(
             std::time::Duration::from_secs(prompt_timeout_secs()),
             agent.prompt(input).max_turns(RESEARCH_MAX_TURNS).add_hook(hook),
@@ -942,7 +946,7 @@ impl ProviderFactory {
             builder = builder.additional_params(extra);
         }
         let agent = builder.build();
-        const GATE_GRADING_MAX_TURNS: usize = 2;
+        const GATE_GRADING_MAX_TURNS: usize = 4;
         let text = tokio::time::timeout(
             std::time::Duration::from_secs(prompt_timeout_secs()),
             agent.prompt(input).max_turns(GATE_GRADING_MAX_TURNS).add_hook(hook),
@@ -1051,7 +1055,7 @@ impl ProviderFactory {
             builder = builder.additional_params(extra);
         }
         let agent = builder.build();
-        const CLOSURE_GRADING_MAX_TURNS: usize = 4;
+        const CLOSURE_GRADING_MAX_TURNS: usize = 6;
         let text = tokio::time::timeout(
             std::time::Duration::from_secs(prompt_timeout_secs()),
             agent.prompt(input).max_turns(CLOSURE_GRADING_MAX_TURNS).add_hook(hook),
@@ -1153,7 +1157,7 @@ impl ProviderFactory {
             builder = builder.additional_params(extra);
         }
         let agent = builder.build();
-        const BLOCK_AUDIT_MAX_TURNS: usize = 4;
+        const BLOCK_AUDIT_MAX_TURNS: usize = 6;
         let text = tokio::time::timeout(
             std::time::Duration::from_secs(prompt_timeout_secs()),
             agent.prompt(input).max_turns(BLOCK_AUDIT_MAX_TURNS).add_hook(hook),
