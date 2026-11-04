@@ -3305,16 +3305,21 @@ body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16p
 .notebook-block-wrapper[data-emphasis="practice"] .block-question,
 .notebook-block-wrapper[data-emphasis="practice"] .block-challenge { font-size: 1.04em; }
 .notebook-block-wrapper[data-emphasis="visual"] .static-visual { padding: 4px; background: var(--paper-deep); border-radius: var(--squircle-sm); corner-shape: squircle; }
-@media (min-width: 900px) {
-  /* Figure beside the text, only when the block has one. */
-  .notebook-block-wrapper[data-layout="split"] .notebook-block-body:has(> .static-visual) {
-    display: grid;
-    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
-    column-gap: 20px;
-    align-items: start;
-  }
-  .notebook-block-wrapper[data-layout="split"] .notebook-block-body:has(> .static-visual) > .static-visual { grid-column: 1; grid-row: 1 / span 8; }
-  .notebook-block-wrapper[data-layout="split"] .notebook-block-body:has(> .static-visual) > :not(.static-visual) { grid-column: 2; }
+/* Ensure blocks and their figures always flow vertically without dead whitespace.
+   Wide tables (conceptual_matrix), diagrams, and interactive widgets (CaseWiring,
+   code editors, cloze steps) require full card width and must not be forced into an
+   asymmetric 2-column split that leaves large empty voids below short horizontal visuals. */
+.notebook-block-wrapper .notebook-block-body,
+.notebook-block-wrapper[data-layout="split"] .notebook-block-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+}
+.notebook-block-wrapper .static-visual,
+.notebook-block-wrapper[data-layout="split"] .notebook-block-body > .static-visual {
+  width: 100%;
+  max-width: 100%;
 }
 
 
