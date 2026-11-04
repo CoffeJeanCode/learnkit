@@ -150,11 +150,16 @@ impl BlockStreamHook {
 
     pub fn accumulated_text(&self) -> String {
         let st = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        if !st.text.is_empty() {
-            st.text.clone()
-        } else {
+        if !st.args.is_empty() {
             st.args.clone()
+        } else {
+            st.text.clone()
         }
+    }
+
+    pub fn accumulated_args(&self) -> String {
+        let st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        st.args.clone()
     }
 
     fn on_args_fragment(&self, fragment: &str, now: Instant) {

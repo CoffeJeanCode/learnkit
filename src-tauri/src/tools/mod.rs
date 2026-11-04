@@ -1,6 +1,7 @@
 pub mod block_stream;
 pub mod echo;
 pub mod hooks;
+pub mod json_repair;
 pub mod notebook_tools;
 pub mod partial_json;
 pub mod plan_part_tools;
@@ -16,6 +17,7 @@ use tauri::Emitter;
 use crate::domain::message::AgentEvent;
 
 pub use echo::EchoTool;
+pub use json_repair::{parse_repaired_json, parse_repaired_value, repair_json};
 pub use notebook_tools::{
     extract_block_from_text, BlockAuditCapture, BlockAuditResult, ClosureFeedbackCapture, ClosureFeedbackResult, GateGradingCapture, GateGradingResult,
     GateScaffold, GradeClosureSubmissionTool, GradeGateSubmissionTool, NotebookBlockCapture, PublishedBlock, PublishNotebookBlockTool,

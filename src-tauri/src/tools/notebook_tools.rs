@@ -101,13 +101,16 @@ impl<'de> Deserialize<'de> for PublishBlockArgs {
 /// parses stringified JSON, standardizes `blockType` casing to snake_case, and
 /// coerces string numbers to numeric JSON values.
 pub fn normalize_block_value(mut value: serde_json::Value) -> serde_json::Value {
-    // 1. If wrapped in stringified JSON, parse it
+    // 1. If wrapped in stringified JSON, parse it (with fault-tolerant auto-repair)
     if let serde_json::Value::String(ref s) = value {
         let trimmed = s.trim();
         if (trimmed.starts_with('{') && trimmed.ends_with('}'))
             || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+            || trimmed.contains('{')
         {
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                value = parsed;
+            } else if let Ok(parsed) = crate::tools::json_repair::parse_repaired_value(trimmed) {
                 value = parsed;
             }
         }
@@ -122,6 +125,9 @@ pub fn normalize_block_value(mut value: serde_json::Value) -> serde_json::Value 
             } else if let Some(s) = inner.as_str() {
                 let trimmed = s.trim();
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                    value = parsed;
+                    break;
+                } else if let Ok(parsed) = crate::tools::json_repair::parse_repaired_value(trimmed) {
                     value = parsed;
                     break;
                 }
@@ -159,7 +165,118 @@ pub fn normalize_block_value(mut value: serde_json::Value) -> serde_json::Value 
     // 4. Coerce common stringified numeric fields to numbers to prevent Serde rejection
     coerce_numeric_fields(&mut value);
 
+    // 5. Ensure required block fields for truncated or incomplete payloads
+    ensure_required_block_fields(&mut value);
+
     value
+}
+
+fn ensure_required_block_fields(value: &mut serde_json::Value) {
+    let Some(map) = value.as_object_mut() else { return };
+    let bt = map.get("blockType").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    match bt.as_str() {
+        "anchored_micro_theory" => {
+            map.entry("title").or_insert_with(|| serde_json::json!("Concepto Clave"));
+            map.entry("intuitiveHook").or_insert_with(|| serde_json::json!(""));
+            map.entry("systemRule").or_insert_with(|| serde_json::json!(""));
+            map.entry("frequentError").or_insert_with(|| serde_json::json!(""));
+        }
+        "declarative_visual_diagram" => {
+            map.entry("title").or_insert_with(|| serde_json::json!("Diagrama"));
+            map.entry("guidedWalkthrough").or_insert_with(|| serde_json::json!([]));
+            map.entry("visualAid").or_insert_with(|| {
+                serde_json::json!({
+                    "type": "mermaid",
+                    "chartType": "flowchart_td",
+                    "spec": "graph TD\nA[Inicio] --> B[Fin]"
+                })
+            });
+        }
+        "branching_scenario_challenge" => {
+            map.entry("scenario").or_insert_with(|| serde_json::json!(""));
+            map.entry("decisionPoint").or_insert_with(|| serde_json::json!(""));
+            map.entry("branches").or_insert_with(|| serde_json::json!([]));
+        }
+        "heuristic_error_audit" => {
+            map.entry("artifactType").or_insert_with(|| serde_json::json!("código"));
+            map.entry("instruction").or_insert_with(|| serde_json::json!(""));
+            map.entry("flawedArtifact").or_insert_with(|| serde_json::json!(""));
+            map.entry("errorType").or_insert_with(|| serde_json::json!(""));
+            map.entry("correctVersion").or_insert_with(|| serde_json::json!(""));
+        }
+        "interactive_prediction_gate" => {
+            map.entry("question").or_insert_with(|| serde_json::json!(""));
+            if !map.contains_key("options") || !map["options"].is_array() || map["options"].as_array().unwrap().is_empty() {
+                map.insert("options".to_string(), serde_json::json!(["Opción A", "Opción B"]));
+            }
+            if !map.contains_key("correctOption") || map["correctOption"].as_str().unwrap_or("").is_empty() {
+                let first_opt = map["options"].as_array().and_then(|a| a.first()).and_then(|v| v.as_str()).unwrap_or("Opción A");
+                map.insert("correctOption".to_string(), serde_json::json!(first_opt));
+            }
+            map.entry("conceptualFeedbackMap").or_insert_with(|| serde_json::json!({}));
+            map.entry("boundaryCases").or_insert_with(|| serde_json::json!([]));
+        }
+        "hands_on_mission" => {
+            map.entry("challengeStatement").or_insert_with(|| serde_json::json!(""));
+            map.entry("supportLevel").or_insert_with(|| serde_json::json!("guided"));
+            map.entry("isTransfer").or_insert_with(|| serde_json::json!(false));
+            map.entry("constraints").or_insert_with(|| serde_json::json!([]));
+            map.entry("verificationChecklist").or_insert_with(|| serde_json::json!([]));
+            map.entry("interactiveSteps").or_insert_with(|| serde_json::json!([]));
+            map.entry("hints").or_insert_with(|| serde_json::json!([]));
+        }
+        "metacognitive_closure" => {
+            map.entry("synthesisTask").or_insert_with(|| serde_json::json!("Reflexión de cierre"));
+            map.entry("selfEvaluationChecklist").or_insert_with(|| serde_json::json!(["He comprendido los conceptos principales"]));
+        }
+        "spaced_interleaved_retrieval" => {
+            map.entry("items").or_insert_with(|| serde_json::json!([]));
+        }
+        "tpl_theory" => {
+            map.entry("title").or_insert_with(|| serde_json::json!("Concepto Clave"));
+            map.entry("intuitiveHook").or_insert_with(|| serde_json::json!(""));
+            map.entry("systemRule").or_insert_with(|| serde_json::json!(""));
+            map.entry("frequentError").or_insert_with(|| serde_json::json!(""));
+        }
+        "tpl_multiple_choice" => {
+            map.entry("question").or_insert_with(|| serde_json::json!(""));
+            if !map.contains_key("options") || !map["options"].is_array() || map["options"].as_array().unwrap().is_empty() {
+                map.insert("options".to_string(), serde_json::json!(["Opción A", "Opción B"]));
+            }
+            if !map.contains_key("correctOption") {
+                map.insert("correctOption".to_string(), serde_json::json!("Opción A"));
+            }
+            map.entry("explanation").or_insert_with(|| serde_json::json!(""));
+        }
+        "tpl_true_false" => {
+            map.entry("statement").or_insert_with(|| serde_json::json!(""));
+            map.entry("isTrue").or_insert_with(|| serde_json::json!(true));
+            map.entry("explanation").or_insert_with(|| serde_json::json!(""));
+        }
+        "tpl_ordering" => {
+            map.entry("question").or_insert_with(|| serde_json::json!(""));
+            map.entry("stepsInOrder").or_insert_with(|| serde_json::json!(["Paso 1", "Paso 2"]));
+            map.entry("explanation").or_insert_with(|| serde_json::json!(""));
+        }
+        "tpl_boundary_cases" => {
+            map.entry("question").or_insert_with(|| serde_json::json!(""));
+            map.entry("boundaryCases").or_insert_with(|| serde_json::json!([]));
+        }
+        "tpl_scenario_choice" => {
+            map.entry("scenario").or_insert_with(|| serde_json::json!(""));
+            map.entry("decisionPoint").or_insert_with(|| serde_json::json!(""));
+            if !map.contains_key("options") || !map["options"].is_array() || map["options"].as_array().unwrap().is_empty() {
+                map.insert("options".to_string(), serde_json::json!(["Opción A", "Opción B"]));
+            }
+            map.entry("correctOption").or_insert_with(|| serde_json::json!("Opción A"));
+            map.entry("explanation").or_insert_with(|| serde_json::json!(""));
+        }
+        "tpl_quick_recall" => {
+            map.entry("prompt").or_insert_with(|| serde_json::json!(""));
+            map.entry("expectedAnswer").or_insert_with(|| serde_json::json!(""));
+        }
+        _ => {}
+    }
 }
 
 fn coerce_numeric_fields(value: &mut serde_json::Value) {
@@ -268,19 +385,25 @@ pub fn extract_block_from_text(text: &str) -> Option<PublishedBlock> {
         return Some(args.into_published());
     }
 
+    // 1b. Try auto-repaired JSON on trimmed text
+    if let Ok(args) = crate::tools::json_repair::parse_repaired_json::<PublishBlockArgs>(trimmed) {
+        let args = repair_double_escaped(args);
+        return Some(args.into_published());
+    }
+
     // 2. Check for <tool_call>...</tool_call> tags (common in raw tool-calling outputs).
     if let Some(start) = text.find("<tool_call>") {
         let after = &text[start + "<tool_call>".len()..];
         if let Some(end) = after.find("</tool_call>") {
             let inner = after[..end].trim();
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(inner) {
+            if let Ok(val) = crate::tools::json_repair::parse_repaired_value(inner) {
                 if let Some(args_val) = val.get("arguments") {
                     if let Ok(args) = serde_json::from_value::<PublishBlockArgs>(args_val.clone()) {
                         let args = repair_double_escaped(args);
                         return Some(args.into_published());
                     }
                     if let Some(args_str) = args_val.as_str() {
-                        if let Ok(args) = serde_json::from_str::<PublishBlockArgs>(args_str) {
+                        if let Ok(args) = crate::tools::json_repair::parse_repaired_json::<PublishBlockArgs>(args_str) {
                             let args = repair_double_escaped(args);
                             return Some(args.into_published());
                         }
@@ -305,21 +428,29 @@ pub fn extract_block_from_text(text: &str) -> Option<PublishedBlock> {
         };
         if let Some(end_fence) = text[content_start..].find("```") {
             let candidate = text[content_start..content_start + end_fence].trim();
-            if candidate.contains("\"blockType\"") {
-                if let Ok(args) = serde_json::from_str::<PublishBlockArgs>(candidate) {
+            if candidate.contains("blockType") {
+                if let Ok(args) = crate::tools::json_repair::parse_repaired_json::<PublishBlockArgs>(candidate) {
                     let args = repair_double_escaped(args);
                     return Some(args.into_published());
                 }
             }
             cursor = content_start + end_fence + 3;
         } else {
+            // Cut-off code fence at EOF!
+            let candidate = text[content_start..].trim();
+            if candidate.contains("blockType") {
+                if let Ok(args) = crate::tools::json_repair::parse_repaired_json::<PublishBlockArgs>(candidate) {
+                    let args = repair_double_escaped(args);
+                    return Some(args.into_published());
+                }
+            }
             break;
         }
     }
 
-    // 4. Scan for balanced JSON object containing "blockType".
+    // 4. Scan for balanced OR truncated JSON object containing "blockType".
     let mut search_idx = 0;
-    while let Some(rel_bt) = text[search_idx..].find("\"blockType\"") {
+    while let Some(rel_bt) = text[search_idx..].find("blockType") {
         let bt_idx = search_idx + rel_bt;
         if let Some(open_rel) = text[..bt_idx].rfind('{') {
             let mut depth = 0;
@@ -354,13 +485,28 @@ pub fn extract_block_from_text(text: &str) -> Option<PublishedBlock> {
             }
             if let Some(end) = close_idx {
                 let candidate = &text[open_rel..=end];
-                if let Ok(args) = serde_json::from_str::<PublishBlockArgs>(candidate) {
+                if let Ok(args) = crate::tools::json_repair::parse_repaired_json::<PublishBlockArgs>(candidate) {
+                    let args = repair_double_escaped(args);
+                    return Some(args.into_published());
+                }
+            } else {
+                // Truncated object at EOF! (The exact "EOF while parsing an object at line 1 column ..." error)
+                let candidate = &text[open_rel..];
+                if let Ok(args) = crate::tools::json_repair::parse_repaired_json::<PublishBlockArgs>(candidate) {
                     let args = repair_double_escaped(args);
                     return Some(args.into_published());
                 }
             }
         }
-        search_idx = bt_idx + "\"blockType\"".len();
+        search_idx = bt_idx + "blockType".len();
+    }
+
+    // 5. Final fallback: try partial_json::parse_partial on the text
+    if let Some(partial_val) = crate::tools::partial_json::parse_partial(trimmed) {
+        if let Ok(args) = serde_json::from_value::<PublishBlockArgs>(partial_val) {
+            let args = repair_double_escaped(args);
+            return Some(args.into_published());
+        }
     }
 
     None

@@ -708,9 +708,23 @@ impl ProviderFactory {
                 if matches!(*e, PromptError::PromptCancelled { ref reason, .. } if reason == STOP_REASON) => {}
             Err(e) => {
                 if capture.lock().unwrap_or_else(|err| err.into_inner()).is_none() {
+                    let args = hook_clone.accumulated_args();
+                    if !args.is_empty() {
+                        if let Some(published) = crate::tools::extract_block_from_text(&args) {
+                            tracing::info!("salvaged block from streamed tool args on error");
+                            *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(published);
+                            return Ok(PromptOutput { text: String::new(), tool_calls: vec!["publish_notebook_block".to_string()] });
+                        }
+                    }
                     let text = hook_clone.accumulated_text();
                     if let Some(published) = crate::tools::extract_block_from_text(&text) {
                         tracing::info!("salvaged block from streamed text output on error");
+                        *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(published);
+                        return Ok(PromptOutput { text: String::new(), tool_calls: vec!["publish_notebook_block".to_string()] });
+                    }
+                    let err_str = e.to_string();
+                    if let Some(published) = crate::tools::extract_block_from_text(&err_str) {
+                        tracing::info!("salvaged block from stream error message");
                         *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(published);
                         return Ok(PromptOutput { text: String::new(), tool_calls: vec!["publish_notebook_block".to_string()] });
                     }
@@ -719,10 +733,19 @@ impl ProviderFactory {
             }
         }
         if capture.lock().unwrap_or_else(|err| err.into_inner()).is_none() {
-            let text = hook_clone.accumulated_text();
-            if let Some(published) = crate::tools::extract_block_from_text(&text) {
-                tracing::info!("salvaged block from streamed text output");
-                *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(published);
+            let args = hook_clone.accumulated_args();
+            if !args.is_empty() {
+                if let Some(published) = crate::tools::extract_block_from_text(&args) {
+                    tracing::info!("salvaged block from streamed tool args");
+                    *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(published);
+                }
+            }
+            if capture.lock().unwrap_or_else(|err| err.into_inner()).is_none() {
+                let text = hook_clone.accumulated_text();
+                if let Some(published) = crate::tools::extract_block_from_text(&text) {
+                    tracing::info!("salvaged block from streamed text output");
+                    *capture.lock().unwrap_or_else(|err| err.into_inner()) = Some(published);
+                }
             }
         }
         Ok(PromptOutput { text: String::new(), tool_calls: vec!["publish_notebook_block".to_string()] })

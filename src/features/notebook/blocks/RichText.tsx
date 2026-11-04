@@ -68,7 +68,7 @@ export function cleanToolAndXmlArtifacts(text: string): string {
         }
       }
     } catch {
-      const match = s.match(/"(?:content|feedback)"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      const match = s.match(/"(?:content|feedback|scaffold|rationale)"\s*:\s*"((?:[^"\\]|\\.)*)/);
       if (match && match[1]) {
         try {
           s = JSON.parse(`"${match[1]}"`);

@@ -498,7 +498,11 @@ fn unwrap_json_payload(text: &str) -> Option<String> {
     }
 
     let candidate = &trimmed[first..=last];
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(candidate) {
+    let val_opt = serde_json::from_str::<serde_json::Value>(candidate)
+        .ok()
+        .or_else(|| crate::tools::json_repair::parse_repaired_value(candidate).ok());
+
+    if let Some(val) = val_opt {
         let target = val.get("arguments").unwrap_or(&val);
         if let Some(c) = target.get("content").and_then(|v| v.as_str()) {
             return Some(c.to_string());
@@ -510,7 +514,10 @@ fn unwrap_json_payload(text: &str) -> Option<String> {
             if let Some(c) = sc.get("content").and_then(|v| v.as_str()) {
                 return Some(c.to_string());
             } else if let Some(s) = sc.as_str() {
-                if let Ok(nested) = serde_json::from_str::<serde_json::Value>(s) {
+                let nested_opt = serde_json::from_str::<serde_json::Value>(s)
+                    .ok()
+                    .or_else(|| crate::tools::json_repair::parse_repaired_value(s).ok());
+                if let Some(nested) = nested_opt {
                     if let Some(c) = nested.get("content").and_then(|v| v.as_str()) {
                         return Some(c.to_string());
                     }

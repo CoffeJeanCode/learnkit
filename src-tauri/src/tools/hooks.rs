@@ -145,8 +145,36 @@ where
         if matches!(action, ToolCallAction::Skip(_)) {
             tracing::warn!(event = TRUNCATED_EVENT, tool = event.tool_name, "repeated tool call skipped: capture already complete");
             crate::dev_trace::trace_note("agent", "tool_loop", event.tool_name, TRUNCATED_EVENT, &[]);
+            return action;
+        }
+        // Self-repair malformed tool arguments if needed
+        if serde_json::from_str::<serde_json::Value>(event.args).is_err() {
+            if let Ok(repaired_val) = crate::tools::json_repair::parse_repaired_value(event.args) {
+                tracing::info!(tool = event.tool_name, "auto-repaired tool arguments before execution");
+                return ToolCallAction::Rewrite(repaired_val);
+            }
         }
         action
+    }
+
+    async fn on_invalid_tool_call(
+        &self,
+        _ctx: &HookContext,
+        event: &rig_agent::agent::InvalidToolCallContext,
+    ) -> Option<rig_agent::agent::InvalidToolCallAction> {
+        let normalized = event.tool_name.to_lowercase().replace('-', "_");
+        if normalized == "publish_notebook_block"
+            || normalized == "publishnotebookblock"
+            || normalized == "publish_block"
+            || normalized == "publishblock"
+            || normalized == "notebook_block"
+        {
+            tracing::info!(emitted = event.tool_name, "repairing invalid tool name to publish_notebook_block");
+            return Some(rig_agent::agent::InvalidToolCallAction::Repair {
+                tool_name: "publish_notebook_block".to_string(),
+            });
+        }
+        None
     }
 
     async fn on_tool_result(&self, _ctx: &HookContext, _event: ToolResultEvent<'_>) -> ToolResultAction {
