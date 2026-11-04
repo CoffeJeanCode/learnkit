@@ -24,9 +24,9 @@ function time(ms: number): string {
   return new Date(ms).toLocaleTimeString();
 }
 
-function Section({ title, text }: { title: string; text: string }) {
+function Section({ title, text, defaultOpen }: { title: string; text: string; defaultOpen?: boolean }) {
   return (
-    <details className="dev-section">
+    <details className="dev-section" open={defaultOpen}>
       <summary onClick={keepSelectionOnClick}>
         {title} <span className="muted">({text.length.toLocaleString()} car.)</span>
       </summary>
@@ -74,7 +74,16 @@ function Row({ item }: { item: TimelineItem }) {
         {e.toolCalls && e.toolCalls.length > 0 && <p className="hint">Tools declaradas: {e.toolCalls.join(", ")}</p>}
         {e.systemPrompt && <Section title="System prompt" text={e.systemPrompt} />}
         {e.input && <Section title="Input (prompt del turno)" text={e.input} />}
-        {e.output && <Section title="Salida del modelo" text={e.output} />}
+        {e.output && (
+          <Section
+            title={e.kind === "usage" ? "Salida del modelo (este turno)" : "Salida del modelo"}
+            text={e.output}
+            defaultOpen={e.kind === "usage"}
+          />
+        )}
+        {e.kind === "usage" && !e.output && (
+          <p className="hint hint-warn">Sin salida de texto ni herramientas en este turno.</p>
+        )}
         {e.toolArgs !== undefined && <Section title={`Argumentos${e.tool ? ` · ${e.tool}` : ""}`} text={pretty(e.toolArgs)} />}
         {tools.map((t) => (
           <div key={t.id} className="dev-tool">

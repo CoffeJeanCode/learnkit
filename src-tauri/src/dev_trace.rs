@@ -212,6 +212,20 @@ pub fn trace_note(kind: &str, flow: &str, scope: &str, verdict: &str, notes: &[S
     record(entry);
 }
 
+/// A model turn usage entry with token metrics and actual turn output.
+pub fn trace_usage(flow: &str, scope: &str, verdict: &str, notes: &[String], output: Option<&str>) {
+    if !is_enabled() {
+        return;
+    }
+    let mut entry = TraceEntry::new("usage");
+    entry.flow = Some(flow.to_string());
+    entry.scope = Some(scope.to_string());
+    entry.verdict = Some(verdict.to_string());
+    entry.notes = notes.to_vec();
+    entry.output = output.map(|s| s.to_string());
+    record(entry);
+}
+
 /// Redacts secrets and bounds every free-text field. Runs on every recorded
 /// entry, so callers can't forget it.
 fn scrub(entry: &mut TraceEntry) {

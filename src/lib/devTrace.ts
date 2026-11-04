@@ -5,7 +5,7 @@
 export interface DevTraceEntry {
   id: number;
   tsMs: number;
-  /** `agent_run | tool_call | retry | critique | loop_result` */
+  /** `agent_run | tool_call | retry | critique | loop_result | usage` */
   kind: string;
   flow?: string;
   scope?: string;

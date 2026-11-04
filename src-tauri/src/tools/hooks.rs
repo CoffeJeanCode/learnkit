@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use rig_agent::agent::{AgentHook, HookContext, ModelTurnAction, ModelTurnFinished, ToolCall, ToolCallAction, ToolResultAction, ToolResultEvent};
 use rig_agent::completion::PromptError;
 use rig_core::completion::Usage;
+use rig_core::message::{AssistantContent, ReasoningContent};
 
 use crate::tools::roadmap_tools::{DiagnosticToolScope, RoadmapCapture};
 
@@ -22,6 +23,64 @@ const ALREADY_CAPTURED_FEEDBACK: &str = "ya registrado; no repitas la herramient
 
 /// Stable event name for the per-turn token usage record.
 const USAGE_EVENT: &str = "model_turn_usage";
+
+/// Formats turn content (text, reasoning, tool calls) into human-readable output
+/// for the developer trace inspector.
+pub fn format_turn_output(content: &[AssistantContent]) -> Option<String> {
+    let mut parts = Vec::new();
+    for item in content {
+        match item {
+            AssistantContent::Text(t) => {
+                let text = t.text.trim();
+                if !text.is_empty() {
+                    parts.push(text.to_string());
+                }
+            }
+            AssistantContent::ToolCall(tc) => {
+                let args_str = if let Some(s) = tc.function.arguments.as_str() {
+                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(s) {
+                        serde_json::to_string_pretty(&parsed).unwrap_or_else(|_| s.to_string())
+                    } else {
+                        s.to_string()
+                    }
+                } else {
+                    serde_json::to_string_pretty(&tc.function.arguments)
+                        .unwrap_or_else(|_| tc.function.arguments.to_string())
+                };
+                parts.push(format!("🔧 Tool call: {}(\n{}\n)", tc.function.name, args_str));
+            }
+            AssistantContent::Reasoning(r) => {
+                let mut reasoning_chunks = Vec::new();
+                for c in &r.content {
+                    match c {
+                        ReasoningContent::Text { text, .. } => {
+                            let text = text.trim();
+                            if !text.is_empty() {
+                                reasoning_chunks.push(text.to_string());
+                            }
+                        }
+                        ReasoningContent::Summary(s) => {
+                            let text = s.trim();
+                            if !text.is_empty() {
+                                reasoning_chunks.push(text.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if !reasoning_chunks.is_empty() {
+                    parts.push(format!("💭 Pensamiento:\n{}", reasoning_chunks.join("\n")));
+                }
+            }
+            _ => {}
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n\n"))
+    }
+}
 
 /// Dev-trace note for one model turn's provider-reported usage. Pure so the
 /// format is testable without a model.
@@ -107,7 +166,8 @@ where
             reasoning_tokens = u.reasoning_tokens,
             "model turn finished"
         );
-        crate::dev_trace::trace_note("usage", "tool_loop", "model_turn", USAGE_EVENT, &usage_notes(event.turn, u));
+        let output = format_turn_output(event.content);
+        crate::dev_trace::trace_usage("tool_loop", "model_turn", USAGE_EVENT, &usage_notes(event.turn, u), output.as_deref());
         ModelTurnAction::Continue
     }
 }
