@@ -767,14 +767,12 @@ fn prefetch_cache() -> &'static Mutex<HashMap<(String, String), PrefetchedEntry>
     PREFETCH_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub(crate) fn prefetch_enabled() -> bool {
-    std::env::var("LEARNKIT_PREFETCH").map_or(false, |v| v == "1" || v.eq_ignore_ascii_case("true"))
-}
-
+#[cfg(test)]
 pub(crate) fn prefetch_cache_len() -> usize {
     prefetch_cache().lock().unwrap_or_else(|e| e.into_inner()).len()
 }
 
+#[cfg(test)]
 pub(crate) fn clear_prefetch_cache() {
     prefetch_cache().lock().unwrap_or_else(|e| e.into_inner()).clear();
 }

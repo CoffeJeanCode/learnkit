@@ -443,11 +443,6 @@ pub(super) fn evaluate_diagnostic_battery(battery: &DiagnosticBattery) -> crate:
     report
 }
 
-pub(super) fn diagnostic_battery_violations(battery: &DiagnosticBattery) -> Vec<String> {
-    let report = evaluate_diagnostic_battery(battery);
-    report.criticals().into_iter().map(|f| f.message.clone()).collect()
-}
-
 /// Gate 2's completion condition for Gate 3a to fire: either the student
 /// declared `AbsoluteZero` (the battery is skipped entirely by design — see
 /// `agents::roadmap_agent`'s "COMPORTAMIENTO ANTE NIVEL CERO"), or a battery
