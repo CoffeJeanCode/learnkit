@@ -1643,6 +1643,56 @@ pre.output, .quickrun pre {
 .theory-boundary { font-size: 15px; color: var(--chalk-faint); }
 .theory-error { color: var(--red-chalk); }
 .theory-pause { color: var(--chalk); font-family: var(--font-hand); font-size: 17px; }
+/* The rule's worked example, drawn: indented under the 📐 text it illustrates. */
+.theory-figure { margin: 4px 0 4px 28px; }
+
+/* sequence_strip — something read in pieces: symbol tiles grouped into
+   chunks, the meaning under each chunk; variant rows mark what changed. */
+.seq-strip { display: flex; flex-direction: column; gap: 10px; }
+.seq-title { font-family: var(--font-hand); font-size: 20px; }
+.seq-rows { display: flex; flex-direction: column; gap: 12px; overflow-x: auto; padding-bottom: 2px; }
+.seq-row { display: flex; align-items: flex-start; gap: 12px; }
+.seq-row-label {
+  flex: 0 0 104px;
+  font-family: var(--font-hand);
+  font-size: 18px;
+  color: var(--chalk-soft);
+  padding-top: 6px;
+}
+.seq-chunks { list-style: none; margin: 0; padding: 0; display: flex; gap: 10px; }
+.seq-chunk-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 116px;
+  padding: 6px 6px 8px;
+  background: var(--input);
+  border-radius: var(--squircle-sm);
+  corner-shape: squircle;
+  font-family: var(--font-read);
+  font-weight: 400;
+  font-size: var(--font-sm);
+  color: var(--chalk);
+  cursor: pointer;
+}
+.seq-chunk-btn:hover:not(:disabled) { background: var(--card-hi); }
+.seq-chunk-btn[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--chalk-soft); }
+.seq-tiles { display: flex; gap: 3px; }
+.seq-tile {
+  min-width: 26px;
+  padding: 4px 6px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 600;
+  background: var(--card-hi);
+  border-radius: 6px;
+}
+.seq-tile.is-changed { background: var(--red-wash); color: var(--red-chalk); box-shadow: inset 0 0 0 2px var(--red-chalk); }
+.seq-meaning { max-width: 120px; text-align: center; line-height: 1.3; color: var(--chalk-soft); }
+.seq-meaning.is-changed { color: var(--red-chalk); font-weight: 600; }
+.seq-chunk.is-changed .seq-chunk-btn { box-shadow: inset 0 0 0 1px var(--red-chalk); }
 
 /* spaced_interleaved_retrieval — quick recall of PRIOR concepts, always the
    class's first block when the student has due items */
@@ -1667,6 +1717,29 @@ pre.output, .quickrun pre {
 .diagnostic-question:first-child { padding-top: 0; }
 .diagnostic-question-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
 .diagnostic-question-head .badge { flex: none; margin-top: 2px; }
+/* Reading text (prompts, options) in clean sans-serif; the handwriting is
+   reserved for the "notebook margin" layer — title, dimension chip, tips. */
+.diagnostic-battery-card .block-question {
+  font-family: var(--font-read);
+  font-size: var(--font-base-scaled);
+  line-height: 1.5;
+  margin: 0;
+}
+.diagnostic-battery-card .hint { font-family: var(--font-hand); font-size: 19px; line-height: 1.3; }
+.diagnostic-options button {
+  font-family: var(--font-read);
+  font-size: var(--font-md);
+  font-weight: 500;
+  padding: 6px 14px;
+  text-align: left;
+}
+/* "No sé" is a legitimate answer, not an escape hatch — same weight as the
+   options, but outlined so it doesn't read as one more candidate answer. */
+.diagnostic-options .diagnostic-dont-know:not(.btn-primary) {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--marker);
+  color: var(--chalk-soft);
+}
 
 /* The battery renders in two jobs that must NOT look the same:
    - post-seal RECAP inside `.final-package` — a darker inset shell so it
@@ -3298,6 +3371,90 @@ body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16p
 .node-note p { margin: 0; color: var(--chalk); font-size: 15px; line-height: 1.5; }
 @media (prefers-reduced-motion: reduce) { .mermaid-visual g.node, .im-gauge-fill { transition: none; } }
 
+/* --- 3D scenes: topology_flow / explorable_model (blocks/scene3d) --- */
+.scene3d { display: grid; gap: 10px; }
+.scene3d-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.scene3d-title { font-size: 16px; }
+.scene3d-bar .badge { margin-left: auto; }
+.scene3d-tabs { display: inline-flex; gap: 2px; padding: 3px; background: var(--input); border-radius: var(--squircle-sm); corner-shape: squircle; }
+.scene3d-tabs button { all: unset; box-sizing: border-box; cursor: pointer; padding: 5px 12px; font-family: var(--font-mono); font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--chalk-soft); border-radius: var(--squircle-xs); corner-shape: squircle; }
+.scene3d-tabs button.is-current { background: var(--blue-chalk); color: var(--paper-deep); }
+.scene3d-tabs button:focus-visible, .scene3d-chip:focus-visible, .scene3d-node-label:focus-visible, .scene3d-part-label:focus-visible { outline: 2px solid var(--gold-chalk); outline-offset: 2px; }
+.scene3d-stage { position: relative; width: 100%; overflow: hidden; background: var(--paper-deep); border-radius: var(--squircle-sm); corner-shape: squircle; }
+.scene3d-stage[hidden] { display: none; }
+.scene3d-stage--topology { aspect-ratio: 16 / 10; min-height: 280px; max-height: 540px; }
+.scene3d-stage--model { aspect-ratio: 4 / 3; min-height: 300px; max-height: 540px; cursor: grab; }
+.scene3d-stage--model:active { cursor: grabbing; }
+.scene3d-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.scene3d-labels { position: absolute; top: 0; left: 0; pointer-events: none; }
+.scene3d-node-label { all: unset; box-sizing: border-box; pointer-events: auto; display: grid; justify-items: center; padding: 2px 6px; font-family: var(--font-mono); line-height: 1.25; text-align: center; white-space: nowrap; color: var(--chalk); transition: opacity 0.2s; }
+.scene3d-node-label strong { font-size: 13px; font-weight: 600; }
+.scene3d-node-label.is-right { justify-items: start; text-align: left; }
+.scene3d-node-label.is-left { justify-items: end; text-align: right; }
+.scene3d-node-label span { font-size: 11px; color: var(--chalk-soft); }
+.scene3d-node-label.is-tappable { cursor: pointer; }
+.scene3d-node-label.is-tappable:hover strong { color: var(--blue-chalk); }
+.scene3d-node-label.is-active strong { color: var(--gold-chalk); }
+.scene3d-node-label.is-dim { opacity: 0.45; }
+.scene3d-part-label.is-dim { opacity: 0.7; }
+.scene3d-packet-label { padding: 2px 7px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 11px; color: var(--chalk); background: rgba(18, 20, 23, 0.9); border-radius: 6px; }
+.scene3d-part-label { all: unset; box-sizing: border-box; pointer-events: auto; cursor: pointer; padding: 1px 8px; font-family: var(--font-body); font-size: 12px; white-space: nowrap; color: var(--chalk); background: rgba(18, 20, 23, 0.78); border-radius: 999px; transition: opacity 0.2s; }
+.scene3d-part-label.is-active { background: var(--gold-chalk); color: var(--paper-deep); }
+.scene3d-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.scene3d-speed { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--chalk-soft); }
+.scene3d-step { display: grid; gap: 6px; padding: 10px 14px; background: var(--card); border-radius: var(--squircle-sm); corner-shape: squircle; }
+.scene3d-step p { margin: 0; font-size: 15px; line-height: 1.5; }
+.scene3d-messages { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 13px; }
+.scene3d-messages th { padding: 3px 10px 3px 0; text-align: left; font-weight: 400; color: var(--chalk-soft); }
+.scene3d-messages td { padding: 4px 10px 4px 0; border-top: 1px solid var(--border-soft); vertical-align: top; }
+.scene3d-dot { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 50%; }
+.scene3d-dot--shell { background: #9db6d8; opacity: 0.6; }
+.scene3d-legend { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.scene3d-chip { all: unset; box-sizing: border-box; display: inline-flex; align-items: center; cursor: pointer; padding: 4px 11px; font-size: 14px; color: var(--chalk); background: var(--input); border-radius: 999px; }
+.scene3d-chip.is-current { background: var(--chalk); color: var(--paper-deep); }
+.scene3d-chip.is-static { cursor: default; color: var(--chalk-soft); }
+.scene3d-count { margin-left: 5px; font-size: 12px; opacity: 0.7; }
+.scene3d-sequence .static-visual { margin: 0; }
+.scene3d-sequence figcaption:empty { display: none; }
+@media (prefers-reduced-motion: reduce) { .scene3d-node-label, .scene3d-part-label { transition: none; } }
+
+/* --- solid_model: a CAD part (blocks/scene3d/SolidModelVisual) --- */
+/* The camera inset is drawn by WebGL in the stage's corner; this frames and names it
+   (size mirrors INSET_FRACTION / INSET_MARGIN in solidStage.ts). */
+.solid-inset { position: absolute; right: 8px; bottom: 8px; width: 34%; aspect-ratio: 4 / 3; pointer-events: none; border: 1px solid var(--gold-chalk); border-radius: 6px; }
+.solid-inset span { position: absolute; top: -1px; left: 8px; transform: translateY(-100%); padding: 0 6px; white-space: nowrap; font-family: var(--font-hand); font-size: 15px; color: var(--gold-chalk); background: var(--paper-deep); border-radius: 4px 4px 0 0; }
+.solid-axis-label { font-family: var(--font-mono); font-size: 13px; font-weight: 700; text-shadow: 0 0 3px var(--paper-deep); }
+.solid-steps-bar { display: flex; align-items: center; gap: 10px; }
+.solid-steps-count { font-family: var(--font-hand); font-size: 18px; color: var(--chalk-soft); }
+.scene3d-chip.is-future { opacity: 0.55; }
+
+/* --- domain kits: algebraic_structure, instrument, illustration_kit, molecule_3d, code_figure --- */
+.algebra-panels { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-start; }
+.algebra-graph { width: min(380px, 100%); height: auto; }
+.algebra-node { cursor: pointer; }
+.algebra-node:focus-visible circle { stroke: var(--gold-chalk); stroke-width: 2; }
+.algebra-table { border-collapse: collapse; font-family: var(--font-mono); font-size: 12px; }
+.algebra-table th, .algebra-table td { padding: 3px 6px; text-align: center; border: 1px solid var(--border-soft); }
+.algebra-table tr.is-picked td { outline: 1px solid var(--gold-chalk); }
+.chord-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.chord-diagram { width: 110px; height: 130px; }
+.chord-diagram .chord-name { fill: var(--chalk); font-family: var(--font-mono); font-size: 13px; font-weight: 700; }
+.chord-diagram.is-active .chord-name { fill: var(--gold-chalk); }
+.progression { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.progression li { display: grid; justify-items: center; min-width: 52px; padding: 6px 10px; background: var(--input); border-radius: var(--squircle-xs); corner-shape: squircle; }
+.progression li span { font-size: 12px; color: var(--chalk-soft); }
+.progression li.is-current { background: var(--gold-wash); outline: 1px solid var(--gold-chalk); }
+.strum { display: flex; gap: 4px; margin: 0; font-family: var(--font-mono); font-size: 18px; }
+.strum-slot { display: grid; place-items: center; width: 26px; height: 30px; background: var(--input); border-radius: 6px; }
+.strum-down { color: var(--blue-chalk); }
+.strum-up { color: var(--gold-chalk); }
+.strum-rest { color: var(--chalk-soft); }
+.instrument-bpm { min-width: 200px; }
+.illustration-svg { width: 100%; height: auto; background: var(--paper-deep); border-radius: var(--squircle-sm); corner-shape: squircle; }
+.ik-piece { cursor: pointer; }
+.molecule-atom-label { font-family: var(--font-mono); font-size: 12px; color: var(--chalk); text-shadow: 0 0 3px var(--paper-deep); }
+.code-figure-frame { width: 100%; border: 0; background: var(--paper-deep); border-radius: var(--squircle-sm); corner-shape: squircle; }
+
 /* --- Adaptive presentation: set by the system per block (data-density / -emphasis / -layout) --- */
 .notebook-block-wrapper[data-density="compact"] { --read-size: 16px; --read-leading: 1.55; }
 .notebook-block-wrapper[data-density="spacious"] { --read-size: 18px; --read-leading: 1.85; }
@@ -4366,6 +4523,12 @@ body:has(.dev-panel) .workspace { padding-right: calc(var(--dev-sidebar-w) + 16p
   background: var(--green-wash);
   color: var(--green-chalk);
   border: 1px solid rgba(134, 239, 172, 0.3);
+}
+
+.model-tier-tag.escalation {
+  background: var(--input);
+  color: var(--chalk);
+  border: 1px dashed var(--chalk-soft);
 }
 
 .model-tier-desc {

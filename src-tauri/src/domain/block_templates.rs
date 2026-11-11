@@ -69,7 +69,19 @@ pub enum BlockTemplate {
     /// → `anchored_micro_theory`. Flat params with the word caps checked at
     /// call time, so an over-long layer is corrected in the same turn.
     #[serde(rename = "tpl_theory", rename_all = "camelCase")]
-    Theory { title: String, intuitive_hook: String, analogy_boundary: String, system_rule: String, frequent_error: String },
+    Theory {
+        title: String,
+        intuitive_hook: String,
+        analogy_boundary: String,
+        system_rule: String,
+        frequent_error: String,
+        /// Optional figure of the rule's concrete example (validated with the block).
+        #[serde(default)]
+        visual_aid: Option<crate::domain::notebook::StaticVisualSpec>,
+        /// What kind of content that figure shows (see `domain::visual_routing`).
+        #[serde(default)]
+        visual_intent: Option<String>,
+    },
     /// → `interactive_prediction_gate` (`boundary_case_audit`).
     #[serde(rename = "tpl_boundary_cases", rename_all = "camelCase")]
     BoundaryCases { question: String, cases: Vec<BoundaryCase> },
@@ -165,7 +177,7 @@ impl BlockTemplate {
                 }
                 Ok(())
             }
-            Self::Theory { title, intuitive_hook, analogy_boundary, system_rule, frequent_error } => {
+            Self::Theory { title, intuitive_hook, analogy_boundary, system_rule, frequent_error, .. } => {
                 let t = "tpl_theory";
                 if [title, intuitive_hook, analogy_boundary, system_rule, frequent_error].iter().any(|f| blank(f)) {
                     return err(t, "title, intuitiveHook, analogyBoundary, systemRule y frequentError no pueden estar vacíos");
@@ -266,8 +278,16 @@ impl BlockTemplate {
                 GeneratedSectionBlock::BranchingScenarioChallenge { scenario, decision_point, branches, visual_aid: None }
             }
             Self::QuickRecall { items } => GeneratedSectionBlock::SpacedInterleavedRetrieval { items },
-            Self::Theory { title, intuitive_hook, analogy_boundary, system_rule, frequent_error } => {
-                GeneratedSectionBlock::AnchoredMicroTheory { title, intuitive_hook, analogy_boundary: Some(analogy_boundary), system_rule, frequent_error }
+            Self::Theory { title, intuitive_hook, analogy_boundary, system_rule, frequent_error, visual_aid, visual_intent } => {
+                GeneratedSectionBlock::AnchoredMicroTheory {
+                    title,
+                    intuitive_hook,
+                    analogy_boundary: Some(analogy_boundary),
+                    system_rule,
+                    frequent_error,
+                    visual_aid,
+                    visual_intent,
+                }
             }
             Self::BoundaryCases { question, mut cases } => {
                 let seed = fnv(&format!("{question}|{}", cases.iter().map(|c| c.statement.as_str()).collect::<Vec<_>>().join("|")));
@@ -371,6 +391,8 @@ mod tests {
             analogy_boundary: "no cubre X".to_string(),
             system_rule: rule.to_string(),
             frequent_error: "esto SÍ a / esto NO b, porque c".to_string(),
+            visual_aid: None,
+            visual_intent: None,
         };
         assert!(ok("gancho corto", "1 ➔ 2 ➔ 3").validate().is_ok());
         let long_hook = "palabra ".repeat(101);

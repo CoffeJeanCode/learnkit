@@ -1,14 +1,7 @@
 import { useEffect, useState } from "react";
 import type { DiagnosticBatteryState } from "../lib/schemas";
 import { getCourseDiagnosticBattery, saveDiagnosticBatteryAnswers, tauriError } from "../lib/tauri";
-import { InlineText } from "../features/notebook/blocks/RichText";
-
-const DIMENSION_LABEL: Record<string, string> = {
-  intuition: "Intuición",
-  mechanics: "Mecánica",
-  critical_case: "Caso crítico",
-  boundary: "Frontera",
-};
+import { DiagnosticQuestionList } from "./DiagnosticQuestionList";
 
 /**
  * The roadmap's calibration battery — generated once, alongside the
@@ -60,39 +53,7 @@ export function DiagnosticBatteryCard({ courseId }: { courseId: string }) {
         <span className="badge">calibrando</span>
       </div>
       <p className="hint">{state.goalAlignment}</p>
-      <ol className="diagnostic-question-list">
-        {state.questions.map((q, i) => {
-          const chosen = state.answers[String(i)];
-          return (
-            <li key={i} className="diagnostic-question">
-              <div className="diagnostic-question-head">
-                <span className="badge">{DIMENSION_LABEL[q.dimension] ?? q.dimension}</span>
-                <p className="block-question">
-                  <InlineText text={q.prompt} />
-                </p>
-              </div>
-              <div className="prediction-options">
-                {q.options.map((opt) => (
-                  <button
-                    key={opt}
-                    className={chosen === opt ? "btn-primary" : ""}
-                    onClick={() => choose(i, opt)}
-                    disabled={chosen !== undefined}
-                  >
-                    <InlineText text={opt} />
-                  </button>
-                ))}
-              </div>
-              {chosen && (
-                <p className="hint">
-                  {chosen === q.correctOption ? "Correcto. " : `La respuesta esperada era "${q.correctOption}". `}
-                  {q.diagnosticInsight}
-                </p>
-              )}
-            </li>
-          );
-        })}
-      </ol>
+      <DiagnosticQuestionList questions={state.questions} answers={state.answers} onChoose={choose} />
     </div>
   );
 }

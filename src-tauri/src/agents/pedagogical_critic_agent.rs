@@ -39,6 +39,14 @@ branching_scenario_challenge:
 - El escenario es una decisión real con consecuencias (no un concepto disfrazado).
 - La rama marcada isOptimal es genuinamente la mejor jugada; las consecuencias son realistas y
   distintas entre sí.
+LA FIGURA (visualAid), en cualquier bloque que la tenga:
+- Dibuja la IDEA CENTRAL de la regla con su ejemplo concreto. Es RECHAZO si (a) la figura muestra un modelo que la regla
+  desmiente o contradice (p. ej. la regla dice "la gravedad no es una fuerza, es curvatura" y la figura es la fórmula
+  newtoniana de caída con un slider de g), (b) muestra otro concepto u otros valores que el ejemplo del texto, o (c) el
+  concepto es espacial o geométrico (curvatura, superficie, campo, forma, vista, trayectoria, área acumulada) y la
+  figura es una calculadora, cajas o una tabla que no lo deja VER. Nombra el motor que sí lo dibuja: surface_3d
+  (superficies, curvatura, pozos, campos), function_plot con area/tangent (integrales, derivadas), solid_model (piezas,
+  vistas), explorable_model (objetos con partes).
 Coherencia transversal:
 - El bloque enseña algo que la clase (topic + targetGoal) realmente necesita y que no repite lo
   que blocksSoFar ya cubrió — si el tipo de bloque no encaja con la naturaleza del tema, dilo.

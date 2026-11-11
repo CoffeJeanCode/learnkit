@@ -68,11 +68,32 @@ impl From<GeneratedSectionBlock> for PublishBlockArgs {
     }
 }
 
+/// Block types whose tool call must carry a `visualAid` (see `PublishBlockArgs::deserialize`).
+const THEORY_TAGS: [&str; 2] = ["anchored_micro_theory", "tpl_theory"];
+
+pub(crate) const MISSING_THEORY_VISUAL: &str = "falta visualAid. La teoría SIEMPRE dibuja el ejemplo concreto de systemRule. \
+     Decide primero visualIntent (qué TIPO de contenido es) y dibújalo con su motor: solid_model (una forma/pieza con medidas, \
+     sus vistas o la cámara), surface_3d (una superficie o campo: curvatura, pozos, z = f(x, y)), explorable_model (un objeto con partes o por capas), sequence_strip (algo que se lee por trozos y su \
+     cambio), interactive_module (una ley con variables), topology_flow (mensajes entre actores), diagram_spec (un proceso o \
+     estados), mermaid (mindmap, timeline, gantt, pie, quadrantChart, xychart, sankey…), conceptual_matrix (una comparación) o \
+     declarative_svg. Vuelve a llamar con el bloque completo, su visualIntent y su visualAid.";
+
 impl<'de> Deserialize<'de> for PublishBlockArgs {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error;
         let raw = serde_json::Value::deserialize(deserializer)?;
         let value = normalize_block_value(raw);
+        // A theory must DRAW its example. Checked here, in the tool call, so a
+        // missing figure is fixed in the same turn: as an optional field, the
+        // model used to drop it whenever the figure had a detail serde rejected
+        // (the easiest way to make the call pass), and the student got a wall
+        // of text. Blocks persisted before this rule still load: only NEW tool
+        // calls go through `PublishBlockArgs`.
+        if let Some(bt) = value.get("blockType").and_then(|t| t.as_str()).filter(|bt| THEORY_TAGS.contains(bt)) {
+            if value.get("visualAid").is_none_or(|v| v.is_null()) {
+                return Err(D::Error::custom(format!("Error en publish_notebook_block para '{bt}': {MISSING_THEORY_VISUAL}")));
+            }
+        }
         let is_template = value.get("blockType").and_then(|t| t.as_str()).is_some_and(BlockTemplate::is_template_tag);
         if is_template {
             let template: BlockTemplate = serde_json::from_value(value.clone()).map_err(|e| {
@@ -182,13 +203,34 @@ fn normalize_visual_aid_object(va: &mut serde_json::Map<String, serde_json::Valu
             va.insert("renderEngine".to_string(), serde_json::json!("mermaid"));
         }
     }
-    va.entry("chartType").or_insert_with(|| serde_json::json!("flowchart"));
+    // The Mermaid fill-ins below belong to Mermaid only: every other engine has
+    // its own shape (`interactive_module` carries a `spec` OBJECT, which the
+    // old unconditional `spec` -> `code` rename destroyed).
+    if va.get("renderEngine").and_then(|v| v.as_str()) != Some("mermaid") {
+        return;
+    }
+    // The code's header is what Mermaid renders by: a missing or
+    // off-catalogue `chartType` (a newer type spelled differently) is taken
+    // from it instead of failing the whole call in serde.
+    let declared_ok = va
+        .get("chartType")
+        .and_then(|v| v.as_str())
+        .is_some_and(|t| crate::domain::notebook::MermaidChartType::ALL.iter().any(|c| c.as_str() == t));
+    if !declared_ok {
+        let inferred = va
+            .get("code")
+            .or_else(|| va.get("source"))
+            .and_then(|c| c.as_str())
+            .and_then(crate::domain::notebook::MermaidChartType::from_code)
+            .map_or("flowchart", |t| t.as_str());
+        va.insert("chartType".to_string(), serde_json::json!(inferred));
+    }
     if !va.contains_key("code") {
-        if let Some(c) = va.remove("source").or_else(|| va.remove("spec")) {
-            va.insert("code".to_string(), c);
-        } else {
-            va.insert("code".to_string(), serde_json::json!("graph TD\nA[Inicio] --> B[Fin]"));
-        }
+        let source = va.remove("source").or_else(|| match va.get("spec") {
+            Some(serde_json::Value::String(_)) => va.remove("spec"),
+            _ => None,
+        });
+        va.insert("code".to_string(), source.unwrap_or_else(|| serde_json::json!("graph TD\nA[Inicio] --> B[Fin]")));
     }
     va.entry("caption").or_insert_with(|| serde_json::json!("Diagrama"));
 }
@@ -425,7 +467,7 @@ fn coerce_numeric_fields(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
             for (k, v) in map.iter_mut() {
-                if k == "stepNumber" || k == "faultyLineNumber" || k == "durationMinutes" || k == "targetStep" {
+                if k == "stepNumber" || k == "faultyLineNumber" || k == "durationMinutes" || k == "targetStep" || k == "count" {
                     if let serde_json::Value::String(s) = v {
                         if let Ok(num) = s.trim().parse::<i64>() {
                             *v = serde_json::Value::Number(num.into());
@@ -704,6 +746,16 @@ pub fn salvage_fallback_block(value: &serde_json::Value) -> Option<PublishedBloc
             let system_rule = map.get("systemRule").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let frequent_error = map.get("frequentError").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let analogy_boundary = map.get("analogyBoundary").and_then(|v| v.as_str()).map(String::from);
+            // Keep the figure whenever it is readable on its own: the salvage
+            // path used to drop it unconditionally, so a theory that arrived
+            // in a slightly malformed envelope lost its drawing for good.
+            let visual_aid = map.get("visualAid").and_then(|v| {
+                let mut v = v.clone();
+                if let Some(va) = v.as_object_mut() {
+                    normalize_visual_aid_object(va);
+                }
+                serde_json::from_value(v).ok()
+            });
             Some(PublishedBlock {
                 block: GeneratedSectionBlock::AnchoredMicroTheory {
                     title,
@@ -711,6 +763,8 @@ pub fn salvage_fallback_block(value: &serde_json::Value) -> Option<PublishedBloc
                     analogy_boundary,
                     system_rule,
                     frequent_error,
+                    visual_aid,
+                    visual_intent: map.get("visualIntent").and_then(|v| v.as_str()).map(String::from),
                 },
                 mechanical_template: false,
             })
@@ -844,6 +898,7 @@ pub fn salvage_fallback_block(value: &serde_json::Value) -> Option<PublishedBloc
                         caption: "Diagrama conceptual".to_string(),
                     },
                     guided_walkthrough: vec![],
+                    visual_intent: None,
                 },
                 mechanical_template: false,
             })
@@ -1043,7 +1098,8 @@ fn grade_gate_submission_json_schema() -> serde_json::Value {
                     "properties": {
                         "criterion": {"type": "string"},
                         "met": {"type": "boolean"},
-                        "evidence": {"type": "string", "description": "Cita o hecho concreto de la entrega que lo respalda; si no se cumple, qué falta"}
+                        "evidence": {"type": "string", "description": "Cita o hecho concreto de la entrega que lo respalda; si no se cumple, qué falta"},
+                        "formatOnly": {"type": "boolean", "description": "true si el criterio es de PRESENTACIÓN (orden de columnas, escribirlo en una frase, decimales exactos, encabezados) y no de la habilidad; un criterio de forma nunca decide la compuerta"}
                     },
                     "required": ["criterion", "met"]
                 }
@@ -1079,6 +1135,187 @@ fn grade_closure_submission_json_schema() -> serde_json::Value {
     })
 }
 
+/// `molecule_3d` variant of `visual_aid_json_schema`.
+fn molecule_3d_schema() -> serde_json::Value {
+    serde_json::json!({
+        "properties": {
+            "renderEngine": {"const": "molecule_3d"},
+            "title": {"type": "string"},
+            "atoms": {"type": "array", "description": "1-40 átomos, SIN coordenadas (el sistema los coloca en 3D)", "items": {"type": "object", "properties": {
+                "id": {"type": "string"}, "element": {"type": "string", "description": "Símbolo: H C N O F Cl Br I S P B Si Li Na K Mg Ca"},
+                "charge": {"type": "integer"}, "label": {"type": "string", "description": "Nombre corto opcional (\"Nu⁻\", \"C1\")"}
+            }, "required": ["id", "element"]}},
+            "bonds": {"type": "array", "items": {"type": "object", "properties": {"a": {"type": "string"}, "b": {"type": "string"}, "order": {"type": "integer", "description": "1, 2 o 3"}}, "required": ["a", "b"]}},
+            "steps": {"type": "array", "description": "0-6 pasos del mecanismo; la valencia se comprueba en cada uno", "items": {"type": "object", "properties": {
+                "title": {"type": "string"}, "detail": {"type": "string"},
+                "form": {"type": "array", "items": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2}, "description": "Enlaces que se forman [idA, idB]"},
+                "break": {"type": "array", "items": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2}, "description": "Enlaces que se rompen"},
+                "charges": {"type": "object", "description": "Nuevas cargas {id: carga}"},
+                "highlight": {"type": "array", "items": {"type": "string"}}
+            }, "required": ["title"]}},
+            "caption": {"type": "string"}
+        },
+        "required": ["renderEngine", "atoms", "bonds", "caption"]
+    })
+}
+
+/// `algebraic_structure`, `instrument` and `illustration_kit` variants.
+fn domain_kit_schemas() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({
+            "properties": {
+                "renderEngine": {"const": "algebraic_structure"},
+                "title": {"type": "string"},
+                "group": {"type": "object", "properties": {
+                    "kind": {"type": "string", "enum": crate::domain::algebra::GROUP_KINDS},
+                    "n": {"type": "integer", "description": "cyclic 2-24 (Z_n), dihedral 3-12 (D_n, 2n elementos), symmetric 2-4 (S_n)"}
+                }, "required": ["kind", "n"]},
+                "subgroup": {"type": "array", "items": {"type": "string"}, "description": "Generadores del subgrupo: en Z_n números (\"4\"); en D_n e, r, r2…, s, sr…; en S_n ciclos \"(1 2 3)\". El sistema calcula el subgrupo y sus clases laterales"},
+                "view": {"type": "string", "enum": crate::domain::notebook::GROUP_VIEWS},
+                "caption": {"type": "string"}
+            },
+            "required": ["renderEngine", "group", "caption"]
+        }),
+        serde_json::json!({
+            "properties": {
+                "renderEngine": {"const": "instrument"},
+                "title": {"type": "string"},
+                "instrument": {"type": "string", "enum": crate::domain::instrument::INSTRUMENTS},
+                "chords": {"type": "array", "items": {"type": "string"}, "description": "1-6 acordes del diccionario (C D E G A F Am Em Dm E7 A7 D7 G7 C7 B7 Cmaj7 Fmaj7 Asus2 Dsus4): el sistema dibuja su digitación"},
+                "progression": {"type": "array", "items": {"type": "object", "properties": {"chord": {"type": "string"}, "beats": {"type": "integer"}}, "required": ["chord"]}, "description": "Compases en orden; el estudiante la escucha"},
+                "strum": {"type": "string", "description": "Rasgueo de 4-16 casillas: D abajo, U arriba, - silencio (p. ej. \"D-DU-UDU\")"},
+                "bpm": {"type": "integer"},
+                "caption": {"type": "string"}
+            },
+            "required": ["renderEngine", "chords", "caption"]
+        }),
+        serde_json::json!({
+            "properties": {
+                "renderEngine": {"const": "illustration_kit"},
+                "title": {"type": "string"},
+                "items": {"type": "array", "description": "1-12 piezas del kit en casillas de una cuadrícula 6×4 (sin píxeles)", "items": {"type": "object", "properties": {
+                    "id": {"type": "string"},
+                    "kind": {"type": "string", "enum": crate::domain::illustration::ILLUSTRATION_PIECES},
+                    "label": {"type": "string"},
+                    "slot": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2, "description": "[columna 0-5, fila 0-3]; fila 0 arriba"},
+                    "value": {"type": "string", "description": "Dato corto: \"2 kg\", \"10 Ω\", \"9 V\""},
+                    "angle": {"type": "number", "description": "Solo incline: grados (5-75)"},
+                    "explanation": {"type": "string"}
+                }, "required": ["id", "kind", "label", "slot"]}},
+                "links": {"type": "array", "items": {"type": "object", "properties": {
+                    "from": {"type": "string"}, "to": {"type": "string"},
+                    "kind": {"type": "string", "enum": crate::domain::illustration::ILLUSTRATION_LINKS}, "label": {"type": "string"}
+                }, "required": ["from", "to", "kind"]}},
+                "forces": {"type": "array", "description": "0-8 flechas de fuerza", "items": {"type": "object", "properties": {
+                    "on": {"type": "string"}, "direction": {"type": "string", "description": "up | down | left | right | up-left | up-right | down-left | down-right, o un ángulo en grados"},
+                    "label": {"type": "string"}, "magnitude": {"type": "integer", "description": "Longitud relativa 1-3"}
+                }, "required": ["on", "direction", "label"]}},
+                "caption": {"type": "string"}
+            },
+            "required": ["renderEngine", "items", "caption"]
+        }),
+        serde_json::json!({
+            "properties": {
+                "renderEngine": {"const": "code_figure"},
+                "title": {"type": "string"},
+                "code": {"type": "string", "description": "SOLO el modelo de escalado (el sistema lo rechaza en otro caso): JS contra el SDK `fig`, sin red ni DOM externo, ≤ 12000 caracteres"},
+                "height": {"type": "integer"},
+                "caption": {"type": "string"}
+            },
+            "required": ["renderEngine", "code", "caption"]
+        }),
+    ]
+}
+
+/// `surface_3d` variant of `visual_aid_json_schema`.
+fn surface_3d_schema() -> serde_json::Value {
+    serde_json::json!({
+        "properties": {
+            "renderEngine": {"const": "surface_3d"},
+            "title": {"type": "string"},
+            "expr": {"type": "string", "description": "z = f(x, y) con la sintaxis de interactive_module (x, y y los sym de params; sin `=`). Suaviza las singularidades: -m / sqrt(x^2 + y^2 + 0.5), nunca 1/r puro (se comprueba en todo el dominio)"},
+            "xRange": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+            "yRange": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+            "params": {"type": "array", "description": "0-3 sliders (sym, label, unit, min, max, init) que cambian la forma en vivo, p. ej. la masa que hunde el pozo", "items": {"type": "object"}},
+            "zLabel": {"type": "string", "description": "Qué es la altura (\"potencial\", \"curvatura\", \"f(x, y)\")"},
+            "paths": {
+                "type": "array",
+                "description": "0-4 trayectorias que el SISTEMA traza sobre la superficie (nunca coordenadas tuyas): geodesic = el camino más recto sobre la superficie desde start en direction; descent = por dónde rueda una bola; level = la curva de nivel por start",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "label": {"type": "string"},
+                        "kind": {"type": "string", "enum": crate::domain::notebook::SURFACE_PATH_KINDS},
+                        "start": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+                        "direction": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2},
+                        "explanation": {"type": "string"}
+                    },
+                    "required": ["id", "label", "kind", "start", "explanation"]
+                }
+            },
+            "markers": {
+                "type": "array",
+                "description": "0-4 puntos con nombre (la masa, un mínimo, un punto de silla)",
+                "items": {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}, "label": {"type": "string"}, "at": {"type": "array", "items": {"type": "number"}}, "explanation": {"type": "string"}},
+                    "required": ["id", "label", "at"]
+                }
+            },
+            "region": {"type": "array", "items": {"type": "number"}, "minItems": 4, "maxItems": 4, "description": "[x0, x1, y0, y1]: sombrea el volumen bajo la superficie y el sistema calcula su valor (integral doble)"},
+            "caption": {"type": "string"}
+        },
+        "required": ["renderEngine", "expr", "xRange", "yRange", "caption"]
+    })
+}
+
+/// `solid_model` variant of `visual_aid_json_schema` (split out: one `json!`
+/// literal that large hits the macro recursion limit).
+fn solid_model_schema() -> serde_json::Value {
+    serde_json::json!(
+    {
+        "properties": {
+            "renderEngine": {"const": "solid_model"},
+            "title": {"type": "string"},
+            "units": {"type": "string", "enum": ["mm", "cm", "m", "in"]},
+            "features": {
+                "type": "array",
+                "description": "1-6 operaciones de CAD en orden, con MEDIDAS REALES. La primera crea material (extrude o revolve). Ejes: Z arriba; plano xy = suelo (normal +Z), xz = frontal (u=x, v=z, normal +Y), yz = lateral (u=y, v=z, normal +X).",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "label": {"type": "string", "description": "Qué es, con su medida: \"Base 60×30×8\", \"Agujero Ø8 pasante\""},
+                        "op": {"type": "string", "enum": crate::domain::notebook::SOLID_OPS, "description": "extrude = boceto que crece por +normal `depth`; revolve = perfil que gira 360° alrededor del eje v del plano (u ≥ 0); cut = quita material con el perfil; hole = agujero circular. En cut/hole `depth` entra en la pieza desde `offset` hacia -normal; sin depth atraviesa todo"},
+                        "plane": {"type": "string", "enum": crate::domain::notebook::SOLID_PLANES},
+                        "profile": {
+                            "type": "object",
+                            "properties": {
+                                "kind": {"type": "string", "enum": crate::domain::notebook::SOLID_PROFILES},
+                                "w": {"type": "number"}, "h": {"type": "number"},
+                                "d": {"type": "number", "description": "Diámetro (circle)"},
+                                "points": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2}, "description": "polygon: 3-12 puntos [u, v] recorriendo el contorno"}
+                            },
+                            "required": ["kind"]
+                        },
+                        "at": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "[u, v] del centro del perfil en su plano"},
+                        "offset": {"type": "number", "description": "Altura del plano del boceto sobre el origen (a lo largo de su normal); p. ej. 8 para dibujar sobre una base de 8 de alto"},
+                        "depth": {"type": "number"},
+                        "explanation": {"type": "string", "description": "1-2 frases: qué es esta operación y por qué está. Se lee al tocarla."}
+                    },
+                    "required": ["id", "label", "op", "plane", "profile", "explanation"]
+                }
+            },
+            "showCamera": {"type": "boolean", "description": "true si el concepto es la cámara o el punto de vista (orbitar, vistas): muestra la cámara orbitando la pieza fija"},
+            "startView": {"type": "string", "enum": crate::domain::notebook::SOLID_VIEWS},
+            "caption": {"type": "string"}
+        },
+        "required": ["renderEngine", "features", "caption"]
+    }
+    )
+}
+
 fn visual_aid_json_schema() -> serde_json::Value {
     // Cheapest-to-write first: the model reads the variants in this order.
     let variable = serde_json::json!({
@@ -1092,9 +1329,9 @@ fn visual_aid_json_schema() -> serde_json::Value {
         },
         "required": ["sym", "label", "min", "max", "init"]
     });
-    serde_json::json!({
+    let mut schema = serde_json::json!({
         "type": "object",
-        "description": "Visual estático o parametrizable. ORDEN DE PREFERENCIA: interactive_module (relación entre variables, función, vectores, gradiente, línea de tiempo) > diagram_spec (flujos, estados, secuencias, ciclos) > conceptual_matrix (comparaciones) > declarative_svg (SOLO fenómenos físicos/biológicos que ningún módulo cubre) > mermaid (evítalo).",
+        "description": "Visual estático o parametrizable. El motor lo decide el TIPO de contenido (visualIntent), no la costumbre: solid_model (una forma o pieza con medidas, sus vistas, ejes o la cámara que la mira; solo en declarative_visual_diagram y anchored_micro_theory) | surface_3d (una superficie o campo: espacio-tiempo curvo, pozos, z = f(x, y), volumen; ídem) | explorable_model (objeto 3D con partes; ídem) | topology_flow (mensajes entre equipos/actores; ídem) | declarative_svg (fenómeno físico/biológico espacial; ídem) | interactive_module (ley con variables, función, vectores, gradiente) | sequence_strip (algo que se lee por trozos y su cambio) | diagram_spec (procesos, decisiones, estados — nunca relaciones espaciales) | mermaid (mindmap, timeline, gantt, pie, quadrantChart, xychart, sankey, journey, gitGraph, classDiagram, erDiagram) | conceptual_matrix (comparaciones).",
         "oneOf": [
             {
                 "properties": {
@@ -1115,6 +1352,16 @@ fn visual_aid_json_schema() -> serde_json::Value {
                             "domain": {"type": "array", "items": {"type": "number"}, "minItems": 2, "maxItems": 2, "description": "function_plot: [xMin, xMax]"},
                             "params": {"type": "array", "description": "function_plot: 0-3 sliders de parámetros (\"x\" está reservado)", "items": variable},
                             "tangent": {"type": "boolean", "description": "function_plot: muestra una tangente movible (derivadas)"},
+                            "area": {
+                                "type": "object",
+                                "description": "function_plot: la INTEGRAL como área que se acumula desde `from` hasta un punto que el estudiante arrastra; el sistema calcula el valor",
+                                "properties": {
+                                    "from": {"type": "number", "description": "Límite inferior, dentro del dominio"},
+                                    "riemann": {"type": "boolean", "description": "Rectángulos de una suma de Riemann con un slider de cuántos"},
+                                    "showAccumulated": {"type": "boolean", "description": "Dibuja también A(x) = ∫ f: su pendiente es f (teorema fundamental)"}
+                                },
+                                "required": ["from"]
+                            },
                             "vectors": {"type": "array", "description": "vector_sum: 2-4 vectores, x e y entre -10 y 10", "items": {"type": "object", "properties": {"label": {"type": "string"}, "x": {"type": "number"}, "y": {"type": "number"}}, "required": ["label", "x", "y"]}},
                             "showResultant": {"type": "boolean"},
                             "highLabel": {"type": "string"}, "lowLabel": {"type": "string"},
@@ -1135,6 +1382,38 @@ fn visual_aid_json_schema() -> serde_json::Value {
                     "caption": {"type": "string"}
                 },
                 "required": ["renderEngine", "spec", "caption"]
+            },
+            {
+                "properties": {
+                    "renderEngine": {"const": "sequence_strip"},
+                    "title": {"type": "string"},
+                    "rows": {
+                        "type": "array",
+                        "description": "1 fila = cómo se lee la secuencia; 2-3 filas = la original y sus variantes (el sistema resalta letra a letra lo que cambia y qué significado se altera). Todas las filas con el mismo número de trozos.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string", "description": "Nombre corto de la fila: \"Original\", \"Con la mutación\""},
+                                "chunks": {
+                                    "type": "array",
+                                    "description": "1-12 trozos EN ORDEN de lectura",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "text": {"type": "string", "description": "Los símbolos del trozo, 1-16 caracteres (\"ATG\", \"192\", \"https\")"},
+                                            "meaning": {"type": "string", "description": "Qué significa, concreto y corto (\"Metionina · inicio\"). NUNCA \"palabra 1\""},
+                                            "explanation": {"type": "string", "description": "Opcional: 1 frase al tocar el trozo"}
+                                        },
+                                        "required": ["text", "meaning"]
+                                    }
+                                }
+                            },
+                            "required": ["label", "chunks"]
+                        }
+                    },
+                    "caption": {"type": "string"}
+                },
+                "required": ["renderEngine", "rows", "caption"]
             },
             {
                 "properties": {
@@ -1172,6 +1451,97 @@ fn visual_aid_json_schema() -> serde_json::Value {
                 },
                 "required": ["renderEngine", "kind", "nodes", "edges"]
             },
+            {
+                "properties": {
+                    "renderEngine": {"const": "topology_flow"},
+                    "title": {"type": "string"},
+                    "nodes": {
+                        "type": "array",
+                        "description": "2-8 equipos/actores de una escena 3D isométrica. SIN coordenadas: el sistema los coloca. `id` de letras/dígitos/_.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "label": {"type": "string"},
+                                "icon": {"type": "string", "enum": crate::domain::notebook::TOPOLOGY_ICONS},
+                                "subtext": {"type": "string", "description": "Dato corto bajo el nombre (IP, rol, puerto)"},
+                                "explanation": {"type": "string", "description": "1-2 frases que se muestran al tocar el nodo"}
+                            },
+                            "required": ["id", "label", "icon"]
+                        }
+                    },
+                    "links": {
+                        "type": "array",
+                        "description": "Conexiones físicas/lógicas entre nodos. Todos los nodos deben quedar conectados.",
+                        "items": {"type": "object", "properties": {"from": {"type": "string"}, "to": {"type": "string"}}, "required": ["from", "to"]}
+                    },
+                    "steps": {
+                        "type": "array",
+                        "description": "1-8 pasos en orden; el estudiante los reproduce y ve viajar cada mensaje.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "detail": {"type": "string", "description": "Qué ocurre y POR QUÉ, 1-3 frases"},
+                                "messages": {
+                                    "type": "array",
+                                    "description": "0-4 mensajes. `from`/`to` son los extremos (ids): el sistema traza la ruta por `links`.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "from": {"type": "string"}, "to": {"type": "string"},
+                                            "label": {"type": "string", "description": "Contenido corto, p. ej. \"GET / HTTP/1.1\""},
+                                            "tone": {"type": "string", "enum": crate::domain::notebook::FLOW_TONES}
+                                        },
+                                        "required": ["from", "to", "label"]
+                                    }
+                                }
+                            },
+                            "required": ["title", "detail", "messages"]
+                        }
+                    },
+                    "caption": {"type": "string"}
+                },
+                "required": ["renderEngine", "nodes", "links", "steps", "caption"]
+            },
+            {
+                "properties": {
+                    "renderEngine": {"const": "explorable_model"},
+                    "title": {"type": "string"},
+                    "shell": {
+                        "type": "object",
+                        "description": "Envoltura translúcida que contiene las partes (membrana, carcasa, corteza). Omítela si el objeto no tiene interior.",
+                        "properties": {
+                            "label": {"type": "string"},
+                            "shape": {"type": "string", "enum": crate::domain::notebook::MODEL_SHELL_SHAPES},
+                            "cutaway": {"type": "boolean", "description": "true = se dibuja cortada para ver el interior"}
+                        },
+                        "required": ["label", "shape"]
+                    },
+                    "parts": {
+                        "type": "array",
+                        "description": "2-10 partes de un modelo 3D esquemático que el estudiante rota y toca. SIN coordenadas: eliges forma, tamaño y zona.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "label": {"type": "string"},
+                                "shape": {"type": "string", "enum": crate::domain::notebook::MODEL_SHAPES, "description": "disc_stack = discos apilados; tubes = red de tubos; grains = gránulos; helix = hélice; blob = masa irregular; layer = capa concéntrica (Tierra, átomo, piel), ordenada de dentro a fuera por zone"},
+                                "size": {"type": "string", "enum": crate::domain::notebook::MODEL_SIZES},
+                                "count": {"type": "integer", "description": "Cuántas copias (1-12)"},
+                                "zone": {"type": "string", "enum": crate::domain::notebook::MODEL_ZONES, "description": "center = centro; inner = cerca del centro; outer = cerca del borde; surface = sobre la envoltura; outside = fuera"},
+                                "color": {"type": "string", "enum": crate::domain::notebook::MODEL_COLORS},
+                                "explanation": {"type": "string", "description": "1-2 frases: qué es y qué hace. Se muestra al tocar la parte."}
+                            },
+                            "required": ["id", "label", "shape", "size", "zone", "explanation"]
+                        }
+                    },
+                    "caption": {"type": "string"}
+                },
+                "required": ["renderEngine", "parts", "caption"]
+            },
+            solid_model_schema(),
+            surface_3d_schema(),
             {
                 "properties": {
                     "renderEngine": {"const": "conceptual_matrix"},
@@ -1230,14 +1600,20 @@ fn visual_aid_json_schema() -> serde_json::Value {
             {
                 "properties": {
                     "renderEngine": {"const": "mermaid"},
-                    "chartType": {"type": "string", "enum": ["flowchart", "sequenceDiagram", "classDiagram", "stateDiagram", "erDiagram"]},
-                    "code": {"type": "string", "description": "Código Mermaid válido. Solo si diagram_spec no alcanza (classDiagram/erDiagram). En stateDiagram no uses '::' en etiquetas"},
+                    "chartType": {"type": "string", "enum": crate::domain::notebook::MermaidChartType::ALL.map(|t| t.as_str())},
+                    "code": {"type": "string", "description": "Código Mermaid válido cuya PRIMERA línea es el tipo (mindmap, timeline, gantt, pie, quadrantChart, xychart-beta, sankey-beta, journey, gitGraph, classDiagram, erDiagram, sequenceDiagram, stateDiagram-v2, flowchart). Procesos y estados interactivos van mejor en diagram_spec. En stateDiagram no uses '::' en etiquetas"},
                     "caption": {"type": "string"}
                 },
                 "required": ["renderEngine", "chartType", "code", "caption"]
             }
         ]
-    })
+    });
+    // Variants split out of the literal (the `json!` macro has a recursion limit).
+    if let Some(variants) = schema["oneOf"].as_array_mut() {
+        variants.push(molecule_3d_schema());
+        variants.extend(domain_kit_schemas());
+    }
+    schema
 }
 
 /// Compact stand-in for the optional `visualAid` of the blocks that accept one.
@@ -1247,10 +1623,29 @@ fn visual_aid_json_schema() -> serde_json::Value {
 /// flattens refs but only reads the first `oneOf` variant, and DeepSeek /
 /// Xiaomi / OpenRouter backends are unverified. The accepted arguments are
 /// unchanged: deserialization lives in Rust, not in this schema.
+/// The theory block's figure: same pointer, but every engine is legal there
+/// (it draws the rule's concrete example, which may well be spatial or 3D).
+fn theory_visual_aid_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "description": "OBLIGATORIO: dibuja el EJEMPLO CONCRETO de systemRule para que se entienda a la primera, con el motor que corresponde a visualIntent. Mismo shape que `visualAid` de declarative_visual_diagram; cualquier renderEngine (solid_model, surface_3d, explorable_model, sequence_strip, interactive_module, topology_flow, diagram_spec, mermaid, conceptual_matrix, declarative_svg)."
+    })
+}
+
+/// The kind of content the figure shows, decided BEFORE the engine (see
+/// `domain::visual_routing`; the full intent -> engine table is in the prompt).
+fn visual_intent_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "string",
+        "enum": crate::domain::visual_routing::VISUAL_INTENTS.iter().map(|i| i.key).collect::<Vec<_>>(),
+        "description": "Qué TIPO de contenido muestra la figura — decídelo ANTES del renderEngine (tabla en VISUALES). El sistema comprueba que el motor corresponda."
+    })
+}
+
 fn visual_aid_pointer_schema() -> serde_json::Value {
     serde_json::json!({
         "type": "object",
-        "description": "Opcional. Mismo shape que `visualAid` de declarative_visual_diagram (renderEngine interactive_module | diagram_spec | conceptual_matrix | declarative_svg | mermaid)"
+        "description": "Opcional. Mismo shape que `visualAid` de declarative_visual_diagram (renderEngine interactive_module | sequence_strip | diagram_spec | conceptual_matrix | declarative_svg | mermaid)"
     })
 }
 
@@ -1316,15 +1711,18 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                     "intuitiveHook": {"type": "string", "description": "🎯 El Gancho Intuitivo (≤30 palabras)"},
                     "analogyBoundary": {"type": "string", "description": "🚧 El Límite de la Analogía (≤25 palabras)"},
                     "systemRule": {"type": "string", "description": "📐 La Regla del Sistema (≤240 palabras)"},
-                    "frequentError": {"type": "string", "description": "⚠️ El Error Frecuente (≤40 palabras)"}
+                    "frequentError": {"type": "string", "description": "⚠️ El Error Frecuente (≤40 palabras)"},
+                    "visualIntent": visual_intent_schema(),
+                    "visualAid": theory_visual_aid_schema()
                 },
-                "required": ["blockType", "title", "intuitiveHook", "systemRule", "frequentError"],
+                "required": ["blockType", "title", "intuitiveHook", "systemRule", "frequentError", "visualIntent", "visualAid"],
                 "description": "Capas, contenido y topes de palabras: ver CATÁLOGO DE BLOQUES, bloque 1"
             },
             {
                 "properties": {
                     "blockType": {"const": "declarative_visual_diagram"},
                     "title": {"type": "string"},
+                    "visualIntent": visual_intent_schema(),
                     "visualAid": visual_aid_json_schema(),
                     "guidedWalkthrough": {
                         "type": "array",
@@ -1339,7 +1737,7 @@ pub(crate) fn single_block_json_schema() -> serde_json::Value {
                         }
                     }
                 },
-                "required": ["blockType", "title", "visualAid", "guidedWalkthrough"]
+                "required": ["blockType", "title", "visualIntent", "visualAid", "guidedWalkthrough"]
             },
             {
                 "properties": {
@@ -1593,10 +1991,12 @@ fn block_template_schemas() -> Vec<serde_json::Value> {
                 "intuitiveHook": {"type": "string", "description": "🎯 El Gancho Intuitivo (≤30 palabras)"},
                 "analogyBoundary": {"type": "string", "description": "🚧 El Límite de la Analogía (≤25 palabras)"},
                 "systemRule": {"type": "string", "description": "📐 La Regla del Sistema: micro-pasos numerados con un ejemplo entrada/salida (≤240 palabras)"},
-                "frequentError": {"type": "string", "description": "⚠️ esto SÍ [válido] / esto NO [confusión], porque [razón] (≤40 palabras)"}
+                "frequentError": {"type": "string", "description": "⚠️ esto SÍ [válido] / esto NO [confusión], porque [razón] (≤40 palabras)"},
+                "visualIntent": visual_intent_schema(),
+                "visualAid": theory_visual_aid_schema()
             },
-            "required": ["blockType", "title", "intuitiveHook", "analogyBoundary", "systemRule", "frequentError"],
-            "description": "PLANTILLA de microteoría en capas (sin visualAid). Los topes de palabras se validan en esta misma llamada. Equivale a anchored_micro_theory."
+            "required": ["blockType", "title", "intuitiveHook", "analogyBoundary", "systemRule", "frequentError", "visualIntent", "visualAid"],
+            "description": "PLANTILLA de microteoría en capas, con el visualAid OBLIGATORIO que dibuja el ejemplo de systemRule. Los topes de palabras se validan en esta misma llamada. Equivale a anchored_micro_theory."
         }),
         serde_json::json!({
             "properties": {
@@ -1661,6 +2061,35 @@ pub(crate) fn diagnostic_battery_json_schema() -> serde_json::Value {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_theory_without_its_figure_is_sent_back_in_the_same_call() {
+        let theory = |visual: Option<serde_json::Value>| {
+            let mut v = serde_json::json!({
+                "blockType": "tpl_theory", "title": "ADN", "intuitiveHook": "Un libro de 4 letras.",
+                "analogyBoundary": "No tiene autor.", "systemRule": "1. Se lee de 3 en 3.", "frequentError": "Leer letras sueltas."
+            });
+            if let Some(visual) = visual {
+                v["visualAid"] = visual;
+            }
+            v
+        };
+        let err = serde_json::from_value::<PublishBlockArgs>(theory(None)).expect_err("no figure, no theory").to_string();
+        assert!(err.contains("falta visualAid") && err.contains("sequence_strip"), "the error says what to draw: {err}");
+        let strip = serde_json::json!({
+            "renderEngine": "sequence_strip",
+            "rows": [{"label": "Original", "chunks": [{"text": "ATG", "meaning": "Metionina · inicio"}]}],
+            "caption": "Se lee de 3 en 3."
+        });
+        let args = serde_json::from_value::<PublishBlockArgs>(theory(Some(strip))).expect("with its figure it passes");
+        let block = args.into_published().block;
+        assert!(matches!(block, GeneratedSectionBlock::AnchoredMicroTheory { visual_aid: Some(crate::domain::notebook::StaticVisualSpec::SequenceStrip { .. }), .. }));
+        // The salvage path keeps a readable figure instead of dropping it.
+        let mut raw = theory(Some(serde_json::json!({"renderEngine": "conceptual_matrix", "headers": ["a"], "rows": [["b"]], "contrastFocus": "c"})));
+        raw["blockType"] = serde_json::json!("anchored_micro_theory");
+        let salvaged = salvage_fallback_block(&raw).expect("salvaged");
+        assert!(matches!(salvaged.block, GeneratedSectionBlock::AnchoredMicroTheory { visual_aid: Some(_), .. }));
+    }
+
     #[tokio::test]
     async fn publish_notebook_block_writes_into_the_shared_capture() {
         let capture: NotebookBlockCapture = Arc::new(Mutex::new(None));
@@ -1671,10 +2100,84 @@ mod tests {
             analogy_boundary: None,
             system_rule: "Regla".to_string(),
             frequent_error: "Error común".to_string(),
+            visual_aid: None,
+            visual_intent: None,
         };
         let ack = tool.call(&mut ToolContext::new(), block.into()).await.expect("infallible");
         assert!(ack.saved);
         assert!(capture.lock().unwrap().is_some());
+    }
+
+    fn parse_block(json: serde_json::Value) -> GeneratedSectionBlock {
+        serde_json::from_value::<PublishBlockArgs>(json).expect("the tool call deserializes").into_published().block
+    }
+
+    /// Regression: normalization used to rename the module's `spec` to
+    /// `code` (and add Mermaid's `chartType`), so the tool call was rejected.
+    #[test]
+    fn an_interactive_module_survives_the_tool_call_normalization() {
+        let block = parse_block(serde_json::json!({
+            "blockType": "declarative_visual_diagram",
+            "title": "Ley de Hooke",
+            "visualAid": {
+                "renderEngine": "interactive_module",
+                "spec": {"module": "timeline", "events": [{"label": "a", "detail": "b"}, {"label": "c", "detail": "d"}]},
+                "caption": "Fases"
+            },
+            "guidedWalkthrough": [{"stepNumber": 1, "targetVisualElement": "a", "pedagogicalInsight": "x"}]
+        }));
+        let GeneratedSectionBlock::DeclarativeVisualDiagram { visual_aid, .. } = block else { panic!("wrong block") };
+        assert!(matches!(visual_aid, crate::domain::notebook::StaticVisualSpec::InteractiveModule { .. }));
+    }
+
+    #[test]
+    fn a_visual_with_no_engine_still_falls_back_to_mermaid() {
+        let block = parse_block(serde_json::json!({
+            "blockType": "declarative_visual_diagram",
+            "title": "t",
+            "visualAid": {"type": "mermaid", "source": "graph TD\nA --> B"},
+            "guidedWalkthrough": []
+        }));
+        let GeneratedSectionBlock::DeclarativeVisualDiagram { visual_aid, .. } = block else { panic!("wrong block") };
+        let crate::domain::notebook::StaticVisualSpec::Mermaid { code, .. } = visual_aid else { panic!("not mermaid") };
+        assert_eq!(code, "graph TD\nA --> B");
+    }
+
+    #[test]
+    fn the_3d_engines_deserialize_from_a_tool_call() {
+        use crate::domain::notebook::StaticVisualSpec;
+        let diagram = |visual: serde_json::Value| {
+            let block = parse_block(serde_json::json!({
+                "blockType": "declarative_visual_diagram",
+                "title": "t",
+                "visualAid": visual,
+                "guidedWalkthrough": [{"stepNumber": "1", "targetVisualElement": "cliente", "pedagogicalInsight": "x"}]
+            }));
+            let GeneratedSectionBlock::DeclarativeVisualDiagram { visual_aid, .. } = block else { panic!("wrong block") };
+            visual_aid
+        };
+        let flow = diagram(serde_json::json!({
+            "renderEngine": "topology_flow",
+            "nodes": [{"id": "cliente", "label": "Cliente", "icon": "laptop", "subtext": "192.168.1.10"}, {"id": "web", "label": "Servidor", "icon": "server"}],
+            "links": [{"from": "cliente", "to": "web"}],
+            "steps": [{"title": "Petición", "detail": "Pide la página.", "messages": [{"from": "cliente", "to": "web", "label": "GET /"}]}],
+            "caption": "HTTP"
+        }));
+        let StaticVisualSpec::TopologyFlow { nodes, steps, .. } = flow else { panic!("not topology_flow") };
+        assert_eq!((nodes.len(), steps[0].messages.len()), (2, 1));
+
+        let model = diagram(serde_json::json!({
+            "renderEngine": "explorable_model",
+            "shell": {"label": "Membrana", "shape": "sphere"},
+            "parts": [
+                {"id": "nucleo", "label": "Núcleo", "shape": "sphere", "size": "large", "zone": "center", "explanation": "Guarda el ADN."},
+                {"id": "ribosomas", "label": "Ribosomas", "shape": "grains", "size": "small", "count": "9", "zone": "inner", "explanation": "Fabrican proteínas."}
+            ],
+            "caption": "Célula"
+        }));
+        let StaticVisualSpec::ExplorableModel { shell, parts, .. } = model else { panic!("not explorable_model") };
+        assert!(shell.is_some_and(|s| s.cutaway), "cutaway defaults to open");
+        assert_eq!((parts[0].count, parts[1].count), (1, 9), "count defaults to 1 and a stringified number is coerced");
     }
 
     #[tokio::test]
@@ -1774,7 +2277,8 @@ mod tests {
         .expect("template parses");
         assert!(matches!(tpl, PublishBlockArgs::Template(_)));
         let free: PublishBlockArgs = serde_json::from_value(serde_json::json!({
-            "blockType": "anchored_micro_theory", "title": "t", "intuitiveHook": "h", "systemRule": "r", "frequentError": "f"
+            "blockType": "anchored_micro_theory", "title": "t", "intuitiveHook": "h", "systemRule": "r", "frequentError": "f",
+            "visualAid": {"renderEngine": "conceptual_matrix", "headers": ["a"], "rows": [["b"]], "contrastFocus": "c"}
         }))
         .expect("free block still parses");
         assert!(matches!(free, PublishBlockArgs::Block(_)));
@@ -1843,7 +2347,7 @@ mod tests {
         // Free-form blocks are never flagged.
         assert!(!flag_of(serde_json::json!({
             "blockType": "anchored_micro_theory", "title": "t", "intuitiveHook": "h",
-            "systemRule": "r", "frequentError": "f"
+            "systemRule": "r", "frequentError": "f", "visualAid": {"renderEngine": "conceptual_matrix", "headers": ["a"], "rows": [["b"]], "contrastFocus": "c"}
         }))
         .await);
     }
@@ -1859,7 +2363,7 @@ mod tests {
             .collect();
         assert_eq!(
             with_aid,
-            ["declarative_visual_diagram", "branching_scenario_challenge", "heuristic_error_audit", "interactive_prediction_gate", "hands_on_mission"]
+            ["anchored_micro_theory", "declarative_visual_diagram", "branching_scenario_challenge", "heuristic_error_audit", "interactive_prediction_gate", "hands_on_mission", "tpl_theory"]
         );
         let full: Vec<&str> = variants
             .iter()
@@ -1867,8 +2371,12 @@ mod tests {
             .map(|v| v["properties"]["blockType"]["const"].as_str().expect("tag"))
             .collect();
         assert_eq!(full, ["declarative_visual_diagram"], "the engines are spelled out in exactly one place");
-        // It stays required where it was required.
+        // It stays required where it was required, and the theory now draws its example too.
         assert!(variants[2]["required"].as_array().unwrap().iter().any(|r| r == "visualAid"));
+        for tag in ["anchored_micro_theory", "tpl_theory"] {
+            let v = variants.iter().find(|v| v["properties"]["blockType"]["const"] == tag).expect(tag);
+            assert!(v["required"].as_array().unwrap().iter().any(|r| r == "visualAid"), "{tag} requires its figure");
+        }
     }
 
     #[test]
@@ -1925,7 +2433,8 @@ mod tests {
                 "title": "Prueba",
                 "intuitiveHook": "Gancho",
                 "systemRule": "Regla",
-                "frequentError": "Error"
+                "frequentError": "Error",
+                "visualAid": {"renderEngine": "conceptual_matrix", "headers": ["a"], "rows": [["b"]], "contrastFocus": "c"}
             }
         });
         let args: PublishBlockArgs = serde_json::from_value(nested).expect("should unwrap and parse");

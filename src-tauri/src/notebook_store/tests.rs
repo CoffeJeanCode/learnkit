@@ -82,6 +82,8 @@
                 analogy_boundary: None,
                 system_rule: "Explicación breve".to_string(),
                 frequent_error: "Error típico".to_string(),
+                visual_aid: None,
+                visual_intent: None,
             },
             GeneratedSectionBlock::MetacognitiveClosure {
                 synthesis_task: "Compara ambos enfoques".to_string(),
@@ -505,7 +507,7 @@
                 .with_block("b1")
                 .with_attempt(1, 0)
                 .with_support_level(Some("faded"))
-                .with_rubric(vec![RubricCriterion { criterion: "Nombra la causa raíz".into(), met: false, evidence: None }]),
+                .with_rubric(vec![RubricCriterion { criterion: "Nombra la causa raíz".into(), met: false, evidence: None, format_only: false }]),
             SkillEvidence::new("skill-a", "course-1", EvidenceKind::PracticeGate, EvidenceOutcome::Passed).with_block("b1").with_attempt(2, 1),
             SkillEvidence::new("skill-b", "course-1", EvidenceKind::Retrieval, EvidenceOutcome::SelfRecalled),
             SkillEvidence::new("skill-c", "course-2", EvidenceKind::Closure, EvidenceOutcome::Passed),
@@ -686,6 +688,49 @@
         assert_eq!(untouched.calibrated_baseline, CalibratedBaseline::NoviceIntuitive, "the cross-course memory is never overwritten");
         let elsewhere = store.get_learner_memory_for_course(LOCAL_LEARNER_ID, &other.id).expect("memory");
         assert_eq!(elsewhere.calibrated_baseline, CalibratedBaseline::NoviceIntuitive, "another topic keeps its own baseline");
+    }
+
+    #[test]
+    fn the_figure_library_returns_the_closest_other_class() {
+        use crate::notebook_store::{LibraryFigure, title_similarity};
+        let store = NotebookStore::open_in_memory().unwrap();
+        let fig = |class: &str, title: &str| LibraryFigure {
+            class_id: class.into(),
+            class_title: title.into(),
+            engine: "surface_3d".into(),
+            intent: Some("curved_surface".into()),
+            visual_json: "{}".into(),
+        };
+        store.save_figure(&fig("c1", "Curvatura y geodésicas del espacio-tiempo"), 1).unwrap();
+        store.save_figure(&fig("c2", "Recetas de cocina mediterránea"), 2).unwrap();
+        let hits = store.similar_figures("Semana 1: Días 1-2 — Geodésicas y curvatura: por qué cae una manzana", "c9", 0.3, 3).unwrap();
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].1.class_id, "c1");
+        assert!(store.similar_figures("Curvatura y geodésicas del espacio-tiempo", "c1", 0.3, 3).unwrap().is_empty(), "never its own class");
+        assert!(title_similarity("Semana 1: Días 1-2", "Semana 2: Días 3-4") < 0.01, "session labels are noise");
+    }
+
+    #[test]
+    fn spaced_retrieval_only_reviews_classes_of_the_same_course() {
+        use crate::domain::learner_memory::LOCAL_LEARNER_ID;
+        let store = NotebookStore::open_in_memory().expect("store");
+        let react = store.create_course("React", "Design system", 4).expect("course");
+        let m = store.create_milestone(&react.id, 1, "Semana 1", "Entrega").expect("m");
+        let tokens = store.create_class(&m.id, 1, "Tokens de densidad", 0, 2.0).expect("class");
+        let biology = store.create_course("Biología", "Mutaciones", 4).expect("course");
+        let mb = store.create_milestone(&biology.id, 1, "Semana 1", "Entrega").expect("m");
+        let dna = store.create_class(&mb.id, 1, "Qué guarda el ADN", 0, 2.0).expect("class");
+
+        let mut memory = store.get_learner_memory(LOCAL_LEARNER_ID).expect("memory");
+        memory.queue_retrieval(&tokens.id, "Tokens de densidad", 0);
+        store.save_learner_memory(&memory).expect("save");
+
+        let in_biology = store.get_learner_memory_for_course(LOCAL_LEARNER_ID, &biology.id).expect("memory");
+        assert!(in_biology.due_retrieval_items(1).is_empty(), "a React review never opens a biology class");
+        let in_react = store.get_learner_memory_for_course(LOCAL_LEARNER_ID, &react.id).expect("memory");
+        assert_eq!(in_react.due_retrieval_items(1).len(), 1, "it is still due in its own course");
+        assert_eq!(store.get_learner_memory(LOCAL_LEARNER_ID).expect("global").retrieval_spaced_queue.len(), 1, "the stored queue is untouched");
+        let _ = dna;
     }
 
     // --- Class resources & research status ---------------------------------------

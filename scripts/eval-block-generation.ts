@@ -18,6 +18,8 @@
 
 import { readFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
+import { FLOW_TONES, MODEL_COLORS, MODEL_SHAPES, MODEL_SHELL_SHAPES, MODEL_ZONES, StaticVisualSpecSchema, TOPOLOGY_ICONS } from "../src/lib/schemas";
+import { scoreVisual } from "../src/lib/visualQuality";
 
 // 1. Read API keys from .env
 function loadEnv(): Record<string, string> {
@@ -164,13 +166,107 @@ const PUBLISH_BLOCK_TOOL = {
             title: { type: "string" },
             visualAid: {
               type: "object",
-              properties: {
-                type: { const: "mermaid" },
-                chartType: { type: "string", enum: ["flowchart", "sequenceDiagram", "classDiagram", "stateDiagram", "erDiagram"] },
-                code: { type: "string" },
-                caption: { type: "string" },
-              },
-              required: ["type", "chartType", "code", "caption"],
+              oneOf: [
+                {
+                  properties: {
+                    type: { const: "mermaid" },
+                    chartType: { type: "string", enum: ["flowchart", "sequenceDiagram", "classDiagram", "stateDiagram", "erDiagram"] },
+                    code: { type: "string" },
+                    caption: { type: "string" },
+                  },
+                  required: ["type", "chartType", "code", "caption"],
+                },
+                // The 3D engines, same shape as `visual_aid_json_schema()` in
+                // src-tauri/src/tools/notebook_tools.rs (no coordinates anywhere).
+                {
+                  properties: {
+                    renderEngine: { const: "topology_flow" },
+                    title: { type: "string" },
+                    nodes: {
+                      type: "array",
+                      description: "2-8 equipos/actores. SIN coordenadas. id de letras/dígitos/_.",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string" },
+                          label: { type: "string" },
+                          icon: { type: "string", enum: [...TOPOLOGY_ICONS] },
+                          subtext: { type: "string" },
+                          explanation: { type: "string" },
+                        },
+                        required: ["id", "label", "icon"],
+                      },
+                    },
+                    links: {
+                      type: "array",
+                      items: { type: "object", properties: { from: { type: "string" }, to: { type: "string" } }, required: ["from", "to"] },
+                    },
+                    steps: {
+                      type: "array",
+                      description: "1-8 pasos en orden.",
+                      items: {
+                        type: "object",
+                        properties: {
+                          title: { type: "string" },
+                          detail: { type: "string" },
+                          messages: {
+                            type: "array",
+                            description: "0-4 mensajes; from/to son ids de nodos unidos por un camino de links.",
+                            items: {
+                              type: "object",
+                              properties: {
+                                from: { type: "string" },
+                                to: { type: "string" },
+                                label: { type: "string" },
+                                tone: { type: "string", enum: [...FLOW_TONES] },
+                              },
+                              required: ["from", "to", "label"],
+                            },
+                          },
+                        },
+                        required: ["title", "detail", "messages"],
+                      },
+                    },
+                    caption: { type: "string" },
+                  },
+                  required: ["renderEngine", "nodes", "links", "steps", "caption"],
+                },
+                {
+                  properties: {
+                    renderEngine: { const: "explorable_model" },
+                    title: { type: "string" },
+                    shell: {
+                      type: "object",
+                      properties: {
+                        label: { type: "string" },
+                        shape: { type: "string", enum: [...MODEL_SHELL_SHAPES] },
+                        cutaway: { type: "boolean" },
+                      },
+                      required: ["label", "shape"],
+                    },
+                    parts: {
+                      type: "array",
+                      description: "2-10 partes. SIN coordenadas: forma, tamaño y zona.",
+                      items: {
+                        type: "object",
+                        properties: {
+                          id: { type: "string" },
+                          label: { type: "string" },
+                          shape: { type: "string", enum: [...MODEL_SHAPES] },
+                          size: { type: "string", enum: ["small", "medium", "large"] },
+                          count: { type: "integer" },
+                          zone: { type: "string", enum: [...MODEL_ZONES] },
+                          color: { type: "string", enum: [...MODEL_COLORS] },
+                          explanation: { type: "string" },
+                        },
+                        required: ["id", "label", "shape", "size", "zone", "explanation"],
+                      },
+                    },
+                    caption: { type: "string" },
+                  },
+                  required: ["renderEngine", "parts", "caption"],
+                },
+              ],
             },
             guidedWalkthrough: {
               type: "array",
@@ -278,6 +374,8 @@ interface Scenario {
   name: string;
   domain: string;
   targetBlockType: string;
+  /** When set, the block's visualAid must use this renderEngine. */
+  expectedEngine?: string;
   systemPrompt: string;
   userPrompt: string;
 }
@@ -388,6 +486,46 @@ Usa la PLANTILLA MECÁNICA 'tpl_scenario_choice':
 - alternatives: 2 alternativas con decisiones subóptimas y sus consecuencias.`,
     userPrompt: `Crea la plantilla de decisión de idempotencia bancaria.`,
   },
+  {
+    id: "scene3d_topology_flow",
+    name: "Escena 3D — Flujo OAuth 2.0 (topology_flow)",
+    domain: "Seguridad Web",
+    targetBlockType: "declarative_visual_diagram",
+    expectedEngine: "topology_flow",
+    systemPrompt: `Eres el generador pedagógico de LearnKit.
+Emite ÚNICAMENTE una llamada a la herramienta 'publish_notebook_block'.
+Genera un 'declarative_visual_diagram' cuyo visualAid usa renderEngine "topology_flow": una escena 3D isométrica que el
+sistema construye y anima. Tú solo describes QUÉ hay; NUNCA escribas coordenadas ni código.
+- nodes: 2-8, cada uno con id (letras/dígitos/_), label, icon del catálogo (laptop phone server database router switch
+  cloud firewall person service queue storage box), subtext corto y explanation de 1-2 frases.
+- links: qué nodo está conectado con cuál. Todos los nodos deben quedar conectados.
+- steps: 1-8 pasos en orden, cada uno con title, detail (el porqué) y 0-4 messages {from, to, label, tone}.
+  from/to son ids de nodos entre los que existe un camino de links. tone: request | response | control | error.
+- caption: una frase.
+- guidedWalkthrough: 2-4 pasos cuyo targetVisualElement es el id EXACTO de un nodo.
+Usa objetos JSON nativos.`,
+    userPrompt: `Explica el flujo Authorization Code de OAuth 2.0 entre el usuario, la aplicación cliente, el servidor de autorización y la API de recursos.`,
+  },
+  {
+    id: "scene3d_explorable_model",
+    name: "Escena 3D — Célula vegetal (explorable_model)",
+    domain: "Biología Celular",
+    targetBlockType: "declarative_visual_diagram",
+    expectedEngine: "explorable_model",
+    systemPrompt: `Eres el generador pedagógico de LearnKit.
+Emite ÚNICAMENTE una llamada a la herramienta 'publish_notebook_block'.
+Genera un 'declarative_visual_diagram' cuyo visualAid usa renderEngine "explorable_model": un modelo 3D esquemático que
+el sistema construye y el estudiante gira y toca. Tú solo describes las partes; NUNCA escribas coordenadas ni código.
+- shell: la envoltura translúcida {label, shape: sphere | ellipsoid | box | cylinder | capsule, cutaway: true}.
+- parts: 2-10, cada una con id (letras/dígitos/_), label, shape (sphere ellipsoid capsule torus disc_stack tubes helix
+  grains box cylinder blob), size (small | medium | large), count (1-12), zone (center — solo UNA parte — | inner |
+  outer | surface | outside), color (sky green rose amber violet neutral, distinto por parte) y explanation obligatoria
+  de 1-2 frases (qué es y qué hace).
+- caption: una frase.
+- guidedWalkthrough: 2-4 pasos cuyo targetVisualElement es el id EXACTO de una parte.
+Usa objetos JSON nativos.`,
+    userPrompt: `Muestra los orgánulos de una célula vegetal y qué hace cada uno.`,
+  },
 ];
 
 // 5. Tolerant JSON repair & Inner Unwrapping
@@ -485,7 +623,8 @@ function auditComplexPayload(
   nativeToolCall: boolean,
   tokens: { prompt: number; completion: number },
   durationMs: number,
-  finishReason: string
+  finishReason: string,
+  expectedEngine?: string
 ): AuditResult {
   const missing: string[] = [];
   let syntaxError: string | undefined;
@@ -544,6 +683,16 @@ function auditComplexPayload(
       if (!parsed.title) missing.push("title");
       if (!parsed.visualAid || typeof parsed.visualAid !== "object") {
         missing.push("visualAid");
+      } else if (expectedEngine) {
+        // A 3D engine: judged by the app's real schema and quality checks, so
+        // "passed" means the block would actually render and play.
+        if (parsed.visualAid.renderEngine !== expectedEngine) {
+          missing.push(`visualAid.renderEngine expected ${expectedEngine}, got ${parsed.visualAid.renderEngine}`);
+        } else {
+          const visual = StaticVisualSpecSchema.safeParse(parsed.visualAid);
+          if (!visual.success) missing.push(`visualAid: ${visual.error.issues[0]?.path.join(".")} ${visual.error.issues[0]?.message}`);
+          else missing.push(...scoreVisual(visual.data).issues.map((issue) => `visualAid: ${issue}`));
+        }
       } else {
         if (!parsed.visualAid.code) missing.push("visualAid.code");
         if (!parsed.visualAid.chartType) missing.push("visualAid.chartType");
@@ -776,7 +925,8 @@ async function runComplexEvaluation() {
       nativeToolCall,
       { prompt: usage.prompt_tokens, completion: usage.completion_tokens },
       durationMs,
-      finishReason
+      finishReason,
+      sc.expectedEngine
     );
 
     results.push({ scenario: sc, audit, rawOutput: rawArgs });

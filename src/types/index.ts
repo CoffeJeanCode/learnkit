@@ -21,6 +21,9 @@ export interface ModelTierConfig {
   cheapModel?: string | null;
   visionProviderId?: string | null;
   visionModel?: string | null;
+  /** Optional model that takes over a block whose figure failed twice (empty = off). */
+  escalationProviderId?: string | null;
+  escalationModel?: string | null;
 }
 
 export interface ModelInfo {

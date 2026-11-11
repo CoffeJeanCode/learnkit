@@ -114,6 +114,11 @@ pub struct RubricCriterion {
     pub met: bool,
     #[serde(default)]
     pub evidence: Option<String>,
+    /// A PRESENTATION requirement (column order, "write it in one sentence",
+    /// exact decimals…) rather than the skill itself. Never decides a gate on
+    /// its own: see `grading::concept_shown_despite_format`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub format_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

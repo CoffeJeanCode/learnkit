@@ -2,36 +2,42 @@ import { useEffect, useState } from "react";
 import { useProviders } from "../../stores/providers";
 import type { ModelTierConfig } from "../../types";
 
-const SUGGESTIONS: Record<string, { strong: string[]; cheap: string[]; vision: string[] }> = {
+const SUGGESTIONS: Record<string, { strong: string[]; cheap: string[]; vision: string[]; escalation: string[] }> = {
   anthropic: {
-    strong: ["claude-sonnet-4-6", "claude-opus-4"],
-    cheap: ["claude-haiku-4-5"],
-    vision: ["claude-sonnet-4-6"],
+    strong: ["claude-sonnet-5-5", "claude-opus-5-5"],
+    cheap: ["claude-haiku-5-5"],
+    vision: ["claude-sonnet-5-5"],
+    escalation: ["claude-opus-5-5", "claude-sonnet-5-5"],
   },
   deepseek: {
     strong: ["deepseek-chat", "deepseek-reasoner"],
     cheap: ["deepseek-v4-flash", "deepseek-chat"],
     vision: ["deepseek-chat"],
+    escalation: ["deepseek-reasoner", "deepseek-v4-pro"],
   },
   xiaomi: {
     strong: ["mimo-v2.6-pro", "mimo-v2.6-pro-ultraspeed"],
     cheap: ["mimo-v2.6-flash"],
     vision: ["mimo-v2.6-pro"],
+    escalation: ["mimo-v2.6-pro"],
   },
   gemini: {
     strong: ["gemini-2.5-pro"],
     cheap: ["gemini-2.5-flash", "gemini-2.5-flash-lite"],
     vision: ["gemini-2.5-flash", "gemini-2.5-pro"],
+    escalation: ["gemini-2.5-pro"],
   },
   openai: {
     strong: ["gpt-5", "o3"],
     cheap: ["gpt-4.1-mini", "o3-mini"],
     vision: ["gpt-5", "gpt-4o"],
+    escalation: ["gpt-5"],
   },
   openrouter: {
-    strong: ["anthropic/claude-sonnet-4", "deepseek/deepseek-r1"],
-    cheap: ["anthropic/claude-3.5-haiku", "openai/gpt-4o-mini"],
+    strong: ["anthropic/claude-sonnet-5-5", "deepseek/deepseek-r1"],
+    cheap: ["anthropic/claude-haiku-5-5", "openai/gpt-4o-mini"],
     vision: ["google/gemini-2.5-flash", "openai/gpt-4o"],
+    escalation: ["anthropic/claude-opus-5-5"],
   },
 };
 
@@ -49,6 +55,8 @@ export function ModelTiersCard() {
   const [cheapModel, setCheapModel] = useState("");
   const [visionPid, setVisionPid] = useState("");
   const [visionModel, setVisionModel] = useState("");
+  const [escalationPid, setEscalationPid] = useState("");
+  const [escalationModel, setEscalationModel] = useState("");
   const [savedNotice, setSavedNotice] = useState(false);
 
   useEffect(() => {
@@ -59,6 +67,8 @@ export function ModelTiersCard() {
       setCheapModel(modelTiers.cheapModel || "");
       setVisionPid(modelTiers.visionProviderId || activeProvider?.id || "");
       setVisionModel(modelTiers.visionModel || "");
+      setEscalationPid(modelTiers.escalationProviderId || "");
+      setEscalationModel(modelTiers.escalationModel || "");
     } else if (activeProvider) {
       setStrongPid(activeProvider.id);
       setCheapPid(activeProvider.id);
@@ -74,6 +84,9 @@ export function ModelTiersCard() {
       cheapModel: cheapModel.trim() || null,
       visionProviderId: visionPid || null,
       visionModel: visionModel.trim() || null,
+      // Escalation is opt-in: no provider or no model = off.
+      escalationProviderId: escalationPid && escalationModel.trim() ? escalationPid : null,
+      escalationModel: escalationPid && escalationModel.trim() ? escalationModel.trim() : null,
     };
     await saveModelTiers(config);
     setSavedNotice(true);
@@ -86,7 +99,7 @@ export function ModelTiersCard() {
     <div className="card model-tiers-card">
       <div className="card-head">
         <h3>Asignación de modelos por rol</h3>
-        <span className="badge">3 roles activos</span>
+        <span className="badge">{escalationPid && escalationModel.trim() ? "4 roles activos" : "3 roles activos"}</span>
       </div>
 
       <p className="hint">
@@ -263,6 +276,64 @@ export function ModelTiersCard() {
                   type="button"
                   className={`model-tier-chip ${visionModel === m ? "is-active" : ""}`}
                   onClick={() => setVisionModel(m)}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {/* Tier Escalation (optional) */}
+        <div className="model-tier-row">
+          <div className="model-tier-header">
+            <div className="model-tier-title-group">
+              <span className="model-tier-title">Escalado de figuras</span>
+              <span className="model-tier-tag escalation">Opcional</span>
+            </div>
+            <span className="model-tier-desc">Toma un bloque cuya figura falló dos veces (temas difíciles): solo se paga cuando hace falta</span>
+          </div>
+
+          <div className="model-tier-fields">
+            <div className="model-tier-field">
+              <label htmlFor="tier-escalation-provider">Proveedor:</label>
+              <select
+                id="tier-escalation-provider"
+                value={escalationPid}
+                onChange={(e) => {
+                  setEscalationPid(e.target.value);
+                  const p = providers.find((x) => x.id === e.target.value);
+                  setEscalationModel(p ? (SUGGESTIONS[p.provider]?.escalation[0] ?? "") : "");
+                }}
+              >
+                <option value="">Desactivado</option>
+                {configuredProviders.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} {p.active ? "★" : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="model-tier-field">
+              <label htmlFor="tier-escalation-model">Modelo:</label>
+              <input
+                id="tier-escalation-model"
+                value={escalationModel}
+                disabled={!escalationPid}
+                placeholder="p. ej. claude-opus-5-5"
+                onChange={(e) => setEscalationModel(e.target.value)}
+              />
+            </div>
+          </div>
+
+          {escalationPid && (
+            <div className="model-tier-chips">
+              {(SUGGESTIONS[providers.find((p) => p.id === escalationPid)?.provider || ""]?.escalation || []).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`model-tier-chip ${escalationModel === m ? "is-active" : ""}`}
+                  onClick={() => setEscalationModel(m)}
                 >
                   {m}
                 </button>

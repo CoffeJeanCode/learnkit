@@ -1,3 +1,6 @@
+// The tool schemas are large serde_json::json! literals.
+#![recursion_limit = "256"]
+
 pub mod agents;
 pub mod application;
 pub mod commands;

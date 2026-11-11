@@ -200,6 +200,11 @@ pub(super) fn composition_suggestion(
 /// the server-side closure-eligibility check (`grounding::
 /// single_block_violations`) so the model can see for itself whether closing
 /// is even allowed yet, instead of finding out only via a rejection.
+/// What kind of course this is, for the figure (a hint: see `domain::visual_routing`).
+pub(super) fn course_visual_domain(ctx: &ClassGenerationContext) -> crate::domain::visual_routing::VisualDomain {
+    crate::domain::visual_routing::classify(&[&ctx.course.title, &ctx.course.target_goal, &ctx.milestone.title, &ctx.class.title])
+}
+
 pub(super) fn render_next_block_input(
     ctx: &ClassGenerationContext,
     existing_blocks: &[NotebookBlock],
@@ -263,6 +268,9 @@ pub(super) fn render_next_block_input(
     }
     if !resources.is_empty() {
         context["resources"] = class_resources_json(resources);
+    }
+    if let Some(directive) = crate::domain::visual_routing::directive(course_visual_domain(ctx)) {
+        context["visualDirective"] = serde_json::Value::String(directive.to_string());
     }
     if let Some(hint) = composition_hint(ctx, existing_blocks, mastery, block_type_usage) {
         context["compositionHint"] = hint;
@@ -372,7 +380,7 @@ pub(super) fn render_escalation_block_input(
     recent_wrong_submission: &str,
     voluntary: bool,
 ) -> String {
-    let context = serde_json::json!({
+    let mut context = serde_json::json!({
         "course": {
             "title": ctx.course.title,
             "targetGoal": ctx.course.target_goal,
@@ -385,6 +393,9 @@ pub(super) fn render_escalation_block_input(
             "mostRecentWrongSubmission": recent_wrong_submission,
         },
     });
+    if let Some(directive) = crate::domain::visual_routing::directive(course_visual_domain(ctx)) {
+        context["visualDirective"] = serde_json::Value::String(directive.to_string());
+    }
     let intro = if voluntary {
         "El estudiante PIDIÓ un paso previo más guiado en esta compuerta (sin haber fallado 3 veces). Genera el \
          bloque de apoyo según la sección MODO ESCALACIÓN → «paso previo pedido por el estudiante» de tu system \
@@ -499,18 +510,26 @@ pub(super) fn render_block_audit_input(
 /// decides to generate one) has real material for its `predictionComparison
 /// .finalResult`, instead of the model having to invent one from nothing.
 pub(super) fn synthesize_final_result_so_far(existing_blocks: &[NotebookBlock]) -> String {
-    let passed: Vec<String> = existing_blocks
+    // EVERY gate the student met, with what really happened: a closing block
+    // that only heard about the passes used to fill the gaps by itself
+    // ("al primer cálculo", a derivation the student never wrote).
+    let facts: Vec<String> = existing_blocks
         .iter()
-        .filter(|b| b.block_type.is_gate() && b.status == BlockStatus::Passed)
-        .map(|b| match b.attempt_count {
-            0 | 1 => format!("{} (superada al primer intento)", b.block_type.as_str()),
-            n => format!("{} (superada en el intento {n})", b.block_type.as_str()),
+        .filter(|b| b.block_type.is_gate() && b.attempt_count > 0)
+        .map(|b| {
+            let what = format!("bloque {} ({})", b.order_index + 1, b.block_type.as_str());
+            match (b.status, b.attempt_count) {
+                (BlockStatus::Passed, 1) => format!("{what}: superado al primer intento"),
+                (BlockStatus::Passed, n) => format!("{what}: superado en el intento {n}, tras {} fallo(s)", n - 1),
+                (BlockStatus::Escalated, n) => format!("{what}: NO superado — se escaló a un paso de apoyo tras {n} intento(s)"),
+                (_, n) => format!("{what}: aún sin superar tras {n} intento(s)"),
+            }
         })
         .collect();
-    if passed.is_empty() {
-        "El estudiante todavía no ha superado ninguna compuerta en esta clase.".to_string()
+    if facts.is_empty() {
+        "El estudiante todavía no ha respondido ninguna compuerta en esta clase.".to_string()
     } else {
-        format!("Compuertas superadas hasta ahora en esta clase: {}.", passed.join(", "))
+        format!("Lo que pasó en cada compuerta de esta clase (hechos, no los cambies): {}.", facts.join("; "))
     }
 }
 
@@ -580,8 +599,12 @@ mod tests {
         let mut third_try = block(1, DynamicBlockType::HandsOnMission, serde_json::json!({}));
         third_try.status = BlockStatus::Passed;
         third_try.attempt_count = 3;
-        let text = synthesize_final_result_so_far(&[first_try, third_try]);
-        assert!(text.contains("interactive_prediction_gate (superada al primer intento)"), "{text}");
-        assert!(text.contains("hands_on_mission (superada en el intento 3)"), "{text}");
+        let mut escalated = block(2, DynamicBlockType::HandsOnMission, serde_json::json!({}));
+        escalated.status = BlockStatus::Escalated;
+        escalated.attempt_count = 3;
+        let text = synthesize_final_result_so_far(&[first_try, third_try, escalated]);
+        assert!(text.contains("bloque 1 (interactive_prediction_gate): superado al primer intento"), "{text}");
+        assert!(text.contains("bloque 2 (hands_on_mission): superado en el intento 3, tras 2 fallo(s)"), "{text}");
+        assert!(text.contains("bloque 3 (hands_on_mission): NO superado — se escaló"), "the escalation is a fact the closure must see: {text}");
     }
 }

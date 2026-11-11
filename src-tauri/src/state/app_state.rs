@@ -287,7 +287,29 @@ impl AppState {
             ModelRef::new(active_id.clone(), model)
         });
 
+        // 3. The optional figure-escalation model: a copy of the block
+        //    generator pinned to it, or nothing at all.
+        let escalation = match (&tier_cfg.escalation_provider_id, &tier_cfg.escalation_model) {
+            (Some(pid), Some(m)) if usable(pid) && !m.trim().is_empty() => Some(ModelRef::new(pid.clone(), m.trim().to_string())),
+            _ => None,
+        };
+        let escalation_id = crate::agents::block_generator_agent::FIGURE_ESCALATION_AGENT_ID;
         let mut changed = false;
+        match escalation {
+            Some(model) => {
+                let mut def = crate::agents::notebook_agent::definition();
+                def.id = escalation_id.to_string();
+                def.name = "Notebook (escalado de figuras)".to_string();
+                // Only the escalation model learns about tier 2 (code figures).
+                def.system_prompt = format!("{}\n\n{}", def.system_prompt, crate::agents::block_generator_agent::P_CODE_FIGURE);
+                def.model = model;
+                let current = self.agents.get(escalation_id).ok();
+                if current.as_ref().is_none_or(|c| c.model != def.model || c.system_prompt != def.system_prompt) {
+                    changed |= self.agents.register(def).is_ok();
+                }
+            }
+            None => changed |= self.agents.remove(escalation_id).is_ok(),
+        }
         for agent_id in Self::pinned_agent_ids() {
             let Ok(mut def) = self.agents.get(agent_id) else { continue };
             let target = if Self::CHEAP_AGENT_IDS.contains(&agent_id) { &cheap_target } else { &strong_target };

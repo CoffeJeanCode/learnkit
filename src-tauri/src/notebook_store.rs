@@ -202,7 +202,59 @@ CREATE TABLE IF NOT EXISTS notebook_comments (
 );
 CREATE INDEX IF NOT EXISTS idx_notebook_comments_nb ON notebook_comments(notebook_id);
 CREATE INDEX IF NOT EXISTS idx_notebook_comments_course ON notebook_comments(course_id);
+-- Figures that passed every review, reused as references for similar classes
+-- (see `NotebookStore::similar_figures`).
+CREATE TABLE IF NOT EXISTS figure_library (
+    class_id TEXT NOT NULL,
+    engine TEXT NOT NULL,
+    class_title TEXT NOT NULL,
+    intent TEXT,
+    visual_json TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (class_id, engine)
+);
 "#;
+
+/// One validated figure of the library.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LibraryFigure {
+    pub class_id: String,
+    pub class_title: String,
+    pub engine: String,
+    pub intent: Option<String>,
+    pub visual_json: String,
+}
+
+/// Content words of a title (accents folded, ≥ 4 letters, minus the
+/// session-label noise like "semana", "días").
+pub fn title_words(title: &str) -> std::collections::BTreeSet<String> {
+    const NOISE: [&str; 8] = ["semana", "dias", "clase", "sesion", "como", "para", "desde", "entre"];
+    title
+        .chars()
+        .flat_map(char::to_lowercase)
+        .map(|c| match c {
+            'á' => 'a',
+            'é' => 'e',
+            'í' => 'i',
+            'ó' => 'o',
+            'ú' | 'ü' => 'u',
+            'ñ' => 'n',
+            c if c.is_alphanumeric() => c,
+            _ => ' ',
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .filter(|w| w.chars().count() >= 4 && !NOISE.contains(w))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Jaccard similarity of two titles' content words.
+pub fn title_similarity(a: &str, b: &str) -> f64 {
+    let (x, y) = (title_words(a), title_words(b));
+    let union = x.union(&y).count();
+    if union == 0 { 0.0 } else { x.intersection(&y).count() as f64 / union as f64 }
+}
 
 /// `skill_evidence` shipped without `is_transfer`; databases created by that
 /// build need the column added (a fresh one already has it).
@@ -911,6 +963,22 @@ impl NotebookStore {
         if let Some(calibration) = self.get_course_calibration(course_id)? {
             memory.calibrated_baseline = calibration.calibrated_baseline;
         }
+        // The spaced-retrieval queue is learner-wide, but a review only makes
+        // sense inside the course it was learned in: without this, class 1 of
+        // a biology course opened with a recall of React design tokens from
+        // another course. Each item's `concept_id` is the id of the class that
+        // queued it (`queue_retrieval` on closure approval), so keep the items
+        // whose class belongs to THIS course. Only this read-only copy is
+        // filtered: the stored queue keeps every course's items.
+        let own_classes: std::collections::HashSet<String> = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT c.id FROM classes c JOIN syllabus_milestones m ON m.id = c.milestone_id WHERE m.course_id = ?1",
+            )?;
+            let ids = stmt.query_map(params![course_id], |row| row.get::<_, String>(0))?.collect::<Result<_, _>>()?;
+            ids
+        };
+        memory.retrieval_spaced_queue.retain(|item| own_classes.contains(&item.concept_id));
         Ok(memory)
     }
 
@@ -1289,6 +1357,34 @@ impl NotebookStore {
     /// exactly once per notebook, by design (see
     /// `NotebookDocument::initial_prediction`).
     /// Appends one gate attempt to the document's answer history.
+    /// Keeps a figure that passed every review (latest one per class and engine).
+    pub fn save_figure(&self, fig: &LibraryFigure, at_ms: i64) -> AppResult<()> {
+        self.lock().execute(
+            "INSERT OR REPLACE INTO figure_library (class_id, engine, class_title, intent, visual_json, created_at_ms)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![fig.class_id, fig.engine, fig.class_title, fig.intent, fig.visual_json, at_ms],
+        )?;
+        Ok(())
+    }
+
+    /// The validated figures of OTHER classes whose titles look like `title`,
+    /// best first, with their similarity (only ≥ `min`).
+    pub fn similar_figures(&self, title: &str, exclude_class: &str, min: f64, limit: usize) -> AppResult<Vec<(f64, LibraryFigure)>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT class_id, class_title, engine, intent, visual_json FROM figure_library WHERE class_id != ?1 ORDER BY created_at_ms DESC LIMIT 500",
+        )?;
+        let rows = stmt
+            .query_map(params![exclude_class], |r| {
+                Ok(LibraryFigure { class_id: r.get(0)?, class_title: r.get(1)?, engine: r.get(2)?, intent: r.get(3)?, visual_json: r.get(4)? })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut scored: Vec<(f64, LibraryFigure)> = rows.into_iter().map(|f| (title_similarity(title, &f.class_title), f)).filter(|(s, _)| *s >= min).collect();
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+        Ok(scored)
+    }
+
     pub fn append_gate_attempt(&self, attempt: &GateAttempt) -> AppResult<()> {
         self.lock().execute(
             "INSERT INTO gate_attempts (document_id, block_id, block_type, attempt_number, answer_text, passed, at_ms)

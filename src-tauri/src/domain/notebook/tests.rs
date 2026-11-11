@@ -231,6 +231,8 @@
                 analogy_boundary: None,
                 system_rule: "r".to_string(),
                 frequent_error: "e".to_string(),
+                visual_aid: None,
+                visual_intent: None,
             },
             &["blockType", "title", "intuitiveHook", "systemRule", "frequentError"],
         );
@@ -244,6 +246,7 @@
                     caption: "c".to_string(),
                 },
                 guided_walkthrough: vec![],
+                visual_intent: None,
             },
             &["blockType", "title", "visualAid", "guidedWalkthrough"],
         );
@@ -357,6 +360,8 @@
             analogy_boundary: None,
             system_rule: "r".to_string(),
             frequent_error: "e".to_string(),
+            visual_aid: None,
+            visual_intent: None,
         };
         let value = serde_json::to_value(&without).expect("serializes");
         assert!(value.get("analogyBoundary").is_none(), "{value:?}");
@@ -367,6 +372,8 @@
             analogy_boundary: Some("No explica qué pasa con escritura concurrente".to_string()),
             system_rule: "r".to_string(),
             frequent_error: "e".to_string(),
+            visual_aid: None,
+            visual_intent: None,
         };
         let value = serde_json::to_value(&with).expect("serializes");
         assert!(value.get("analogyBoundary").is_some(), "{value:?}");

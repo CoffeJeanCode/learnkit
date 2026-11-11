@@ -1,12 +1,15 @@
 import type { DynamicSectionBlock } from "../../../lib/schemas";
 import { InlineText, RichText } from "./RichText";
+import { StaticVisual } from "./StaticVisual";
 
 type Content = Extract<DynamicSectionBlock, { blockType: "anchored_micro_theory" }>;
 
 // Layered microtheory in 3-4 parts — never one undifferentiated paragraph.
 // `systemRule` has its own ~240-word ceiling and the other layers share a
-// combined terse ceiling (see `notebook_service::grounding`). Diagrams are
-// their own block now (declarative_visual_diagram), never embedded here.
+// combined terse ceiling (see `notebook_service::grounding`). An optional
+// `visualAid` draws the rule's concrete example and sits right under it, so
+// the student sees the mechanism the moment they read it; the deep,
+// walked-through figure is still its own declarative_visual_diagram block.
 //
 // `analogyBoundary` is optional: absent/null on blocks persisted before the
 // field existed (see `DynamicSectionBlockSchema` in `src/lib/schemas.ts` —
@@ -55,6 +58,11 @@ export function AnchoredMicroTheoryBlock({ content }: { content: Content }) {
         <span className="theory-part-emoji" aria-hidden="true">📐</span>
         <RichText text={withoutLeadingMarker(content.systemRule, "📐")} />
       </div>
+      {content.visualAid ? (
+        <div className="theory-figure">
+          <StaticVisual visual={content.visualAid} />
+        </div>
+      ) : null}
       <p className="theory-part theory-error">
         <span className="theory-part-emoji" aria-hidden="true">⚠️</span>
         <InlineText text={withoutLeadingMarker(content.frequentError, "⚠️")} />

@@ -8,5 +8,10 @@ src-tauri/WixTools/
 src-tauri/resources/
 .claude/worktrees/
 src-tauri/target-check/
+src-tauri/target-msvc-tests/
 *.manifest
+!src-tauri/windows/test-common-controls.manifest
 
+
+# Real-LLM eval reports (scripts/eval-scene3d.tsx)
+eval-results/

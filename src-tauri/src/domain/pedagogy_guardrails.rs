@@ -93,6 +93,8 @@ pub fn needs_llm_critic(block_type: DynamicBlockType) -> bool {
     matches!(
         block_type,
         DynamicBlockType::AnchoredMicroTheory
+            // The figure IS the block: its coherence with the class is judgment.
+            | DynamicBlockType::DeclarativeVisualDiagram
             | DynamicBlockType::InteractivePredictionGate
             | DynamicBlockType::BranchingScenarioChallenge
             // Exercises are where an unmodeled step hides: the critic checks
@@ -113,7 +115,7 @@ pub fn block_guardrail_violations(block: &GeneratedSectionBlock) -> Vec<String> 
                 scan_text(&format!("items[{i}].expectedAnswer"), &item.expected_answer, &mut v);
             }
         }
-        GeneratedSectionBlock::AnchoredMicroTheory { title, intuitive_hook, analogy_boundary, system_rule, frequent_error } => {
+        GeneratedSectionBlock::AnchoredMicroTheory { title, intuitive_hook, analogy_boundary, system_rule, frequent_error, visual_aid, .. } => {
             scan_text("title", title, &mut v);
             scan_text("intuitiveHook", intuitive_hook, &mut v);
             if let Some(boundary) = analogy_boundary {
@@ -121,8 +123,11 @@ pub fn block_guardrail_violations(block: &GeneratedSectionBlock) -> Vec<String> 
             }
             scan_text("systemRule", system_rule, &mut v);
             scan_text("frequentError", frequent_error, &mut v);
+            if let Some(visual) = visual_aid {
+                v.extend(visual_violations(visual, "visualAid"));
+            }
         }
-        GeneratedSectionBlock::DeclarativeVisualDiagram { title, visual_aid, guided_walkthrough } => {
+        GeneratedSectionBlock::DeclarativeVisualDiagram { title, visual_aid, guided_walkthrough, .. } => {
             scan_text("title", title, &mut v);
             for step in guided_walkthrough {
                 scan_text("guidedWalkthrough.targetVisualElement", &step.target_visual_element, &mut v);
@@ -315,6 +320,21 @@ fn visual_violations(visual: &StaticVisualSpec, field: &str) -> Vec<String> {
                 }),
             }
         }
+        StaticVisualSpec::SequenceStrip { title, rows, caption } => {
+            if let Some(t) = title {
+                scan_text(&format!("{field}.title"), t, &mut v);
+            }
+            scan_text(&format!("{field}.caption"), caption, &mut v);
+            for (r, row) in rows.iter().enumerate() {
+                scan_text(&format!("{field}.rows[{r}].label"), &row.label, &mut v);
+                for (c, chunk) in row.chunks.iter().enumerate() {
+                    scan_text(&format!("{field}.rows[{r}].chunks[{c}].meaning"), &chunk.meaning, &mut v);
+                    if let Some(e) = &chunk.explanation {
+                        scan_text(&format!("{field}.rows[{r}].chunks[{c}].explanation"), e, &mut v);
+                    }
+                }
+            }
+        }
         StaticVisualSpec::DiagramSpec { caption, title, nodes, .. } => {
             if let Some(c) = caption {
                 scan_text(&format!("{field}.caption"), c, &mut v);
@@ -332,6 +352,90 @@ fn visual_violations(visual: &StaticVisualSpec, field: &str) -> Vec<String> {
                 }
             }
         }
+        StaticVisualSpec::TopologyFlow { title, nodes, steps, caption, .. } => {
+            for text in [caption, title].into_iter().flatten() {
+                scan_text(&format!("{field}.caption"), text, &mut v);
+            }
+            for (idx, node) in nodes.iter().enumerate() {
+                scan_text(&format!("{field}.nodes[{idx}].label"), &node.label, &mut v);
+                if let Some(note) = &node.explanation {
+                    scan_text(&format!("{field}.nodes[{idx}].explanation"), note, &mut v);
+                }
+            }
+            for (idx, step) in steps.iter().enumerate() {
+                scan_text(&format!("{field}.steps[{idx}].title"), &step.title, &mut v);
+                scan_text(&format!("{field}.steps[{idx}].detail"), &step.detail, &mut v);
+            }
+        }
+        StaticVisualSpec::ExplorableModel { title, shell, parts, caption } => {
+            for text in [caption, title].into_iter().flatten() {
+                scan_text(&format!("{field}.caption"), text, &mut v);
+            }
+            if let Some(shell) = shell {
+                scan_text(&format!("{field}.shell.label"), &shell.label, &mut v);
+            }
+            for (idx, part) in parts.iter().enumerate() {
+                scan_text(&format!("{field}.parts[{idx}].label"), &part.label, &mut v);
+                scan_text(&format!("{field}.parts[{idx}].explanation"), &part.explanation, &mut v);
+            }
+        }
+        StaticVisualSpec::Molecule3d { title, steps, caption, .. } => {
+            for text in [caption, title].into_iter().flatten() {
+                scan_text(&format!("{field}.caption"), text, &mut v);
+            }
+            for (idx, s) in steps.iter().enumerate() {
+                scan_text(&format!("{field}.steps[{idx}].title"), &s.title, &mut v);
+                scan_text(&format!("{field}.steps[{idx}].detail"), &s.detail, &mut v);
+            }
+        }
+        StaticVisualSpec::AlgebraicStructure { title, caption, .. } | StaticVisualSpec::Instrument { title, caption, .. } => {
+            for text in [caption, title].into_iter().flatten() {
+                scan_text(&format!("{field}.caption"), text, &mut v);
+            }
+        }
+        StaticVisualSpec::IllustrationKit { title, items, forces, caption, .. } => {
+            for text in [caption, title].into_iter().flatten() {
+                scan_text(&format!("{field}.caption"), text, &mut v);
+            }
+            for (idx, it) in items.iter().enumerate() {
+                scan_text(&format!("{field}.items[{idx}].label"), &it.label, &mut v);
+                scan_text(&format!("{field}.items[{idx}].explanation"), &it.explanation, &mut v);
+            }
+            for (idx, fo) in forces.iter().enumerate() {
+                scan_text(&format!("{field}.forces[{idx}].label"), &fo.label, &mut v);
+            }
+        }
+        StaticVisualSpec::CodeFigure { title, caption, .. } => {
+            scan_text(&format!("{field}.caption"), caption, &mut v);
+            if let Some(t) = title {
+                scan_text(&format!("{field}.title"), t, &mut v);
+            }
+        }
+        StaticVisualSpec::Surface3d { title, z_label, paths, markers, caption, params, .. } => {
+            for text in [caption, title, z_label].into_iter().flatten() {
+                scan_text(&format!("{field}.caption"), text, &mut v);
+            }
+            for p in params {
+                scan_text(&format!("{field}.params.{}", p.sym), &p.label, &mut v);
+            }
+            for (idx, p) in paths.iter().enumerate() {
+                scan_text(&format!("{field}.paths[{idx}].label"), &p.label, &mut v);
+                scan_text(&format!("{field}.paths[{idx}].explanation"), &p.explanation, &mut v);
+            }
+            for (idx, m) in markers.iter().enumerate() {
+                scan_text(&format!("{field}.markers[{idx}].label"), &m.label, &mut v);
+                scan_text(&format!("{field}.markers[{idx}].explanation"), &m.explanation, &mut v);
+            }
+        }
+        StaticVisualSpec::SolidModel { title, features, caption, .. } => {
+            for text in [caption, title].into_iter().flatten() {
+                scan_text(&format!("{field}.caption"), text, &mut v);
+            }
+            for (idx, f) in features.iter().enumerate() {
+                scan_text(&format!("{field}.features[{idx}].label"), &f.label, &mut v);
+                scan_text(&format!("{field}.features[{idx}].explanation"), &f.explanation, &mut v);
+            }
+        }
     }
     v
 }
@@ -345,20 +449,15 @@ fn mermaid_violations(chart_type: MermaidChartType, code: &str, field: &str) -> 
     }
     let first_line = trimmed.lines().find(|l| !l.trim().is_empty()).unwrap_or_default().trim().to_lowercase();
     let first_token = first_line.split_whitespace().next().unwrap_or_default();
-    let expected: &[&str] = match chart_type {
-        MermaidChartType::Flowchart => &["flowchart", "graph"],
-        MermaidChartType::SequenceDiagram => &["sequencediagram"],
-        MermaidChartType::ClassDiagram => &["classdiagram"],
-        MermaidChartType::StateDiagram => &["statediagram", "statediagram-v2"],
-        MermaidChartType::ErDiagram => &["erdiagram"],
-    };
+    let expected = chart_type.headers();
     if !expected.contains(&first_token) {
         v.push(format!(
-            "bloque: {field} mermaid no abre con el tipo declarado ({:?} debería empezar con \"{}\") — empieza con \"{first_token}\"",
-            chart_type,
+            "bloque: {field} mermaid no abre con el tipo declarado ({} debería empezar con \"{}\") — empieza con \"{first_token}\"",
+            chart_type.as_str(),
             expected.join("\" | \"")
         ));
     }
+    v.extend(mermaid_shape_violations(chart_type, trimmed, field));
     for (open, close, name) in [('[', ']', "corchetes"), ('(', ')', "paréntesis")] {
         let opens = trimmed.matches(open).count();
         let closes = trimmed.matches(close).count();
@@ -370,6 +469,90 @@ fn mermaid_violations(chart_type: MermaidChartType, code: &str, field: &str) -> 
         v.push(format!("bloque: {field} mermaid con comillas sin cerrar — sintaxis inválida"));
     }
     v
+}
+
+/// The one thing each newer chart type cannot render without — checked here
+/// so the model fixes it in the same turn instead of the student seeing a
+/// Mermaid parse error. Deliberately minimal: the header, the bracket and
+/// quote balance above, plus each type's skeleton.
+fn mermaid_shape_violations(chart_type: MermaidChartType, code: &str, field: &str) -> Vec<String> {
+    let body: Vec<&str> = code.lines().skip(1).map(str::trim_end).filter(|l| !l.trim().is_empty() && !l.trim().starts_with("%%")).collect();
+    let lower = code.to_lowercase();
+    let mut missing: Vec<&str> = Vec::new();
+    match chart_type {
+        MermaidChartType::Gantt => {
+            if !lower.contains("dateformat") {
+                missing.push("`dateFormat YYYY-MM-DD`");
+            }
+            if !body.iter().any(|l| l.contains(':') && !l.trim_start().to_lowercase().starts_with("title")) {
+                missing.push("al menos una tarea `Nombre :id, 2025-01-06, 5d`");
+            }
+        }
+        MermaidChartType::Pie => {
+            let data: Vec<&&str> = body.iter().filter(|l| !l.trim_start().to_lowercase().starts_with("title")).collect();
+            let well_formed = |l: &str| {
+                let l = l.trim();
+                l.starts_with('"') && l.rsplit_once(':').is_some_and(|(label, n)| label.trim_end().ends_with('"') && n.trim().parse::<f64>().is_ok_and(|x| x >= 0.0))
+            };
+            if data.len() < 2 || !data.iter().all(|l| well_formed(l)) {
+                missing.push("2+ líneas `\"Etiqueta\" : número`");
+            }
+        }
+        MermaidChartType::Mindmap => {
+            let indent = |l: &&str| l.len() - l.trim_start().len();
+            let min = body.iter().map(indent).min().unwrap_or(0);
+            if body.is_empty() || body.iter().filter(|l| indent(l) == min).count() != 1 {
+                missing.push("UNA sola raíz (`root((Idea))`) con las ramas más indentadas debajo");
+            }
+        }
+        MermaidChartType::Timeline => {
+            if body.iter().filter(|l| l.contains(':') && !l.trim_start().to_lowercase().starts_with("title")).count() < 2 {
+                missing.push("2+ eventos `periodo : evento`");
+            }
+        }
+        MermaidChartType::QuadrantChart => {
+            for axis in ["x-axis", "y-axis"] {
+                if !lower.contains(axis) {
+                    missing.push(if axis == "x-axis" { "`x-axis Bajo --> Alto`" } else { "`y-axis Bajo --> Alto`" });
+                }
+            }
+            if !body.iter().any(|l| l.contains(": [")) {
+                missing.push("puntos `Nombre: [0.3, 0.6]`");
+            }
+        }
+        MermaidChartType::XyChart => {
+            if !lower.contains("x-axis") {
+                missing.push("`x-axis [ene, feb, mar]`");
+            }
+            if !body.iter().any(|l| {
+                let t = l.trim_start().to_lowercase();
+                (t.starts_with("bar") || t.starts_with("line")) && t.contains('[')
+            }) {
+                missing.push("una serie `bar [1, 2, 3]` o `line [1, 2, 3]`");
+            }
+        }
+        MermaidChartType::Sankey => {
+            let rows = body.iter().filter(|l| l.split(',').count() == 3 && l.rsplit(',').next().is_some_and(|n| n.trim().parse::<f64>().is_ok())).count();
+            if rows == 0 {
+                missing.push("filas CSV `origen,destino,valor`");
+            }
+        }
+        MermaidChartType::Journey => {
+            if !body.iter().any(|l| l.trim_start().to_lowercase().starts_with("section")) {
+                missing.push("`section Etapa` con tareas `Tarea: 3: Actor`");
+            }
+        }
+        MermaidChartType::GitGraph => {
+            if !lower.contains("commit") {
+                missing.push("`commit` / `branch` / `checkout` / `merge`");
+            }
+        }
+        _ => {}
+    }
+    if missing.is_empty() {
+        return Vec::new();
+    }
+    vec![format!("bloque: {field} mermaid {} no se puede dibujar: le falta {}", chart_type.as_str(), missing.join(" y "))]
 }
 
 fn svg_violations(view_box: &str, elements: &[crate::domain::notebook::SvgElement], field: &str) -> Vec<String> {
@@ -433,6 +616,8 @@ mod tests {
             analogy_boundary: Some("La fábrica no explica qué pasa cuando el buffer se llena".to_string()),
             system_rule: "Explicación breve del tema.".to_string(),
             frequent_error: "Confundir la entrada con la salida".to_string(),
+            visual_aid: None,
+            visual_intent: None,
         }
     }
 
@@ -529,6 +714,8 @@ mod tests {
             analogy_boundary: None,
             system_rule: "R".to_string(),
             frequent_error: "E".to_string(),
+            visual_aid: None,
+            visual_intent: None,
         };
         let v = block_guardrail_violations(&block);
         assert!(v.iter().any(|s| s.contains("lenguaje meta")), "{v:?}");
@@ -581,7 +768,7 @@ mod tests {
         assert!(needs_llm_critic(DynamicBlockType::AnchoredMicroTheory));
         assert!(needs_llm_critic(DynamicBlockType::InteractivePredictionGate));
         assert!(needs_llm_critic(DynamicBlockType::BranchingScenarioChallenge));
-        assert!(!needs_llm_critic(DynamicBlockType::DeclarativeVisualDiagram));
+        assert!(needs_llm_critic(DynamicBlockType::DeclarativeVisualDiagram), "the figure must agree with the class");
         assert!(needs_llm_critic(DynamicBlockType::HeuristicErrorAudit));
         assert!(needs_llm_critic(DynamicBlockType::HandsOnMission));
         assert!(!needs_llm_critic(DynamicBlockType::MetacognitiveClosure));
@@ -610,6 +797,7 @@ mod tests {
                 target_visual_element: "la membrana".to_string(),
                 pedagogical_insight: "Acá ocurre la selección".to_string(),
             }],
+            visual_intent: None,
         };
         assert!(block_guardrail_violations(&diagram).is_empty());
 
@@ -672,5 +860,36 @@ mod tests {
         // Tier 3: Critical (20 chars vs 100 chars, severe bias)
         let opt3 = vec!["a".repeat(20), "b".repeat(100)];
         assert_eq!(evaluate_options_length_slack(&opt3), ValidationSeverity::Critical);
+    }
+}
+
+#[cfg(test)]
+mod mermaid_shape_tests {
+    use super::*;
+
+    fn issues(t: MermaidChartType, code: &str) -> Vec<String> {
+        mermaid_violations(t, code, "visualAid")
+    }
+
+    #[test]
+    fn each_newer_chart_type_needs_its_skeleton() {
+        let good = [
+            (MermaidChartType::Mindmap, "mindmap\n  root((CAD))\n    Croquis\n      Restricciones\n    Operaciones"),
+            (MermaidChartType::Timeline, "timeline\n  title Historia del CAD\n  1963 : Sketchpad\n  1982 : AutoCAD"),
+            (MermaidChartType::Gantt, "gantt\n  dateFormat YYYY-MM-DD\n  section Diseño\n  Bocetos :a1, 2025-01-06, 5d"),
+            (MermaidChartType::Pie, "pie title Material\n  \"PLA\" : 60\n  \"PETG\" : 40"),
+            (MermaidChartType::QuadrantChart, "quadrantChart\n  x-axis Bajo --> Alto\n  y-axis Bajo --> Alto\n  Tarea A: [0.3, 0.8]"),
+            (MermaidChartType::XyChart, "xychart-beta\n  x-axis [ene, feb]\n  bar [20, 45]"),
+            (MermaidChartType::Sankey, "sankey-beta\n  Solar,Red,40\n  Red,Hogares,30"),
+            (MermaidChartType::Journey, "journey\n  section Comprar\n    Buscar: 3: Cliente"),
+            (MermaidChartType::GitGraph, "gitGraph\n  commit\n  branch feature\n  commit"),
+        ];
+        for (t, code) in good {
+            assert!(issues(t, code).is_empty(), "{} -> {:?}", t.as_str(), issues(t, code));
+        }
+        assert!(issues(MermaidChartType::Mindmap, "mindmap\n  CAD\n  Croquis").iter().any(|s| s.contains("UNA sola raíz")));
+        assert!(issues(MermaidChartType::Gantt, "gantt\n  section Diseño\n  Bocetos :a1, 2025-01-06, 5d").iter().any(|s| s.contains("dateFormat")));
+        assert!(issues(MermaidChartType::Pie, "pie\n  PLA 60\n  PETG 40").iter().any(|s| s.contains("Etiqueta")));
+        assert!(issues(MermaidChartType::Timeline, "mindmap\n  1963 : Sketchpad\n  1982 : AutoCAD").iter().any(|s| s.contains("no abre con el tipo")));
     }
 }

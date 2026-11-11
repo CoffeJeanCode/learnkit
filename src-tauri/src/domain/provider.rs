@@ -54,7 +54,7 @@ impl ProviderKind {
     pub fn suggested_models(&self) -> &'static [&'static str] {
         match self {
             ProviderKind::OpenAI => &["gpt-5", "gpt-4.1-mini"],
-            ProviderKind::Anthropic => &["claude-sonnet-4-6", "claude-haiku-4-5"],
+            ProviderKind::Anthropic => &["claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"],
             ProviderKind::Gemini => &["gemini-2.5-pro", "gemini-2.5-flash"],
             ProviderKind::OpenRouter => &["anthropic/claude-sonnet-4", "openai/gpt-5"],
             ProviderKind::DeepSeek => &[
@@ -74,7 +74,7 @@ impl ProviderKind {
     pub fn fast_model(&self) -> Option<&'static str> {
         match self {
             ProviderKind::OpenAI => Some("gpt-4.1-mini"),
-            ProviderKind::Anthropic => Some("claude-haiku-4-5"),
+            ProviderKind::Anthropic => Some("claude-haiku-5-5"),
             ProviderKind::Gemini => Some("gemini-2.5-flash"),
             ProviderKind::DeepSeek => Some("deepseek-v4-flash"),
             ProviderKind::Xiaomi => Some("mimo-v2.6-flash"),
@@ -97,7 +97,7 @@ impl ProviderKind {
     pub fn suggested_strong_model(&self) -> &'static str {
         match self {
             ProviderKind::OpenAI => "gpt-5",
-            ProviderKind::Anthropic => "claude-sonnet-4-6",
+            ProviderKind::Anthropic => "claude-sonnet-5-5",
             ProviderKind::Gemini => "gemini-2.5-pro",
             ProviderKind::OpenRouter => "anthropic/claude-sonnet-4",
             ProviderKind::DeepSeek => "deepseek-chat",
@@ -109,7 +109,7 @@ impl ProviderKind {
     pub fn suggested_cheap_model(&self) -> &'static str {
         match self {
             ProviderKind::OpenAI => "gpt-4.1-mini",
-            ProviderKind::Anthropic => "claude-haiku-4-5",
+            ProviderKind::Anthropic => "claude-haiku-5-5",
             ProviderKind::Gemini => "gemini-2.5-flash",
             ProviderKind::OpenRouter => "openai/gpt-4.1-mini",
             ProviderKind::DeepSeek => "deepseek-v4-flash",
@@ -121,7 +121,7 @@ impl ProviderKind {
     pub fn suggested_vision_model(&self) -> &'static str {
         match self {
             ProviderKind::OpenAI => "gpt-5",
-            ProviderKind::Anthropic => "claude-sonnet-4-6",
+            ProviderKind::Anthropic => "claude-sonnet-5-5",
             ProviderKind::Gemini => "gemini-2.5-flash",
             ProviderKind::OpenRouter => "anthropic/claude-sonnet-4",
             ProviderKind::DeepSeek => "deepseek-chat",
@@ -149,6 +149,13 @@ pub struct ModelTierConfig {
     pub cheap_model: Option<String>,
     pub vision_provider_id: Option<String>,
     pub vision_model: Option<String>,
+    /// Optional: a stronger model (e.g. claude-opus-5-5) that takes over a
+    /// block whose FIGURE failed the review twice with the strong model —
+    /// the hard topics pay for it, the rest never do. Unset = no escalation.
+    #[serde(default)]
+    pub escalation_provider_id: Option<String>,
+    #[serde(default)]
+    pub escalation_model: Option<String>,
 }
 
 /// Non-sensitive provider configuration. Persisted as JSON. Never contains secrets.
@@ -188,7 +195,7 @@ mod tests {
 
     #[test]
     fn light_agents_use_the_fast_sibling_only_for_a_known_main_model() {
-        assert_eq!(ProviderKind::Anthropic.light_agent_model("claude-sonnet-4-6"), "claude-haiku-4-5");
+        assert_eq!(ProviderKind::Anthropic.light_agent_model("claude-sonnet-5-5"), "claude-haiku-5-5");
         assert_eq!(ProviderKind::DeepSeek.light_agent_model("deepseek-v4-pro"), "deepseek-v4-flash");
         // A custom model id: the sibling may not exist on this account.
         assert_eq!(ProviderKind::Anthropic.light_agent_model("my-private-finetune"), "my-private-finetune");

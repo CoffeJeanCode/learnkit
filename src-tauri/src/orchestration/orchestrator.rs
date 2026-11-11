@@ -282,6 +282,11 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
+    /// The model an agent currently runs on (`None` if it isn't registered).
+    pub fn agent_model(&self, id: &str) -> Option<crate::domain::model::ModelRef> {
+        self.agents.get(id).ok().map(|d| d.model)
+    }
+
     pub fn new(agents: Arc<AgentRegistry>, runner: Arc<dyn PromptRunner>) -> Self {
         Self { agents, runner }
     }
@@ -1005,6 +1010,8 @@ mod tests {
             analogy_boundary: None,
             system_rule: "Explicación breve del tema.".to_string(),
             frequent_error: "Confundir la entrada con la salida".to_string(),
+            visual_aid: None,
+            visual_intent: None,
         }
     }
 

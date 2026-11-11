@@ -4,6 +4,16 @@ import type { Key } from "react";
 import type { StaticVisualSpec, SvgElement, SvgGroup } from "../../../lib/schemas";
 import { compileDiagramSpecToMermaid } from "../../../lib/diagramSpec";
 import { InteractiveModuleVisual } from "./InteractiveModule";
+import { SequenceStripVisual } from "./SequenceStripVisual";
+import { ExplorableModelVisual } from "./scene3d/ExplorableModelVisual";
+import { SolidModelVisual } from "./scene3d/SolidModelVisual";
+import { Surface3dVisual } from "./scene3d/Surface3dVisual";
+import { Molecule3dVisual } from "./scene3d/Molecule3dVisual";
+import { AlgebraicStructureVisual } from "./AlgebraicStructureVisual";
+import { CodeFigureVisual } from "./CodeFigureVisual";
+import { IllustrationKitVisual } from "./IllustrationKitVisual";
+import { InstrumentVisual } from "./InstrumentVisual";
+import { TopologyFlowVisual } from "./scene3d/TopologyFlowVisual";
 
 // Explicitly static/declarative visuals only (arXiv:2605.30174) — never a
 // dynamic simulator. 3 rendering engines, one component each, dispatched by
@@ -285,6 +295,8 @@ export function StaticVisual({ visual, highlightGroupId, locked = false }: { vis
           highlightGroupId={highlightGroupId}
         />
       );
+    case "sequence_strip":
+      return <SequenceStripVisual visual={visual} />;
     case "conceptual_matrix":
       return <ConceptualMatrixVisual headers={visual.headers} rows={visual.rows} contrastFocus={visual.contrastFocus} />;
     case "diagram_spec": {
@@ -311,5 +323,25 @@ export function StaticVisual({ visual, highlightGroupId, locked = false }: { vis
     }
     case "interactive_module":
       return <InteractiveModuleVisual spec={visual.spec} challenge={visual.challenge} caption={visual.caption} locked={locked} />;
+    // The 3D engines: these components are plain React; three.js itself is
+    // loaded on demand inside them, so it stays out of the main bundle.
+    case "topology_flow":
+      return <TopologyFlowVisual visual={visual} highlightGroupId={highlightGroupId} renderSequence={(code) => <MermaidVisual code={code} caption="" />} />;
+    case "explorable_model":
+      return <ExplorableModelVisual visual={visual} highlightGroupId={highlightGroupId} />;
+    case "solid_model":
+      return <SolidModelVisual visual={visual} highlightGroupId={highlightGroupId} />;
+    case "surface_3d":
+      return <Surface3dVisual visual={visual} highlightGroupId={highlightGroupId} />;
+    case "molecule_3d":
+      return <Molecule3dVisual visual={visual} highlightGroupId={highlightGroupId} />;
+    case "algebraic_structure":
+      return <AlgebraicStructureVisual visual={visual} />;
+    case "instrument":
+      return <InstrumentVisual visual={visual} />;
+    case "illustration_kit":
+      return <IllustrationKitVisual visual={visual} highlightGroupId={highlightGroupId} />;
+    case "code_figure":
+      return <CodeFigureVisual visual={visual} />;
   }
 }

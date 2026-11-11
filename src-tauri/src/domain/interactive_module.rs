@@ -25,7 +25,7 @@ fn valid_symbol(s: &str) -> bool {
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic()) && s.chars().count() <= 16 && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-fn variable_violations(field: &str, vars: &[ModuleVariable], max: usize, out: &mut Vec<String>) {
+pub(crate) fn variable_violations(field: &str, vars: &[ModuleVariable], max: usize, out: &mut Vec<String>) {
     if vars.len() > max {
         out.push(format!("{field}: máximo {max} variables, hay {}", vars.len()));
     }
@@ -56,12 +56,12 @@ fn variable_violations(field: &str, vars: &[ModuleVariable], max: usize, out: &m
 }
 
 /// `n` evenly spaced values over `[min, max]` (inclusive).
-fn grid(min: f64, max: f64, n: usize) -> Vec<f64> {
+pub(crate) fn grid(min: f64, max: f64, n: usize) -> Vec<f64> {
     (0..n).map(|i| min + (max - min) * i as f64 / (n - 1) as f64).collect()
 }
 
 /// Every combination of grid values for `vars` (bounded: <= GRID^MAX_VARIABLES).
-fn combos(vars: &[ModuleVariable]) -> Vec<HashMap<String, f64>> {
+pub(crate) fn combos(vars: &[ModuleVariable]) -> Vec<HashMap<String, f64>> {
     let mut acc: Vec<HashMap<String, f64>> = vec![HashMap::new()];
     for v in vars {
         let values = grid(v.min, v.max, GRID);
@@ -79,11 +79,11 @@ fn combos(vars: &[ModuleVariable]) -> Vec<HashMap<String, f64>> {
     acc
 }
 
-fn init_env(vars: &[ModuleVariable]) -> HashMap<String, f64> {
+pub(crate) fn init_env(vars: &[ModuleVariable]) -> HashMap<String, f64> {
     vars.iter().map(|v| (v.sym.clone(), v.init)).collect()
 }
 
-fn parse_with_symbols(field: &str, src: &str, allowed: &BTreeSet<String>, out: &mut Vec<String>) -> Option<Expr> {
+pub(crate) fn parse_with_symbols(field: &str, src: &str, allowed: &BTreeSet<String>, out: &mut Vec<String>) -> Option<Expr> {
     match Expr::parse(src) {
         Err(e) => {
             out.push(format!("{field}: fórmula inválida (\"{src}\"): {e}. Usa solo + - * / ^ ( ), números, símbolos declarados y sin/cos/tan/sqrt/abs/ln/log/exp/min/max"));
@@ -139,7 +139,7 @@ pub fn module_violations(field: &str, spec: &InteractiveModuleSpec, challenge: O
                 }
             }
         }
-        InteractiveModuleSpec::FunctionPlot { expr, domain, params, .. } => {
+        InteractiveModuleSpec::FunctionPlot { expr, domain, params, area, .. } => {
             variable_violations(&format!("{field}.params"), params, MAX_PARAMS, &mut v);
             if params.iter().any(|p| p.sym == "x") {
                 v.push(format!("{field}.params: \"x\" es la variable independiente; nombra el parámetro de otra forma"));
@@ -162,6 +162,11 @@ pub fn module_violations(field: &str, spec: &InteractiveModuleSpec, challenge: O
                     if finite < 20 {
                         v.push(format!("{field}.expr: la función solo es finita en {finite} de 25 puntos del dominio — ajusta el dominio para evitar asíntotas"));
                     }
+                }
+            }
+            if let Some(a) = area {
+                if !(a.from.is_finite() && a.from >= domain[0] && a.from < domain[1]) {
+                    v.push(format!("{field}.area.from: el área empieza dentro del dominio [{}, {}) — es el límite inferior de la integral", domain[0], domain[1]));
                 }
             }
         }
@@ -320,9 +325,9 @@ mod tests {
 
     #[test]
     fn function_plot_needs_a_mostly_finite_domain() {
-        let ok = InteractiveModuleSpec::FunctionPlot { expr: "a * x^2".into(), domain: [-3.0, 3.0], params: vec![var("a", -2.0, 2.0, 1.0)], tangent: true };
+        let ok = InteractiveModuleSpec::FunctionPlot { expr: "a * x^2".into(), domain: [-3.0, 3.0], params: vec![var("a", -2.0, 2.0, 1.0)], tangent: true, area: None };
         assert!(module_violations("v", &ok, None).is_empty());
-        let all_bad = InteractiveModuleSpec::FunctionPlot { expr: "sqrt(x)".into(), domain: [-5.0, -1.0], params: vec![], tangent: false };
+        let all_bad = InteractiveModuleSpec::FunctionPlot { expr: "sqrt(x)".into(), domain: [-5.0, -1.0], params: vec![], tangent: false, area: None };
         assert!(module_violations("v", &all_bad, None).iter().any(|m| m.contains("solo es finita")));
     }
 

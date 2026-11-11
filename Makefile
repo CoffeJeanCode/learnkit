@@ -15,6 +15,15 @@ ifneq (,$(findstring windows-gnu,$(RUST_HOST)))
 TAURI_BUILD_ARGS := --config src-tauri/tauri.gnu.conf.json
 endif
 
+# Windows-MSVC: the unit-test binary has no app manifest (tauri embeds it in the
+# exe only), so the loader binds comctl32 v5 and the tests die at startup with
+# STATUS_ENTRYPOINT_NOT_FOUND. Embed a Common-Controls v6 manifest into the test
+# link only, in a separate target dir so the app's build cache stays untouched
+# (build.rs does the same for GNU via embed-resource).
+ifneq (,$(findstring windows-msvc,$(RUST_HOST)))
+CARGO_TEST_ENV := CARGO_TARGET_DIR=src-tauri/target-msvc-tests RUSTFLAGS="-C link-arg=/MANIFEST:EMBED -C link-arg=/MANIFESTINPUT:$(CURDIR)/src-tauri/windows/test-common-controls.manifest"
+endif
+
 .PHONY: help setup check run build test typecheck dist dist-linux clean clean-all
 
 help: ## show this help
@@ -73,7 +82,13 @@ test: typecheck ## tsc --noEmit + UI render checks + cargo test
 	bun run scripts/check-dev-trace.ts
 	bun run scripts/check-release.ts
 	bun run scripts/check-version.ts
-	cargo test --manifest-path $(MANIFEST)
+	bun run scripts/check-scene3d.tsx
+	bun run scripts/check-sequence-strip.tsx
+	bun run scripts/check-solid-model.tsx
+	bun run scripts/check-mermaid-types.ts
+	bun run scripts/check-surface.tsx
+	bun run scripts/check-domain-kits.tsx
+	$(CARGO_TEST_ENV) cargo test --manifest-path $(MANIFEST)
 
 clean: ## remove build output (dist/ + src-tauri/target)
 	rm -rf dist src-tauri/target

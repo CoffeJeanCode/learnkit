@@ -100,7 +100,8 @@
 
         fn theory() -> serde_json::Value {
             serde_json::json!({
-                "blockType": "anchored_micro_theory", "title": "Recursión", "intuitiveHook": "h", "systemRule": "r", "frequentError": "f"
+                "blockType": "anchored_micro_theory", "title": "Recursión", "intuitiveHook": "h", "systemRule": "r", "frequentError": "f",
+                "visualAid": {"renderEngine": "conceptual_matrix", "headers": ["a"], "rows": [["b"]], "contrastFocus": "c"}
             })
         }
 

@@ -58,6 +58,15 @@ cita o el hecho concreto de la entrega que lo respalda; si `met` es false, qué 
 debe ser coherente con ellos (true solo si los criterios centrales están cumplidos). Esto se
 guarda como historial de evidencias del estudiante y nunca se le muestra tal cual.
 
+# CONCEPTO vs FORMA
+Califica la HABILIDAD, no la presentación. Marca `formatOnly: true` en todo criterio que solo pide
+una forma de presentar (orden o nombre de columnas, "escríbelo en una frase", decimales exactos,
+encabezados, mayúsculas, sintaxis de tabla) cuando la entrega ya muestra el resultado y el
+razonamiento correctos de otra manera — por ejemplo, la operación `16 × 1.25 = 20.0` escrita en la
+tabla demuestra la derivación aunque no haya "una frase antes". Si todos los criterios de concepto
+se cumplen y solo fallan los de forma, `passed` es true: el sistema lo aprueba igual. Solo es de
+concepto un formato que ES la habilidad (escribir SQL válido, una cita APA en un curso de APA).
+
 `rationale` es tu justificación interna de la calificación — nunca se muestra al estudiante tal
 cual, así que puedes ser directo y técnico ahí.
 

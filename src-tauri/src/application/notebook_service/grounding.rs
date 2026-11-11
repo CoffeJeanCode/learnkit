@@ -12,6 +12,7 @@ use crate::domain::notebook::{
     BlockStatus, DynamicBlockType, GeneratedSectionBlock, InteractionMode, MermaidChartType, MissionSupportLevel, NotebookBlock,
     StaticVisualSpec,
 };
+use crate::domain::visual_routing::{self, VisualDomain};
 
 /// The interchangeable "practice/activity" family — these three all serve
 /// the same pedagogical ROLE (give the student something to DO with the
@@ -280,7 +281,7 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
                 }
             }
         }
-        GeneratedSectionBlock::AnchoredMicroTheory { title, intuitive_hook, analogy_boundary, system_rule, frequent_error } => {
+        GeneratedSectionBlock::AnchoredMicroTheory { title, intuitive_hook, analogy_boundary, system_rule, frequent_error, visual_aid, .. } => {
             if title.trim().is_empty() {
                 v.push(empty("title"));
             }
@@ -310,8 +311,23 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
                      el campo más largo; el detalle técnico vive en systemRule"
                 ));
             }
+            // The model sometimes pastes the ⚠️ layer at the end of the 📐 one
+            // too, and the student reads the same "esto SÍ / esto NO" twice.
+            // Real prose only: ≥6 distinct words (a run of one repeated word is no copy).
+            let error_text = frequent_error.trim();
+            let distinct = error_text.split_whitespace().map(str::to_lowercase).collect::<std::collections::HashSet<_>>().len();
+            if distinct >= 6 && system_rule.contains(error_text) {
+                v.push(format!(
+                    "bloque {i} (anchored_micro_theory): systemRule repite el texto de frequentError — quítalo de systemRule,                      el error frecuente ya se muestra en su propia capa"
+                ));
+            }
+            // Any engine is fine here (SVG and 3D included): the figure IS the
+            // concrete example of the rule, so it gets the diagram block's rules.
+            if let Some(visual) = visual_aid {
+                v.extend(visual_violations(i, visual, true));
+            }
         }
-        GeneratedSectionBlock::DeclarativeVisualDiagram { title, visual_aid, guided_walkthrough } => {
+        GeneratedSectionBlock::DeclarativeVisualDiagram { title, visual_aid, guided_walkthrough, .. } => {
             if title.trim().is_empty() {
                 v.push(empty("title"));
             }
@@ -512,7 +528,7 @@ fn block_field_violations(i: usize, b: &GeneratedSectionBlock) -> Vec<String> {
     v
 }
 
-fn visual_violations(i: usize, visual: &StaticVisualSpec, allow_svg: bool) -> Vec<String> {
+fn visual_violations(i: usize, visual: &StaticVisualSpec, allow_rich_engines: bool) -> Vec<String> {
     let mut v = Vec::new();
     match visual {
         StaticVisualSpec::Mermaid { code, caption, chart_type } => {
@@ -535,11 +551,11 @@ fn visual_violations(i: usize, visual: &StaticVisualSpec, allow_svg: bool) -> Ve
             }
         }
         StaticVisualSpec::DeclarativeSvg { elements, groups, caption, .. } => {
-            if !allow_svg {
+            if !allow_rich_engines {
                 // The expensive, error-prone engine is reserved for the diagram block;
                 // everywhere else a module or diagram_spec says the same for a fraction of the tokens.
                 v.push(format!(
-                    "bloque {i}: visualAid declarative_svg solo se permite en declarative_visual_diagram — aquí usa \
+                    "bloque {i}: visualAid declarative_svg solo se permite en declarative_visual_diagram y anchored_micro_theory — aquí usa \
                      interactive_module (si hay variables que cambian un resultado), diagram_spec (flujos/estados) o conceptual_matrix"
                 ));
             }
@@ -558,9 +574,65 @@ fn visual_violations(i: usize, visual: &StaticVisualSpec, allow_svg: bool) -> Ve
                 v.push(format!("bloque {i}: visualAid conceptual_matrix sin contrastFocus"));
             }
         }
+        StaticVisualSpec::SequenceStrip { rows, caption, .. } => {
+            use crate::domain::notebook::{MAX_SEQUENCE_CHUNKS, MAX_SEQUENCE_ROWS, is_placeholder_label};
+            if !(1..=MAX_SEQUENCE_ROWS).contains(&rows.len()) {
+                v.push(format!("bloque {i}: sequence_strip con {} filas — usa 1 (la lectura) o 2-{MAX_SEQUENCE_ROWS} (original y variantes)", rows.len()));
+            }
+            for (r, row) in rows.iter().enumerate() {
+                if row.label.trim().is_empty() {
+                    v.push(format!("bloque {i}: sequence_strip fila {r} sin label (p. ej. \"Original\", \"Con la mutación\")"));
+                }
+                if !(1..=MAX_SEQUENCE_CHUNKS).contains(&row.chunks.len()) {
+                    v.push(format!("bloque {i}: sequence_strip fila {r} con {} trozos — usa entre 1 y {MAX_SEQUENCE_CHUNKS}", row.chunks.len()));
+                }
+                for chunk in &row.chunks {
+                    if chunk.text.trim().is_empty() || chunk.text.chars().count() > 16 {
+                        v.push(format!("bloque {i}: sequence_strip trozo \"{}\" — el texto de un trozo va de 1 a 16 caracteres", chunk.text));
+                    }
+                    if chunk.meaning.trim().is_empty() || is_placeholder_label(&chunk.meaning) {
+                        v.push(format!(
+                            "bloque {i}: sequence_strip trozo \"{}\" sin significado concreto (\"{}\") — di QUÉ significa (p. ej. \"Metionina · inicio\"), nunca \"palabra 1\"",
+                            chunk.text, chunk.meaning
+                        ));
+                    }
+                }
+            }
+            // Variants are compared chunk by chunk against the first row.
+            if let Some(first) = rows.first() {
+                for (r, row) in rows.iter().enumerate().skip(1) {
+                    if row.chunks.len() != first.chunks.len() {
+                        v.push(format!("bloque {i}: sequence_strip fila {r} tiene {} trozos y la primera {} — las filas se comparan trozo a trozo", row.chunks.len(), first.chunks.len()));
+                        continue;
+                    }
+                    // A variant changes a FEW chunks; rows that differ almost
+                    // everywhere are steps of a process, and the diff would
+                    // paint the whole strip red.
+                    let changed = row.chunks.iter().zip(&first.chunks).filter(|(a, b)| a.text.trim() != b.text.trim()).count();
+                    if changed * 2 > row.chunks.len() + 1 {
+                        v.push(format!(
+                            "bloque {i}: sequence_strip fila {r} cambia {changed} de {} trozos — las filas son la MISMA secuencia con un cambio pequeño \
+                             (el sistema resalta la diferencia), nunca pasos de un proceso: para pasos usa topology_flow (mensajes) o diagram_spec",
+                            row.chunks.len()
+                        ));
+                    }
+                }
+            }
+            if caption.trim().is_empty() {
+                v.push(format!("bloque {i}: visualAid sequence_strip sin caption"));
+            }
+        }
         StaticVisualSpec::DiagramSpec { nodes, edges, kind, .. } => {
             if nodes.is_empty() {
                 v.push(format!("bloque {i}: visualAid diagram_spec sin nodes"));
+            }
+            for node in nodes {
+                if crate::domain::notebook::is_placeholder_label(&node.label) {
+                    v.push(format!(
+                        "bloque {i}: diagram_spec nodo \"{}\" con etiqueta genérica \"{}\" — cada etiqueta nombra el valor o significado real",
+                        node.id, node.label
+                    ));
+                }
             }
             if !matches!(kind.as_str(), "flowchart" | "sequence" | "state" | "cycle" | "compare") {
                 v.push(format!("bloque {i}: visualAid diagram_spec kind \"{kind}\" inválido (flowchart | sequence | state | cycle | compare)"));
@@ -596,8 +668,236 @@ fn visual_violations(i: usize, visual: &StaticVisualSpec, allow_svg: bool) -> Ve
                 v.push(format!("bloque {i}: visualAid interactive_module sin caption"));
             }
         }
+        StaticVisualSpec::TopologyFlow { nodes, links, steps, caption, .. } => {
+            if !allow_rich_engines {
+                v.push(format!(
+                    "bloque {i}: visualAid topology_flow solo se permite en declarative_visual_diagram y anchored_micro_theory — aquí usa diagram_spec (kind \"sequence\")"
+                ));
+            }
+            if !(2..=8).contains(&nodes.len()) {
+                v.push(format!("bloque {i}: topology_flow con {} nodos — usa entre 2 y 8", nodes.len()));
+            }
+            let mut ids = std::collections::HashSet::new();
+            for node in nodes {
+                if !ids.insert(node.id.as_str()) {
+                    v.push(format!("bloque {i}: topology_flow id de nodo repetido \"{}\"", node.id));
+                }
+                if node.label.trim().is_empty() {
+                    v.push(format!("bloque {i}: topology_flow nodo \"{}\" sin label", node.id));
+                }
+            }
+            // Reachability over `links` (undirected): the renderer routes every
+            // message along the shortest path, so a missing path is undrawable.
+            let mut adjacent: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+            for link in links {
+                for end in [&link.from, &link.to] {
+                    if !ids.contains(end.as_str()) {
+                        v.push(format!("bloque {i}: topology_flow un link apunta a \"{end}\", que no es el id de ningún nodo"));
+                    }
+                }
+                adjacent.entry(link.from.as_str()).or_default().push(link.to.as_str());
+                adjacent.entry(link.to.as_str()).or_default().push(link.from.as_str());
+            }
+            fn connected<'a>(adjacent: &std::collections::HashMap<&'a str, Vec<&'a str>>, from: &'a str, to: &str) -> bool {
+                let mut seen = std::collections::HashSet::from([from]);
+                let mut queue = std::collections::VecDeque::from([from]);
+                while let Some(at) = queue.pop_front() {
+                    if at == to {
+                        return true;
+                    }
+                    for next in adjacent.get(at).into_iter().flatten() {
+                        if seen.insert(*next) {
+                            queue.push_back(*next);
+                        }
+                    }
+                }
+                false
+            }
+            if !(1..=8).contains(&steps.len()) {
+                v.push(format!("bloque {i}: topology_flow con {} pasos — usa entre 1 y 8", steps.len()));
+            }
+            let mut total_messages = 0;
+            for (s, step) in steps.iter().enumerate() {
+                let n = s + 1;
+                if step.title.trim().is_empty() || step.detail.trim().is_empty() {
+                    v.push(format!("bloque {i}: topology_flow paso {n} sin title o detail"));
+                }
+                if step.messages.len() > 4 {
+                    v.push(format!("bloque {i}: topology_flow paso {n} con {} mensajes — máximo 4; reparte en más pasos", step.messages.len()));
+                }
+                total_messages += step.messages.len();
+                for m in &step.messages {
+                    let known = ids.contains(m.from.as_str()) && ids.contains(m.to.as_str());
+                    if !known {
+                        v.push(format!("bloque {i}: topology_flow paso {n}: el mensaje \"{}\" va de \"{}\" a \"{}\" y alguno no es el id de un nodo", m.label, m.from, m.to));
+                    } else if m.from == m.to {
+                        v.push(format!("bloque {i}: topology_flow paso {n}: el mensaje \"{}\" sale y llega al mismo nodo", m.label));
+                    } else if !connected(&adjacent, &m.from, &m.to) {
+                        v.push(format!(
+                            "bloque {i}: topology_flow paso {n}: no hay camino de links entre \"{}\" y \"{}\" — añade los links que los conectan",
+                            m.from, m.to
+                        ));
+                    }
+                    if m.label.trim().is_empty() {
+                        v.push(format!("bloque {i}: topology_flow paso {n}: mensaje sin label"));
+                    }
+                }
+            }
+            if !steps.is_empty() && total_messages == 0 {
+                v.push(format!("bloque {i}: topology_flow sin ningún mensaje — cada paso debe mostrar qué viaja entre qué nodos"));
+            }
+            if caption.as_deref().is_none_or(|c| c.trim().is_empty()) {
+                v.push(format!("bloque {i}: visualAid topology_flow sin caption"));
+            }
+        }
+        StaticVisualSpec::ExplorableModel { shell, parts, caption, .. } => {
+            if !allow_rich_engines {
+                v.push(format!(
+                    "bloque {i}: visualAid explorable_model solo se permite en declarative_visual_diagram y anchored_micro_theory — aquí usa diagram_spec o conceptual_matrix"
+                ));
+            }
+            if !(2..=10).contains(&parts.len()) {
+                v.push(format!("bloque {i}: explorable_model con {} partes — usa entre 2 y 10", parts.len()));
+            }
+            let mut ids = std::collections::HashSet::new();
+            for part in parts {
+                if !ids.insert(part.id.as_str()) {
+                    v.push(format!("bloque {i}: explorable_model id de parte repetido \"{}\"", part.id));
+                }
+                if part.label.trim().is_empty() {
+                    v.push(format!("bloque {i}: explorable_model parte \"{}\" sin label", part.id));
+                }
+                if part.explanation.trim().is_empty() {
+                    v.push(format!(
+                        "bloque {i}: explorable_model parte \"{}\" sin explanation — es lo que el estudiante lee al tocarla (qué es y qué hace)",
+                        part.id
+                    ));
+                }
+            }
+            if parts.iter().filter(|p| p.zone.as_deref() == Some("center")).count() > 1 {
+                v.push(format!("bloque {i}: explorable_model con más de una parte en zone \"center\" — solo cabe una; usa \"inner\" para las demás"));
+            }
+            if shell.as_ref().is_some_and(|s| s.label.trim().is_empty()) {
+                v.push(format!("bloque {i}: explorable_model shell sin label"));
+            }
+            if caption.as_deref().is_none_or(|c| c.trim().is_empty()) {
+                v.push(format!("bloque {i}: visualAid explorable_model sin caption"));
+            }
+        }
+        StaticVisualSpec::Molecule3d { atoms, bonds, steps, caption, .. } => {
+            if !allow_rich_engines {
+                v.push(format!("bloque {i}: visualAid molecule_3d solo se permite en declarative_visual_diagram y anchored_micro_theory"));
+            }
+            v.extend(crate::domain::molecule::molecule_violations(i, atoms, bonds, steps));
+            if caption.as_deref().is_none_or(|c| c.trim().is_empty()) {
+                v.push(format!("bloque {i}: visualAid molecule_3d sin caption"));
+            }
+        }
+        StaticVisualSpec::AlgebraicStructure { group, subgroup, view, caption, .. } => {
+            v.extend(crate::domain::algebra::algebra_violations(i, &group.kind, group.n, subgroup));
+            if !crate::domain::notebook::GROUP_VIEWS.contains(&view.as_str()) {
+                v.push(format!("bloque {i}: algebraic_structure.view debe ser table | graph | both"));
+            }
+            if caption.as_deref().is_none_or(|c| c.trim().is_empty()) {
+                v.push(format!("bloque {i}: visualAid algebraic_structure sin caption"));
+            }
+        }
+        StaticVisualSpec::Instrument { instrument, chords, progression, strum, bpm, caption, .. } => {
+            let bars: Vec<(String, u32)> = progression.iter().map(|b| (b.chord.clone(), b.beats)).collect();
+            v.extend(crate::domain::instrument::instrument_violations(i, instrument, chords, &bars, strum.as_deref(), *bpm));
+            if caption.as_deref().is_none_or(|c| c.trim().is_empty()) {
+                v.push(format!("bloque {i}: visualAid instrument sin caption"));
+            }
+        }
+        StaticVisualSpec::IllustrationKit { items, links, forces, caption, .. } => {
+            v.extend(crate::domain::illustration::illustration_violations(i, items, links, forces));
+            if caption.as_deref().is_none_or(|c| c.trim().is_empty()) {
+                v.push(format!("bloque {i}: visualAid illustration_kit sin caption"));
+            }
+        }
+        StaticVisualSpec::CodeFigure { code, height, caption, .. } => {
+            if !allow_rich_engines {
+                v.push(format!("bloque {i}: visualAid code_figure solo se permite en declarative_visual_diagram y anchored_micro_theory"));
+            }
+            v.extend(crate::domain::code_figure::code_figure_violations(i, code, *height));
+            if caption.trim().is_empty() {
+                v.push(format!("bloque {i}: visualAid code_figure sin caption"));
+            }
+        }
+        StaticVisualSpec::Surface3d { expr, x_range, y_range, params, paths, markers, region, caption, .. } => {
+            if !allow_rich_engines {
+                v.push(format!(
+                    "bloque {i}: visualAid surface_3d solo se permite en declarative_visual_diagram y anchored_micro_theory — aquí usa \
+                     interactive_module o diagram_spec"
+                ));
+            }
+            v.extend(crate::domain::surface::surface_violations(i, expr, *x_range, *y_range, params, paths, markers, *region));
+            if caption.as_deref().is_none_or(|c| c.trim().is_empty()) {
+                v.push(format!("bloque {i}: visualAid surface_3d sin caption"));
+            }
+        }
+        StaticVisualSpec::SolidModel { features, caption, .. } => {
+            if !allow_rich_engines {
+                v.push(format!(
+                    "bloque {i}: visualAid solid_model solo se permite en declarative_visual_diagram y anchored_micro_theory — aquí usa diagram_spec o conceptual_matrix"
+                ));
+            }
+            v.extend(crate::domain::solid_model::solid_violations(i, features));
+            if caption.as_deref().is_none_or(|c| c.trim().is_empty()) {
+                v.push(format!("bloque {i}: visualAid solid_model sin caption"));
+            }
+        }
     }
     v
+}
+
+/// A closing block may only celebrate what happened. The model used to fill
+/// the gaps with flattery ("tus números quedaron impecables al primer
+/// cálculo") after a mission the student failed three times and never
+/// passed: the student then reads a story that isn't theirs.
+pub(super) fn closure_honesty_violations(block: &GeneratedSectionBlock, existing: &[NotebookBlock]) -> Vec<String> {
+    let GeneratedSectionBlock::MetacognitiveClosure { prediction_comparison, .. } = block else { return Vec::new() };
+    let gates: Vec<&NotebookBlock> = existing.iter().filter(|b| b.block_type.is_gate() && b.attempt_count > 0).collect();
+    let stumbled = gates.iter().any(|b| b.attempt_count > 1 || b.status == BlockStatus::Escalated);
+    let escalated: Vec<u32> = gates.iter().filter(|b| b.status == BlockStatus::Escalated).map(|b| b.order_index + 1).collect();
+    let text = format!("{} {}", prediction_comparison.final_result, prediction_comparison.contrast_narrative).to_lowercase();
+    let mut v = Vec::new();
+    // "en tu primer intento elegiste…" is honest; "al primer intento" claims success.
+    const FLAWLESS: [&str; 6] = ["al primer intento", "al primer cálculo", "a la primera", "impecable", "sin errores", "sin ningún error"];
+    if stumbled {
+        if let Some(claim) = FLAWLESS.iter().find(|c| text.contains(*c)) {
+            v.push(format!(
+                "metacognitive_closure dice \"{claim}\" pero el estudiante falló al menos una compuerta en esta clase \
+                 (ver finalResultSoFar): cuenta lo que pasó de verdad"
+            ));
+        }
+    }
+    if !escalated.is_empty() && !["escal", "cuesta", "costó", "pendiente", "todavía", "aún", "siguiente paso", "apoyo"].iter().any(|w| text.contains(w)) {
+        v.push(format!(
+            "metacognitive_closure no menciona que el bloque {} no se superó y se escaló a un paso de apoyo: nómbralo con calidez \
+             como lo que todavía cuesta, en vez de esconderlo",
+            escalated.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")
+        ));
+    }
+    v
+}
+
+/// The figure of a theory / diagram block must be drawn with an engine that
+/// fits what it shows (see `domain::visual_routing`): the model's declared
+/// `visualIntent`, and — whatever it declared — a spatial example in 3D.
+/// Separate from `block_field_violations` because it needs the course.
+pub(super) fn visual_routing_violations(block: &GeneratedSectionBlock, domain: VisualDomain, index: usize) -> Vec<String> {
+    let (visual, intent, text) = match block {
+        GeneratedSectionBlock::AnchoredMicroTheory { title, system_rule, visual_aid: Some(visual), visual_intent, .. } => {
+            (visual, visual_intent, format!("{title}\n{system_rule}"))
+        }
+        GeneratedSectionBlock::DeclarativeVisualDiagram { title, visual_aid, guided_walkthrough, visual_intent } => {
+            let steps: Vec<&str> = guided_walkthrough.iter().map(|s| s.pedagogical_insight.as_str()).collect();
+            (visual_aid, visual_intent, format!("{title}\n{}", steps.join("\n")))
+        }
+        _ => return Vec::new(),
+    };
+    visual_routing::routing_violations(index, intent.as_deref(), visual, &text, domain)
 }
 
 #[cfg(test)]
@@ -663,6 +963,8 @@ mod tests {
             analogy_boundary: None,
             system_rule: "r".to_string(),
             frequent_error: "e".to_string(),
+            visual_aid: None,
+            visual_intent: None,
         };
         let v = single_block_violations(&[], &block, 1, false, no_mastery(), false, false);
         assert!(v.iter().any(|s| s.contains("máximo 100 combinadas")), "{v:?}");
@@ -676,6 +978,8 @@ mod tests {
             analogy_boundary: None,
             system_rule: "palabra ".repeat(241),
             frequent_error: "e".to_string(),
+            visual_aid: None,
+            visual_intent: None,
         };
         let v = single_block_violations(&[], &block, 1, false, no_mastery(), false, false);
         assert!(v.iter().any(|s| s.contains("systemRule tiene") && s.contains("máximo 240")), "{v:?}");
@@ -689,6 +993,8 @@ mod tests {
             analogy_boundary: Some("palabra ".repeat(30).trim().to_string()),
             system_rule: "palabra ".repeat(240).trim().to_string(),
             frequent_error: "palabra ".repeat(29).trim().to_string(),
+            visual_aid: None,
+            visual_intent: None,
         };
         let v = single_block_violations(&[], &block, 1, false, no_mastery(), false, false);
         assert!(v.is_empty(), "{v:?}");
@@ -1089,6 +1395,8 @@ mod tests {
             analogy_boundary: "límite".into(),
             system_rule: "1 ➔ 2".into(),
             frequent_error: "esto SÍ a / esto NO b, porque c".into(),
+            visual_aid: None,
+            visual_intent: None,
         }
         .expand();
         let v = single_block_violations(&[DynamicBlockType::InteractivePredictionGate], &theory, 2, false, no_mastery(), false, false);
@@ -1133,6 +1441,7 @@ mod tests {
                 target_visual_element: "c".into(),
                 pedagogical_insight: "ins".into(),
             }],
+            visual_intent: None,
         };
         let v_diag = single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &diagram, 2, false, no_mastery(), false, false);
         assert!(v_diag.is_empty(), "{v_diag:?}");
@@ -1180,6 +1489,79 @@ mod tests {
         assert!(v_mod.is_empty(), "{v_mod:?}");
     }
 
+    fn diagram_with(visual: StaticVisualSpec) -> GeneratedSectionBlock {
+        GeneratedSectionBlock::DeclarativeVisualDiagram {
+            title: "Título".into(),
+            visual_aid: visual,
+            guided_walkthrough: vec![crate::domain::notebook::WalkthroughStep { step_number: 1, target_visual_element: "cliente".into(), pedagogical_insight: "ins".into() }],
+            visual_intent: None,
+        }
+    }
+
+    fn topology(links: &[(&str, &str)], message: (&str, &str)) -> StaticVisualSpec {
+        use crate::domain::notebook::{FlowMessage, FlowStep, TopologyLink, TopologyNode};
+        let node = |id: &str| TopologyNode { id: id.into(), label: id.to_uppercase(), icon: "server".into(), subtext: None, explanation: None };
+        StaticVisualSpec::TopologyFlow {
+            title: None,
+            nodes: vec![node("cliente"), node("router"), node("servidor")],
+            links: links.iter().map(|(a, b)| TopologyLink { from: (*a).into(), to: (*b).into() }).collect(),
+            steps: vec![FlowStep {
+                title: "Petición".into(),
+                detail: "El cliente pide la página.".into(),
+                messages: vec![FlowMessage { from: message.0.into(), to: message.1.into(), label: "GET /".into(), tone: Some("request".into()) }],
+            }],
+            caption: Some("Una petición web".into()),
+        }
+    }
+
+    #[test]
+    fn topology_flow_needs_a_path_of_links_for_every_message() {
+        let check = |visual| single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &diagram_with(visual), 2, false, no_mastery(), false, false);
+        // Routed through the router: fine even though no link joins the ends directly.
+        let ok = check(topology(&[("cliente", "router"), ("router", "servidor")], ("cliente", "servidor")));
+        assert!(ok.is_empty(), "{ok:?}");
+        let unreachable = check(topology(&[("cliente", "router")], ("cliente", "servidor")));
+        assert!(unreachable.iter().any(|s| s.contains("no hay camino de links")), "{unreachable:?}");
+        let unknown = check(topology(&[("cliente", "router"), ("router", "servidor")], ("cliente", "nube")));
+        assert!(unknown.iter().any(|s| s.contains("no es el id de un nodo")), "{unknown:?}");
+
+        // Outside the diagram block the engine is refused, like declarative_svg.
+        let mut gate = valid_gate();
+        let GeneratedSectionBlock::InteractivePredictionGate { visual_aid, .. } = &mut gate else { unreachable!() };
+        *visual_aid = Some(topology(&[("cliente", "router"), ("router", "servidor")], ("cliente", "servidor")));
+        let v = single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &gate, 2, false, no_mastery(), false, false);
+        assert!(v.iter().any(|s| s.contains("topology_flow solo se permite")), "{v:?}");
+    }
+
+    #[test]
+    fn explorable_model_needs_explained_parts_and_a_single_center() {
+        use crate::domain::notebook::{ModelPart, ModelShell};
+        let part = |id: &str, zone: &str, explanation: &str| ModelPart {
+            id: id.into(),
+            label: id.to_uppercase(),
+            shape: "sphere".into(),
+            size: Some("medium".into()),
+            count: 1,
+            zone: Some(zone.into()),
+            color: Some("sky".into()),
+            explanation: explanation.into(),
+        };
+        let model = |parts| StaticVisualSpec::ExplorableModel {
+            title: None,
+            shell: Some(ModelShell { label: "Membrana".into(), shape: "sphere".into(), cutaway: true }),
+            parts,
+            caption: Some("Célula animal".into()),
+        };
+        let check = |visual| single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &diagram_with(visual), 2, false, no_mastery(), false, false);
+        let ok = check(model(vec![part("nucleo", "center", "Guarda el ADN."), part("mitocondria", "inner", "Produce ATP.")]));
+        assert!(ok.is_empty(), "{ok:?}");
+        let bad = check(model(vec![part("nucleo", "center", "Guarda el ADN."), part("nucleolo", "center", "")]));
+        assert!(bad.iter().any(|s| s.contains("sin explanation")), "{bad:?}");
+        assert!(bad.iter().any(|s| s.contains("más de una parte en zone")), "{bad:?}");
+        let lonely = check(model(vec![part("nucleo", "center", "Guarda el ADN.")]));
+        assert!(lonely.iter().any(|s| s.contains("entre 2 y 10")), "{lonely:?}");
+    }
+
     #[test]
     fn broken_interactive_module_is_rejected_by_single_block_violations() {
         let mut gate = valid_gate();
@@ -1200,5 +1582,237 @@ mod tests {
         }
         let v = single_block_violations(&[DynamicBlockType::AnchoredMicroTheory], &gate, 2, false, no_mastery(), false, false);
         assert!(v.iter().any(|s| s.contains("undeclared_var")), "{v:?}");
+    }
+
+    #[test]
+    fn a_sequence_strip_needs_concrete_meanings_and_aligned_rows() {
+        use crate::domain::notebook::{SequenceChunk, SequenceRow};
+        let chunk = |text: &str, meaning: &str| SequenceChunk { text: text.into(), meaning: meaning.into(), explanation: None };
+        let strip = |rows: Vec<SequenceRow>| StaticVisualSpec::SequenceStrip { title: None, rows, caption: "c".into() };
+        let good = strip(vec![
+            SequenceRow { label: "Original".into(), chunks: vec![chunk("ATG", "Metionina · inicio"), chunk("GGA", "Glicina")] },
+            SequenceRow { label: "Con la mutación".into(), chunks: vec![chunk("ATG", "Metionina · inicio"), chunk("GAA", "Ácido glutámico")] },
+        ]);
+        assert!(visual_violations(0, &good, false).is_empty(), "cheap engine: legal in every block");
+        let bad = strip(vec![
+            SequenceRow { label: "Original".into(), chunks: vec![chunk("ATG", "palabra 1"), chunk("GGA", "")] },
+            SequenceRow { label: "".into(), chunks: vec![chunk("ATG", "Inicio")] },
+        ]);
+        let steps = strip(vec![
+            SequenceRow { label: "Paso 1".into(), chunks: vec![chunk("SYN", "quiero hablar"), chunk("1000", "mi contador")] },
+            SequenceRow { label: "Paso 2".into(), chunks: vec![chunk("SYN-ACK", "de acuerdo"), chunk("5000", "mi contador")] },
+        ]);
+        assert!(visual_violations(0, &steps, true).iter().any(|s| s.contains("nunca pasos de un proceso")), "steps are not variants");
+        let v = visual_violations(0, &bad, true);
+        assert!(v.iter().filter(|s| s.contains("sin significado concreto")).count() == 2, "{v:?}");
+        assert!(v.iter().any(|s| s.contains("se comparan trozo a trozo")), "{v:?}");
+        assert!(v.iter().any(|s| s.contains("sin label")), "{v:?}");
+    }
+
+    #[test]
+    fn diagram_boxes_with_numbered_placeholders_are_rejected() {
+        use crate::domain::notebook::{DiagramNodeSpec, is_placeholder_label};
+        for p in ["palabra 1", "¿palabra 2?", "palabra 1 · palabra 2 · palabra 3", "Paso 3"] {
+            assert!(is_placeholder_label(p), "{p}");
+        }
+        for ok in ["Glicina", "Paso 1: abrir el socket", "Metionina · inicio", "palabra"] {
+            assert!(!is_placeholder_label(ok), "{ok}");
+        }
+        let node = |id: &str, label: &str| DiagramNodeSpec { id: id.into(), label: label.into(), shape: None, subtext: None, explanation: None };
+        let boxes = StaticVisualSpec::DiagramSpec {
+            kind: "flowchart".into(),
+            direction: None,
+            title: None,
+            nodes: vec![node("a", "ATG GGA TAA"), node("b", "palabra 1 · palabra 2 · palabra 3")],
+            edges: vec![],
+            caption: None,
+        };
+        let v = visual_violations(0, &boxes, true);
+        assert!(v.iter().any(|s| s.contains("etiqueta genérica")), "{v:?}");
+    }
+
+    /// Replays a real-LLM eval report (`scripts/eval-scene3d.tsx`) through the
+    /// app's OWN pipeline — the tool's deserialization, the deterministic
+    /// repairs, then the block's field rules and guardrails — and writes
+    /// `<report>.rust.json` next to it. The TS judge only knows the zod
+    /// schema, which is more lenient than serde: this is what the student
+    /// would actually get. Ignored by default (it needs a report):
+    ///   LEARNKIT_EVAL_REPLAY=eval-results/x.json cargo test --lib eval_replay -- --ignored
+    #[test]
+    #[ignore]
+    fn eval_replay() {
+        use crate::tools::notebook_tools::PublishBlockArgs;
+        let Ok(path) = std::env::var("LEARNKIT_EVAL_REPLAY") else { return };
+        let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("report")).expect("report json");
+        let mut out = Vec::new();
+        for r in report["results"].as_array().into_iter().flatten() {
+            let raw = r["raw"].as_str().unwrap_or("");
+            // A native tool call is JSON; a model that answered in prose goes
+            // through the same text extraction the app falls back to.
+            let parsed = match serde_json::from_str::<serde_json::Value>(raw) {
+                Ok(v) => serde_json::from_value::<PublishBlockArgs>(v).map(PublishBlockArgs::into_published).map_err(|e| e.to_string()),
+                Err(_) => crate::tools::notebook_tools::extract_block_from_text(raw).ok_or_else(|| "no block in the text".to_string()),
+            };
+            let verdict = match parsed {
+                Err(error) => serde_json::json!({ "stage": "tool", "error": error }),
+                Ok(published) => {
+                    let mut block = published.block;
+                    let fixes = crate::domain::visual_repair::repair_block(&mut block) + crate::domain::content_repair::repair_block_content(&mut block);
+                    let mut violations = block_field_violations(0, &block);
+                    violations.extend(crate::domain::pedagogy_guardrails::block_guardrail_violations(&block));
+                    // The course hint, as the app derives it (`render::course_visual_domain`).
+                    let text = |k: &str| r[k].as_str().unwrap_or("").to_string();
+                    let domain = visual_routing::classify(&[&text("course"), &text("goal"), &text("milestone"), &text("classTitle")]);
+                    violations.extend(visual_routing_violations(&block, domain, 0));
+                    let (visual, intent) = match &block {
+                        GeneratedSectionBlock::AnchoredMicroTheory { visual_aid, visual_intent, .. } => (visual_aid.as_ref(), visual_intent.clone()),
+                        GeneratedSectionBlock::DeclarativeVisualDiagram { visual_aid, visual_intent, .. } => (Some(visual_aid), visual_intent.clone()),
+                        _ => (None, None),
+                    };
+                    let engine = visual.map(|v| {
+                        let (engine, sub) = visual_routing::engine_keys(v);
+                        sub.unwrap_or_else(|| engine.to_string())
+                    });
+                    serde_json::json!({
+                        "stage": if violations.is_empty() { "ok" } else { "grounding" },
+                        "fixes": fixes,
+                        "engine": engine,
+                        "intent": intent,
+                        "domain": format!("{domain:?}"),
+                        "violations": violations,
+                    })
+                }
+            };
+            out.push(serde_json::json!({ "model": r["model"], "scenario": r["scenario"], "verdict": verdict }));
+        }
+        std::fs::write(format!("{path}.rust.json"), serde_json::to_string_pretty(&out).expect("json")).expect("write");
+    }
+}
+
+#[cfg(test)]
+mod closure_honesty_tests {
+    use super::*;
+    use crate::domain::notebook::PredictionComparison;
+
+    fn gate(order: u32, status: BlockStatus, attempts: u32) -> NotebookBlock {
+        NotebookBlock {
+            id: format!("g{order}"),
+            document_id: "d".into(),
+            block_type: DynamicBlockType::HandsOnMission,
+            content_json: serde_json::json!({}),
+            order_index: order,
+            status,
+            concept_node_id: None,
+            attempt_count: attempts,
+            last_feedback: None,
+        }
+    }
+
+    fn closure(final_result: &str, narrative: &str) -> GeneratedSectionBlock {
+        GeneratedSectionBlock::MetacognitiveClosure {
+            synthesis_task: "s".into(),
+            prediction_comparison: PredictionComparison { initial_prediction: "p".into(), final_result: final_result.into(), contrast_narrative: narrative.into() },
+            self_evaluation_checklist: vec![],
+        }
+    }
+
+    #[test]
+    fn a_closure_cannot_invent_a_flawless_run() {
+        // The real class: mission 2 passed first try, the transfer mission escalated after 3 fails.
+        let history = [gate(2, BlockStatus::Passed, 1), gate(3, BlockStatus::Escalated, 3)];
+        let flattering = closure("Construiste la tabla.", "¡Tus números quedaron impecables, 20.0 y 30.0 al primer cálculo!");
+        let v = closure_honesty_violations(&flattering, &history);
+        assert!(v.iter().any(|s| s.contains("impecable") || s.contains("primer")), "{v:?}");
+        assert!(v.iter().any(|s| s.contains("bloque 4")), "the escalated gate must be named: {v:?}");
+        let honest = closure(
+            "Calculaste bien 20.0 y 30.0; escribir la derivación todavía cuesta.",
+            "Al arrancar elegiste un valor fijo; luego pasaste al factor. El reto de Relaxed se escaló a un paso de apoyo: es tu siguiente paso.",
+        );
+        assert!(closure_honesty_violations(&honest, &history).is_empty());
+        // A clean run may be celebrated as such.
+        assert!(closure_honesty_violations(&flattering, &[gate(2, BlockStatus::Passed, 1)]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+    use crate::domain::notebook::{DiagramNodeSpec, SolidFeature, SolidProfile};
+
+    fn theory(rule: &str, visual: StaticVisualSpec, intent: Option<&str>) -> GeneratedSectionBlock {
+        GeneratedSectionBlock::AnchoredMicroTheory {
+            title: "Orbitar la vista".into(),
+            intuitive_hook: "gancho".into(),
+            analogy_boundary: None,
+            system_rule: rule.into(),
+            frequent_error: "esto SÍ a / esto NO b, porque c".into(),
+            visual_aid: Some(visual),
+            visual_intent: intent.map(String::from),
+        }
+    }
+
+    fn boxes() -> StaticVisualSpec {
+        let node = |id: &str, label: &str| DiagramNodeSpec { id: id.into(), label: label.into(), shape: None, subtext: None, explanation: None };
+        StaticVisualSpec::DiagramSpec {
+            kind: "flowchart".into(),
+            direction: None,
+            title: None,
+            nodes: vec![node("cam", "Tu cámara"), node("vista", "Vista 3D"), node("origen", "Origen")],
+            edges: vec![],
+            caption: None,
+        }
+    }
+
+    fn bracket() -> StaticVisualSpec {
+        let rect = |w: f64, h: f64| SolidProfile { kind: "rect".into(), w: Some(w), h: Some(h), d: None, points: vec![] };
+        let f = |id: &str, label: &str, op: &str, profile: SolidProfile, at: [f64; 2], offset: f64, depth: Option<f64>| SolidFeature {
+            id: id.into(),
+            label: label.into(),
+            op: op.into(),
+            plane: "xy".into(),
+            profile,
+            at,
+            offset,
+            depth,
+            explanation: "qué es y por qué está".into(),
+        };
+        StaticVisualSpec::SolidModel {
+            title: Some("Escuadra".into()),
+            units: "mm".into(),
+            features: vec![
+                f("base", "Base 60×30×8", "extrude", rect(60.0, 30.0), [0.0, 0.0], 0.0, Some(8.0)),
+                f("pared", "Pared 8×30×32", "extrude", rect(8.0, 30.0), [-26.0, 0.0], 8.0, Some(32.0)),
+                f(
+                    "agujero",
+                    "Agujero Ø8 pasante",
+                    "hole",
+                    SolidProfile { kind: "circle".into(), w: None, h: None, d: Some(8.0), points: vec![] },
+                    [15.0, 0.0],
+                    0.0,
+                    None,
+                ),
+            ],
+            show_camera: true,
+            start_view: "iso".into(),
+            caption: Some("Gira la vista: la pieza no se mueve.".into()),
+        }
+    }
+
+    const ORBIT: &str = "1 ➔ Arrastras con el botón central. 2 ➔ Tu cámara orbita alrededor de la pieza. 3 ➔ La pieza y sus ejes no se mueven.";
+
+    #[test]
+    fn a_camera_orbit_drawn_as_boxes_is_sent_back_and_a_solid_passes() {
+        let wrong = theory(ORBIT, boxes(), Some("process"));
+        let v = visual_routing_violations(&wrong, VisualDomain::Spatial3d, 0);
+        assert!(v.iter().any(|s| s.contains("ESPACIAL") && s.contains("solid_model")), "{v:?}");
+        let right = theory(ORBIT, bracket(), Some("spatial_shape"));
+        assert!(visual_routing_violations(&right, VisualDomain::Spatial3d, 0).is_empty());
+        assert!(block_field_violations(0, &right).is_empty(), "{:?}", block_field_violations(0, &right));
+    }
+
+    #[test]
+    fn a_solid_model_is_only_legal_where_3d_is() {
+        assert!(visual_violations(0, &bracket(), false).iter().any(|s| s.contains("solid_model solo se permite")));
+        assert!(visual_violations(0, &bracket(), true).is_empty());
     }
 }

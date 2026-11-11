@@ -45,6 +45,12 @@ jobs:
           bun scripts/check-study-presentation.ts
           bun scripts/check-dev-trace.ts
           bun scripts/check-release.ts
+          bun scripts/check-scene3d.tsx
+          bun scripts/check-sequence-strip.tsx
+          bun scripts/check-solid-model.tsx
+          bun scripts/check-mermaid-types.ts
+          bun scripts/check-surface.tsx
+          bun scripts/check-domain-kits.tsx
 
       # Also what produces `dist/`, which `tauri::generate_context!` needs at
       # compile time (so the Rust job below can't run without it).

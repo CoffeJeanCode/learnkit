@@ -108,13 +108,15 @@ Si el input incluye `diagnosticProfile`, son los resultados YA CALCULADOS de esa
 - `{"answered": false}` — el estudiante aún no respondió la batería (o declaró partir de cero y
   no la hizo); genera esta clase con `calibratedLevel`/`declaredLevel` si vienen, sin
   suposiciones extra.
-- `{"answered": true, "weakPoints": [{"dimension": ..., "insight": ...}, ...]}` — cada entrada es
+- `{"answered": true, "weakPoints": [{"dimension": ..., "insight": ..., "admittedUnknown": ...}, ...]}` — cada entrada es
   una dimensión donde falló. Si `intuition` está entre ellas, reduce aún más la
   terminología técnica y añade más analogías en intuitiveHook. Si es `mechanics`,
   dedica más guidedWalkthrough/visualAid a mostrar la interacción entre variables. Si es
   `critical_case`, prioriza heuristic_error_audit sobre el error concreto que
-  `insight` describe. Si `weakPoints` está vacío, el estudiante ya domina lo básico: puedes ir
-  más rápido y con menos andamiaje.
+  `insight` describe. Si una entrada trae `"admittedUnknown": true`, el estudiante respondió
+  "No sé": es un hueco honesto, no un error conceptual — construye esa dimensión desde cero en
+  vez de desmontar un malentendido. Si `weakPoints` está vacío, el estudiante ya domina lo
+  básico: puedes ir más rápido y con menos andamiaje.
 
 `diagnosticProfile` también puede traer la CALIBRACIÓN de nivel (declarado vs. demostrado):
 - `declaredLevel`: el nivel que indicaron sus respuestas iniciales (`absolute_zero`,
@@ -216,8 +218,8 @@ curso entero — un mismo curso puede cruzar varios perfiles clase a clase) y us
 como punto de partida, no como molde rígido:
 
 - **Fenómenos espaciales o biológicos** (anatomía, mecánica, campos, procesos naturales con
-  estructura física real): anchored_micro_theory (con su propio declarative_visual_diagram
-  inmediatamente después, nunca embebido) -> interactive_prediction_gate -> un segundo
+  estructura física real): anchored_micro_theory (con su visualAid del ejemplo; y un
+  declarative_visual_diagram después si el fenómeno pide recorrerlo paso a paso) -> interactive_prediction_gate -> un segundo
   declarative_visual_diagram framed como contraste de caso límite (qué cambia en el borde del
   fenómeno) -> metacognitive_closure.
 - **Razonamiento cuantitativo, cálculo u optimización**: anchored_micro_theory framed como un
@@ -254,13 +256,13 @@ arriba. Varía también el MODO dentro de un tipo (ver `interactionMode` en el c
 que ninguna clase se sienta una plantilla repetida de las anteriores.
 
 Regla general de emparejamiento (aplica a los 5 perfiles, no solo a los que la mencionan arriba):
-cuando el systemRule de un anchored_micro_theory que acabas de generar (o el que vas a generar a
-continuación) describe estado de sistema o arquitectura — memoria, stocks/flujos, estructuras de
-datos, componentes que interactúan entre sí — prioriza que el SIGUIENTE bloque sea un
-declarative_visual_diagram propio para ese mismo concepto, nunca un diagrama embebido dentro del
-propio anchored_micro_theory (ese bloque no acepta visualAid). El diagrama separado ya resuelve solapamiento y anclaje geométrico (ver REGLAS DE
-ORO DE GEOMETRÍA, GROUNDING Y COLISIONES más abajo); duplicar esa lógica dentro de la microteoría
-solo genera el mismo problema dos veces.
+todo anchored_micro_theory lleva su propio `visualAid` que DIBUJA el ejemplo concreto de systemRule
+(ver el bloque 1 del catálogo): una secuencia que se lee por partes, una estructura, piezas que
+interactúan, un flujo, un antes/después o, como mínimo, una comparación. Si además el concepto
+describe estado de sistema o arquitectura que hay que RECORRER paso a paso — memoria, stocks/flujos,
+estructuras de datos, componentes que se pasan mensajes — prioriza que el SIGUIENTE bloque sea un
+declarative_visual_diagram con guidedWalkthrough que profundice; nunca repitas en él la misma figura
+de la teoría.
 
 "##;
 
@@ -430,8 +432,43 @@ regeneración). Varía entre plantillas y modos: no conviertas todo en opción m
 
 const P_VISUALS: &str = r##"# VISUALES (visualAid) — arXiv:2605.30174
 
-Un visual vale solo si muestra lo que el texto no puede. Elige el motor por el TIPO de contenido, del MÁS BARATO al
-más caro (cada paso hacia abajo cuesta más salida y falla más):
+Un visual vale solo si muestra lo que el texto no puede. Eres un diseñador de figuras: ANTES de elegir motor, decide
+qué TIPO de contenido es el ejemplo (`visualIntent`, obligatorio en teoría y diagrama) y dibújalo con su motor. El
+sistema comprueba que el motor corresponda al intent, y rechaza un ejemplo espacial dibujado con cajas y flechas.
+
+Primera pregunta: ¿se VE en el espacio (una forma, una pieza, sus vistas, ejes, planos, la cámara que la mira, un
+objeto con partes)? Entonces es 3D o ilustración, NUNCA cajas y flechas.
+
+| visualIntent | contenido | motor |
+| spatial_shape | forma o pieza con medidas, vistas, ejes, planos, cámara | solid_model (explorable_model, declarative_svg) |
+| object_parts | objeto con partes que se entiende girándolo | explorable_model |
+| physical_phenomenon | montaje o fenómeno físico en 2D: poleas, planos inclinados, resortes, circuitos, fuerzas | illustration_kit (declarative_svg, interactive_module particle_gradient/vector_sum) |
+| molecule | una molécula o una reacción y su mecanismo | molecule_3d |
+| algebraic | un grupo finito, su tabla de Cayley, subgrupos y clases laterales | algebraic_structure |
+| music | acordes, progresión o rasgueo en la guitarra (se ve y se escucha) | instrument |
+| curved_surface | superficie o campo: espacio-tiempo curvo, pozos de potencial, z = f(x, y), volumen bajo una superficie | surface_3d |
+| accumulation | área que se acumula bajo una curva (integral), sumas de Riemann, tangente (derivada) | interactive_module function_plot (area / tangent) |
+| law | ley o fórmula con variables | interactive_module relation_explorer/function_plot |
+| read_in_pieces | algo que se lee por trozos y su variante | sequence_strip |
+| messages | mensajes entre equipos o actores | topology_flow, mermaid sequenceDiagram |
+| process | proceso o flujo con decisiones | diagram_spec flowchart/cycle |
+| states | estados y transiciones | diagram_spec state |
+| hierarchy | jerarquía de conceptos alrededor de una raíz | mermaid mindmap |
+| chronology | hechos fechados en orden | mermaid timeline, interactive_module timeline |
+| schedule | tareas con fechas y duraciones (un plan, un cronograma) | mermaid gantt |
+| proportion | partes de un todo | mermaid pie |
+| two_axes | elementos en dos ejes (impacto × esfuerzo) | mermaid quadrantChart, conceptual_matrix |
+| data_trend | datos numéricos por categoría o tiempo | mermaid xychart |
+| quantity_flow | cantidades que fluyen y se reparten | mermaid sankey |
+| entities | entidades/clases y relaciones | mermaid classDiagram/erDiagram |
+| comparison | comparación o taxonomía | conceptual_matrix |
+| branches | ramas de un historial git | mermaid gitGraph |
+| experience | experiencia por etapas | mermaid journey |
+
+Un mismo curso mezcla tipos: en CAD, la pieza es spatial_shape, el flujo de trabajo del diseño es process y la
+historia de las herramientas es chronology. Si el input trae `visualDirective`, úsalo como pista del curso.
+
+Detalle de cada motor (los de arriba son los baratos; declarative_svg es el más caro y el que más falla):
 
 1. `interactive_module` — una relación que el estudiante puede MOVER. Tú solo rellenas parámetros; el sistema
    calcula y dibuja (correcto por construcción: no puedes dibujar mal una tangente ni una suma de vectores). Úsalo
@@ -440,7 +477,10 @@ más caro (cada paso hacia abajo cuesta más salida y falla más):
      Ohm I = V/R, energía cinética, área, interés compuesto…). `output.expr` usa SOLO los `sym` de `variables`
      y + - * / ^ ( ), sin cos tan sqrt abs ln log exp min max, pi, e; sin `=` ni funciones inventadas. Rangos
      realistas con `init` dentro; la fórmula no puede dividir entre 0 ni dar NaN dentro del rango (se comprueba).
-   - `function_plot`: `y = f(x)` con hasta 3 parámetros; `tangent: true` para derivadas y pendiente.
+   - `function_plot`: `y = f(x)` con hasta 3 parámetros; `tangent: true` para derivadas y pendiente; `area: {from,
+     riemann?, showAccumulated?}` para la INTEGRAL: el área se sombrea desde `from` hasta un punto que el estudiante
+     arrastra y el sistema calcula su valor; `riemann` añade rectángulos (un slider de cuántos) y `showAccumulated`
+     dibuja A(x) = ∫f, cuya pendiente es f (teorema fundamental). Nunca escribas tú el valor del área.
    - `vector_sum`: 2-4 vectores editables (x, y entre -10 y 10) y su resultante (fuerzas, desplazamientos).
    - `particle_gradient`: dos zonas de distinta densidad de partículas y una barrera con canales (difusión,
      ósmosis, transporte). `highCount` > `lowCount`; con barrera, al menos 1 canal.
@@ -449,14 +489,46 @@ más caro (cada paso hacia abajo cuesta más salida y falla más):
    10 N»); `sym` es una variable, la salida o un parámetro, y `target` debe ser alcanzable (se comprueba).
    En una compuerta de predicción el módulo queda BLOQUEADO hasta que el estudiante responde: úsalo como «mira este
    estado, predice qué pasa si cambio X, y luego compruébalo moviéndolo».
-2. `diagram_spec` — flujos, decisiones, estados, secuencias, ciclos o comparaciones como nodos y aristas (máx. 10
-   nodos; `id` de letras/dígitos/_ sin espacios; cada arista apunta a un `id` real). Pon en `explanation` (1-2
+2. `sequence_strip` — algo que se LEE POR TROZOS en orden (codones, bits, octetos, sílabas, partes de una URL o un
+   comando) y, opcionalmente, su variante: `rows` (1-3, mismo número de trozos), cada trozo con `text` (sus símbolos
+   reales, ≤16 caracteres) y `meaning` (qué significa, concreto). El sistema dibuja los símbolos agrupados y RESALTA
+   lo que cambia entre filas: no lo describas tú. Las filas son la MISMA secuencia con un cambio pequeño (una letra, un
+   bit, un octeto), NUNCA los pasos de un proceso: para pasos usa topology_flow o diagram_spec.
+3. `diagram_spec` — procesos, decisiones, estados, secuencias, ciclos o comparaciones como nodos y aristas, NUNCA
+   relaciones espaciales (una cámara que orbita, una vista, una pieza no son cajas) (máx. 10 nodos; `id` de letras/dígitos/_ sin espacios; cada arista apunta a un `id` real). Pon en `explanation` (1-2
    frases) lo que el estudiante aprende al TOCAR cada nodo: el dibujo queda limpio y la explicación vive en el toque.
-3. `conceptual_matrix` — taxonomías o comparaciones (`contrastFocus` nombra el eje real de comparación).
-4. `declarative_svg` — SOLO un fenómeno físico o biológico espacial que ningún módulo cubre (membrana, anatomía,
-   campo). Solo dentro de `declarative_visual_diagram`; en cualquier otro bloque está PROHIBIDO (el sistema lo
-   rechaza: usa un módulo o diagram_spec). Si lo usas, aplica las reglas de geometría de abajo.
-5. `mermaid` — evítalo: solo classDiagram/erDiagram, que diagram_spec no cubre.
+4. `conceptual_matrix` — taxonomías o comparaciones (`contrastFocus` nombra el eje real de comparación).
+   Kits de dominio (baratos, en cualquier bloque; tú dices QUÉ, el sistema dibuja y calcula):
+   - `illustration_kit` — un montaje físico o un circuito: `items` (1-12 piezas del kit block ball pulley incline
+     wall ground battery resistor bulb switch capacitor node magnet label, cada una en una casilla `slot` [columna 0-5,
+     fila 0-3] de una cuadrícula — nunca píxeles —, con `label`, `value` corto y `angle` si es incline), `links`
+     (rope spring wire rod arrow entre ids) y `forces` (sobre un id, `direction` up/down/left/right/up-left… o grados,
+     `label`, `magnitude` 1-3). Una pieza por casilla; el sistema enruta cables y cuerdas y separa etiquetas.
+   - `algebraic_structure` — un grupo finito: `group` {kind cyclic|dihedral|symmetric, n} y `subgroup` (generadores:
+     "4" en Z_n; r, s, sr2 en D_n; "(1 2 3)" en S_n). El sistema calcula la tabla de Cayley, el grafo, el subgrupo y
+     colorea sus clases laterales: |G| = |H| · [G:H] se VE. Nunca escribas tú la tabla.
+   - `instrument` — guitarra: `chords` (1-6 del diccionario C D E G A F Am Em Dm E7 A7 D7 G7 C7 B7 Cmaj7 Fmaj7
+     Asus2 Dsus4: el sistema dibuja la digitación), `progression` [{chord, beats}], `strum` ("D-DU-UDU": D abajo, U
+     arriba, - silencio) y `bpm`. El estudiante lo ESCUCHA con metrónomo.
+5. `declarative_svg` — SOLO un fenómeno físico o biológico espacial que ni un módulo ni illustration_kit cubren (membrana, anatomía,
+   campo). Solo dentro de `declarative_visual_diagram` y `anchored_micro_theory`; en cualquier otro bloque está
+   PROHIBIDO (el sistema lo rechaza: usa un módulo o diagram_spec). Si lo usas, aplica las reglas de geometría de abajo.
+6. `mermaid` — los tipos que diagram_spec no cubre (procesos y estados van en diagram_spec: allí cada nodo se toca).
+   `chartType` es el tipo (mindmap, timeline, gantt, pie, quadrantChart, xychart, sankey, journey, gitGraph, classDiagram,
+   erDiagram, sequenceDiagram, stateDiagram) y la PRIMERA línea de `code` lo declara como se ve abajo (xychart-beta,
+   sankey-beta, stateDiagram-v2). Sintaxis mínima de cada uno (respétala, se comprueba):
+   - mindmap (UNA raíz, ramas indentadas): `mindmap` / `  root((CAD))` / `    Croquis` / `      Restricciones` / `    Operaciones`
+   - timeline: `timeline` / `  title Historia del CAD` / `  1963 : Sketchpad` / `  1982 : AutoCAD`
+   - gantt: `gantt` / `  dateFormat YYYY-MM-DD` / `  section Diseño` / `  Bocetos :a1, 2025-01-06, 5d` / `  Modelo :after a1, 4d`
+   - pie: `pie title Material usado` / `  "PLA" : 60` / `  "PETG" : 40`
+   - quadrantChart: `quadrantChart` / `  x-axis Bajo esfuerzo --> Alto esfuerzo` / `  y-axis Bajo impacto --> Alto impacto` /
+     `  quadrant-1 Hacer ya` / `  Tarea A: [0.3, 0.8]`
+   - xychart: `xychart-beta` / `  x-axis [ene, feb, mar]` / `  y-axis "Piezas" 0 --> 100` / `  bar [20, 45, 80]`
+   - sankey: `sankey-beta` / `  Solar,Red,40` / `  Red,Hogares,30` (CSV origen,destino,valor)
+   - journey: `journey` / `  section Comprar` / `    Buscar: 3: Cliente`
+   - gitGraph: `gitGraph` / `  commit` / `  branch feature` / `  commit` / `  checkout main` / `  merge feature`
+   - classDiagram, erDiagram, sequenceDiagram: sintaxis estándar.
+   (cada `/` es un salto de línea en `code`)
 
 Reglas no negociables:
 - El código Mermaid debe ser sintácticamente válido y compilable para su chartType — revísalo
@@ -468,6 +540,71 @@ Reglas no negociables:
   nodos.
 - guidedWalkthrough SIEMPRE referencia partes explícitas del diagrama (por label o id), nunca lo
   deja como decoración aislada.
+
+"##;
+
+/// The two 3D engines. Sent only where they are legal (the diagram block),
+/// so every other block's prompt stays as lean as before.
+const P_SCENE3D: &str = r##"## Escenas 3D interactivas (solo en declarative_visual_diagram y anchored_micro_theory)
+
+Cuatro motores más: describes QUÉ hay y el sistema lo construye en 3D, el estudiante lo gira y lo toca. Prefiérelos a
+`declarative_svg` cuando encajen:
+
+- `surface_3d` — una SUPERFICIE o un CAMPO `z = f(x, y)` (`expr` con la sintaxis de interactive_module; x, y y los `sym`
+  de `params`), `xRange`/`yRange`, `params` (0-3 sliders que cambian la forma en vivo), `zLabel` (qué es la altura),
+  `paths` (0-4) que el SISTEMA traza sobre ella — `geodesic` (el camino más recto SOBRE la superficie, desde `start` en
+  `direction`), `descent` (por dónde rueda una bola), `level` (curva de nivel por `start`) —, `markers` (0-4 puntos con
+  nombre) y `region` [x0, x1, y0, y1] para sombrear el volumen bajo la superficie (el sistema calcula la integral doble).
+  Para: espacio-tiempo curvo (un pozo `-m / sqrt(x^2 + y^2 + 0.5)` con slider de masa y dos geodésicas que entran
+  paralelas y se desvían: la "atracción" es geometría), pozos de potencial, funciones de dos variables, derivadas
+  parciales, integrales dobles. Suaviza siempre las singularidades (+0.5 bajo la raíz): se comprueba en todo el dominio.
+  La CURVATURA nunca se dibuja con una calculadora, cajas o una tabla (el sistema lo rechaza).
+
+- `solid_model` — una PIEZA o FORMA con medidas reales (CAD, dibujo técnico, geometría de sólidos, impresión 3D,
+  mecanismos): el sistema la construye operación por operación, dibuja ejes X/Y/Z, ofrece las vistas iso / frontal /
+  superior / lateral y, con `showCamera: true`, un recuadro con la cámara orbitando la pieza fija (úsalo cuando el
+  concepto es la cámara, el punto de vista, orbitar o las vistas). `features` (1-6, en orden, `units` mm por defecto):
+  cada una con `id`, `label` con su medida ("Base 60×30×8"), `op` (extrude | revolve | cut | hole), `plane` (xy = suelo,
+  normal +Z; xz = frontal, u=x v=z, normal +Y; yz = lateral, u=y v=z, normal +X), `profile` (rect {w,h} | circle {d} |
+  polygon {points [u,v] 3-12, recorriendo el contorno}), `at` [u,v] = centro del perfil, `offset` = altura del plano del
+  boceto, `depth` y `explanation`. La primera crea material. extrude crece por +normal; revolve gira el perfil 360°
+  alrededor del eje v (perfil en u ≥ 0, sin `depth`); cut/hole con `depth` entra en la pieza desde `offset` hacia
+  −normal (dibújalo en la cara por donde entra), sin `depth` la atraviesa. Cada feature es UN perfil: dos agujeros son
+  dos features. Cada feature cambia la pieza de verdad: el sistema ya dibuja el boceto de cada operación sobre su plano,
+  así que nunca añadas extrusiones finas o cortes de 1 mm para "mostrar" un perfil o "confirmar" una medida. Cada pieza nueva toca la anterior; cada agujero muerde la pieza sin borrarla (se comprueba). Ejemplo,
+  escuadra: base extrude xy rect 60×30 depth 8; pared extrude xy rect 8×30 at [-26,0] offset 8 depth 32; agujero hole
+  xy circle d 8 at [15,0] (pasante). En el walkthrough, `targetVisualElement` puede ser el `id` de una feature o una
+  vista (`iso`, `front`, `top`, `right`) o `camera`: el sistema enfoca esa operación o gira a esa vista.
+
+- `topology_flow` — MENSAJES QUE VIAJAN entre equipos, servicios o actores, paso a paso (protocolos de red,
+  cliente-servidor, microservicios, colas, autenticación, un pedido entre áreas). `nodes` (2-8; `icon` del catálogo
+  laptop phone server database router switch cloud firewall person service queue storage box; `subtext` = dato corto
+  como IP o rol; `explanation` = lo que se lee al tocarlo), `links` (qué está conectado con qué: todo nodo queda
+  conectado) y `steps` (1-8, cada uno con `title`, `detail` que explica el PORQUÉ, y 0-4 `messages`). Un mensaje da
+  solo sus extremos `from`/`to`: el sistema lo hace viajar por los `links` intermedios, así que debe existir un camino
+  (se comprueba). `tone`: request | response | control | error. El estudiante reproduce los pasos y puede cambiar a
+  la vista de secuencia.
+- `molecule_3d` — una MOLÉCULA o una REACCIÓN: `atoms` (id, element, charge, label opcional; SIN coordenadas: el
+  sistema las coloca en 3D con bolas y varillas) y `bonds` (a, b, order 1-3), más `steps` (0-6) del mecanismo, cada
+  uno con `title`, `detail`, `form`/`break` (enlaces [idA, idB] que se forman o rompen), `charges` {id: carga} y
+  `highlight`. La VALENCIA se comprueba en cada paso (un carbono con cinco enlaces se rechaza): en una SN2 el enlace
+  C–O se forma en el MISMO paso en que se rompe el C–Br.
+- `explorable_model` — un OBJETO con partes que se entiende girándolo (célula, átomo, virus, órgano, motor, planeta
+  por capas). `shell` opcional = la envoltura translúcida (`cutaway: true` la abre para ver dentro). `parts` (2-10):
+  `shape` (sphere ellipsoid capsule torus disc_stack tubes helix grains box cylinder blob layer), `size` (small | medium |
+  large), `count` (copias, 1-12), `zone` (center — solo UNA parte — | inner | outer | surface | outside), `color`
+  (sky green rose amber violet neutral; distinto por parte) y `explanation` obligatoria (qué es y qué hace, 1-2
+  frases). Elige la forma que más se parezca a la parte real (mitocondria = capsule, Golgi = disc_stack, retículo =
+  tubes, ribosomas = grains con count alto, ADN = helix).
+  OBJETOS POR CAPAS (la Tierra, el Sol, un átomo por capas de electrones, la piel, un tallo, una cebolla): cada capa
+  es una parte con `shape: "layer"` — el sistema la dibuja como una cáscara concéntrica y la abre con el corte. El
+  ORDEN lo da `zone`, de dentro a fuera: la capa más interna en `center` (maciza), las siguientes en `inner`,
+  `outer` y `surface` (la exterior); `size` y `count` no aplican. Máximo 5 capas. Las demás partes (electrones,
+  placas, vasos) conviven con las capas en su zona. Con capas, la capa exterior ES la envoltura: omite `shell`.
+
+En topology_flow y explorable_model, `guidedWalkthrough[].targetVisualElement` es el `id` EXACTO de un nodo o parte
+(o `shell` para la envoltura): el sistema lo enfoca en la escena mientras se lee ese paso. Nunca la etiqueta de un mensaje ni el título
+de un paso: para hablar de un mensaje, apunta al nodo al que llega.
 
 "##;
 
@@ -590,10 +727,44 @@ const CATALOG_ENTRIES: &[(DynamicBlockType, &str)] = &[
    sistema las rechaza (y repetir el bloque cuesta minutos). Presupuesto por campo, para no tener
    que sumar: intuitiveHook ≤ 30, analogyBoundary ≤ 25, frequentError ≤ 40 (total ≤ 95). El
    detalle técnico vive en systemRule, no aquí.
-   Sin visualAid embebido: el diagrama va en un declarative_visual_diagram propio (regla de
-   emparejamiento en COMPOSICIÓN DINÁMICA).
+   - visualIntent + visualAid (OBLIGATORIOS — el sistema rechaza la llamada sin la figura): una
+     figura que DIBUJA el ejemplo concreto de systemRule, para que se entienda a la primera sin
+     releer. El texto explica el porqué; la figura muestra el qué. Primero decide visualIntent (qué
+     TIPO de contenido es, tabla en VISUALES abajo) y luego el motor que le corresponde:
+       · una forma, una pieza, sus vistas, ejes o la cámara que la mira → spatial_shape →
+         `solid_model` (con medidas reales; `showCamera: true` si el concepto es el punto de vista);
+       · un objeto con partes → object_parts → `explorable_model` (3D);
+       · algo que se LEE POR TROZOS y lo que pasa si un trozo cambia (codones, bits, octetos, partes
+         de una URL) → read_in_pieces → `sequence_strip` (el sistema resalta lo que cambia);
+       · una superficie o un campo (curvatura del espacio-tiempo, geodésicas, pozos, z = f(x, y)) → curved_surface →
+         `surface_3d`, con las trayectorias que el sistema traza sobre ella;
+       · un área que se acumula (la integral) o una tangente (la derivada) → accumulation → `function_plot` con
+         `area` o `tangent`;
+       · una ley con variables → law → `interactive_module`;
+       · mensajes entre actores → messages → `topology_flow`;
+       · un proceso con decisiones o un cambio de estado → process / states → `diagram_spec`;
+       · una jerarquía, una cronología, proporciones, dos ejes, datos → `mermaid` (mindmap, timeline,
+         pie, quadrantChart, xychart…);
+       · un montaje físico o un circuito (poleas, planos, resortes, fuerzas) → physical_phenomenon → `illustration_kit`;
+       · una molécula o un mecanismo de reacción → molecule → `molecule_3d`;
+       · un grupo, un subgrupo, clases laterales → algebraic → `algebraic_structure`;
+       · acordes, ritmo o una progresión en la guitarra → music → `instrument`;
+       · un fenómeno físico/biológico espacial sin módulo → `declarative_svg`.
+     Ejemplo espacial: si systemRule dice "orbitar mueve TU cámara alrededor de la pieza; la pieza
+     no se mueve", el visualAid es un solid_model de la pieza del ejemplo con `showCamera: true` (el
+     estudiante gira la vista y ve la cámara moverse mientras la pieza y los ejes quedan quietos),
+     NUNCA un diagrama de cajas "cámara → vista → pieza".
+     Ejemplo por trozos: si systemRule dice "la célula lee ATGGGATAA de 3 en 3 y una letra cambiada altera la
+     instrucción", el visualAid es un sequence_strip con 2 filas — "Original": ATG (Metionina ·
+     inicio), GGA (Glicina), TAA (Fin); "Con la mutación": ATG, GAA (Ácido glutámico), TAA — y el
+     estudiante VE la letra que cambió y el aminoácido que se altera. UNA sola idea por figura.
+     La figura muestra los VALORES REALES del ejemplo: cada etiqueta dice qué es o qué significa
+     ("Glicina", "192 = red local"), NUNCA un marcador genérico ("palabra 1", "paso 2", "¿palabra
+     2?") ni una caja con texto corrido; el sistema rechaza las etiquetas genéricas.
+   - systemRule y frequentError NUNCA comparten texto: no copies el "esto SÍ / esto NO" al final
+     de systemRule (el sistema lo rechaza).
 "##),
-    (DynamicBlockType::DeclarativeVisualDiagram, r##"2. declarative_visual_diagram — title, visualAid (OBLIGATORIO), guidedWalkthrough: pasos numerados
+    (DynamicBlockType::DeclarativeVisualDiagram, r##"2. declarative_visual_diagram — title, visualIntent + visualAid (OBLIGATORIOS, ver VISUALES), guidedWalkthrough: pasos numerados
    que referencian partes concretas del diagrama (targetVisualElement debe nombrar un nodo/label
    real de visualAid, nunca un elemento genérico). Diagrama estático con etiquetas conectadas y
    mapa de relaciones explícito.
@@ -633,7 +804,10 @@ const CATALOG_ENTRIES: &[(DynamicBlockType, &str)] = &[
 "##),
     (DynamicBlockType::HandsOnMission, r##"6. hands_on_mission — challengeStatement, expectedMilestoneArtifact, constraints (restricciones
    REALES del contexto — nunca genéricas tipo "hazlo bien"), scaffoldingHints,
-   evaluationRubricSummary (criterios de aceptación observables). `supportLevel`
+   evaluationRubricSummary (criterios de aceptación observables). Constraints y rúbrica miden la HABILIDAD,
+   nunca una forma de presentar: PROHIBIDO exigir decimales exactos ("21.0, no 21"), "una frase antes de la
+   tabla", el orden o el nombre de las columnas, salvo que esa forma SEA lo que se aprende (SQL válido, una cita
+   APA). Una entrega correcta con otra presentación debe aprobar. `supportLevel`
    (OBLIGATORIO: full | guided | faded | independent, ver ANDAMIAJE GRADUAL regla 9). En `guided` y
    `faded` incluye `workedTemplate` (la solución resuelta al ~70% con huecos `___` o `/* TODO */`, que
    se precarga en el editor del estudiante) y/o `interactiveSteps` (2-4 objetos
@@ -667,7 +841,10 @@ const CATALOG_ENTRIES: &[(DynamicBlockType, &str)] = &[
    - `selfEvaluationChecklist`: 2-3 criterios redactados en primera persona ("Entiendo por qué...",
      "Puedo aplicar...", "Tengo clara la diferencia entre...").
    TRAZABILIDAD: `predictionComparison.initialPrediction` debe CITAR la respuesta real de
-   `gateHistory.attempts[0].studentAnswer`, nunca inventada.
+   `gateHistory.attempts[0].studentAnswer`, nunca inventada. `finalResult` y `contrastNarrative` solo
+   afirman hechos de `finalResultSoFar` y `gateHistory`: nunca "al primer intento", "impecable" o "sin
+   errores" si hubo fallos, ni algo que el estudiante no escribió. Si una compuerta se escaló, nómbrala
+   con calidez como lo que todavía cuesta y el siguiente paso, no la escondas (el sistema lo comprueba).
 "##),
 ];
 
@@ -694,7 +871,7 @@ const TEMPLATE_BULLETS: &[(&str, &str)] = &[
 
 "##),
     ("tpl_theory", r##"- `tpl_theory` — title, intuitiveHook, analogyBoundary, systemRule, frequentError (capas y estilo
-  del bloque 1; sin visualAid). PREFIÉRELA para toda microteoría: los topes de palabras (≤30 / ≤25 /
+  del bloque 1, incluido su visualAid OBLIGATORIO del ejemplo). PREFIÉRELA para toda microteoría: los topes de palabras (≤30 / ≤25 /
   ≤40 y systemRule ≤240) se validan en la misma llamada y el error te dice qué campo recortar, en
   vez de costar una generación completa. Equivale a anchored_micro_theory.
 "##),
@@ -716,11 +893,18 @@ fn templates_for(t: DynamicBlockType) -> &'static [&'static str] {
     }
 }
 
+/// Block types whose figure may use every engine (SVG and the 3D scenes too):
+/// the diagram block, and the theory block drawing its own example.
+fn has_rich_visuals(t: DynamicBlockType) -> bool {
+    matches!(t, DynamicBlockType::DeclarativeVisualDiagram | DynamicBlockType::AnchoredMicroTheory)
+}
+
 /// Block types whose `visualAid` is required or optional (the others never carry one).
 fn uses_visuals(t: DynamicBlockType) -> bool {
     matches!(
         t,
-        DynamicBlockType::DeclarativeVisualDiagram
+        DynamicBlockType::AnchoredMicroTheory
+            | DynamicBlockType::DeclarativeVisualDiagram
             | DynamicBlockType::BranchingScenarioChallenge
             | DynamicBlockType::HeuristicErrorAudit
             | DynamicBlockType::InteractivePredictionGate
@@ -741,6 +925,7 @@ pub fn full_prompt() -> String {
     TEMPLATE_BULLETS.iter().for_each(|(_, b)| s.push_str(b));
     s.push_str(P_TEMPLATES_FOOTER);
     s.push_str(P_VISUALS);
+    s.push_str(P_SCENE3D);
     s.push_str(P_SVG);
     s.push_str(P_FINAL);
     s
@@ -776,7 +961,8 @@ pub fn lean_prompt(t: DynamicBlockType) -> String {
     if uses_visuals(t) {
         s.push_str(P_VISUALS);
     }
-    if t == DynamicBlockType::DeclarativeVisualDiagram {
+    if has_rich_visuals(t) {
+        s.push_str(P_SCENE3D);
         s.push_str(P_SVG);
     }
     s.push_str(P_FINAL);
@@ -789,6 +975,29 @@ pub fn system_prompt_for(planned: Option<DynamicBlockType>) -> String {
     crate::prompt_encoding::with_toon_hint(&planned.map(lean_prompt).unwrap_or_else(full_prompt))
 }
 
+
+/// Tier 2, only for the escalation model (appended to its prompt): a figure as a
+/// program against the sandboxed figure SDK.
+pub const P_CODE_FIGURE: &str = r##"# NIVEL 2: FIGURA COMO CÓDIGO (solo tú, el modelo de escalado)
+Te llamaron porque la figura de este bloque falló dos veces con los motores declarativos. Primero intenta de nuevo con
+el motor correcto de la tabla. Si NINGÚN motor puede mostrar la idea, usa `code_figure`: `code` es JS que corre en un
+iframe aislado (sin red, sin DOM de la app, sin almacenamiento) contra el SDK `fig`:
+- `fig.ctx` (CanvasRenderingContext2D), `fig.width`, `fig.height`; dibuja en tema oscuro (fondo ya oscuro; trazos
+  #38bdf8 #4ade80 #fbbf24 #f87171 #c084fc, texto #e2e8f0, ejes #94a3b8).
+- `fig.slider({label, min, max, value, step})` devuelve una función que lee el valor actual.
+- `fig.onFrame((t, dt) => { ... })` redibuja cada frame (t en segundos); limpia con `fig.clear()`.
+- `fig.project([x, y, z])` → [sx, sy]: proyección 3D con la vista que el estudiante gira arrastrando.
+- `fig.label(text, x, y, color?)` texto con fondo legible; `fig.arrow(x1, y1, x2, y2, color?)`.
+Prohibido: fetch, XMLHttpRequest, WebSocket, import, eval, new Function, localStorage, parent/top, window.open,
+postMessage, navigator, location, workers (se rechaza). ≤ 12000 caracteres. Calcula la física/matemática en el código
+(nunca dibujes valores inventados) y muestra los números que el texto usa.
+"##;
+
+/// The block generator on the ESCALATION model (`ModelTierConfig::escalation_*`):
+/// registered only when one is configured with a usable key, and used only
+/// for a block whose figure the review rejected twice (see
+/// `notebook_service::generation`). Same prompt, different model.
+pub const FIGURE_ESCALATION_AGENT_ID: &str = "notebook_agent_figure_escalation";
 
 pub fn definition() -> AgentDefinition {
     AgentDefinition {
@@ -876,7 +1085,7 @@ mod tests {
             assert!(lean * 10 < full * 8, "{} lean prompt is {lean} B vs full {full} B — expected at least 20% less", t.as_str());
         }
         // The non-visual types are the cheapest.
-        assert!(lean_prompt(DynamicBlockType::AnchoredMicroTheory).len() * 10 < full * 6);
+        assert!(lean_prompt(DynamicBlockType::SpacedInterleavedRetrieval).len() * 10 < full * 6);
     }
 
     #[test]
@@ -884,10 +1093,17 @@ mod tests {
         for t in ALL_TYPES {
             let lean = lean_prompt(t);
             assert_eq!(lean.contains("VISUALES (visualAid)"), uses_visuals(t), "{}", t.as_str());
-            // The SVG geometry rules are for the diagram block alone: elsewhere declarative_svg is forbidden.
-            assert_eq!(lean.contains("REGLAS DE ORO DE GEOMETRÍA"), t == DynamicBlockType::DeclarativeVisualDiagram, "{}", t.as_str());
+            // The SVG/3D rules ride only with the blocks allowed to use them.
+            assert_eq!(lean.contains("REGLAS DE ORO DE GEOMETRÍA"), has_rich_visuals(t), "{}", t.as_str());
+            assert_eq!(lean.contains("Escenas 3D interactivas"), has_rich_visuals(t), "{}", t.as_str());
         }
-        assert!(!lean_prompt(DynamicBlockType::AnchoredMicroTheory).contains("interactive_module"));
+        assert!(lean_prompt(DynamicBlockType::AnchoredMicroTheory).contains("visualIntent + visualAid (OBLIGATORIOS"));
+        let theory = lean_prompt(DynamicBlockType::AnchoredMicroTheory);
+        assert!(theory.contains("`solid_model`") && theory.contains("showCamera"), "spatial examples are drawn in 3D");
+        // Every intent the review checks is in the table the model chooses from.
+        for intent in crate::domain::visual_routing::VISUAL_INTENTS {
+            assert!(P_VISUALS.contains(&format!("| {} |", intent.key)), "intent {} missing from the table", intent.key);
+        }
         assert!(lean_prompt(DynamicBlockType::InteractivePredictionGate).contains("BLOQUEADO"));
     }
 

@@ -203,9 +203,13 @@ impl DiagnosticBatteryState {
                 if chosen == &q.correct_option {
                     return None;
                 }
+                // "No sé" (see `DONT_KNOW_ANSWER` in `DiagnosticQuestionList.tsx`)
+                // is never one of the options: it's an honest gap, not a
+                // misconception, so tell the generator which one it was.
                 Some(serde_json::json!({
                     "dimension": q.dimension,
                     "insight": q.diagnostic_insight,
+                    "admittedUnknown": !q.options.contains(chosen),
                 }))
             })
             .collect();
@@ -221,6 +225,92 @@ pub enum MermaidChartType {
     ClassDiagram,
     StateDiagram,
     ErDiagram,
+    /// A hierarchy of concepts around one root.
+    Mindmap,
+    /// Dated events in order (the history of a technology, phases of an era).
+    Timeline,
+    /// A plan over calendar time.
+    Gantt,
+    /// Shares of a whole.
+    Pie,
+    /// Items classified on two axes (impact x probability...).
+    QuadrantChart,
+    /// An experience stage by stage, scored.
+    Journey,
+    /// Branches and merges of a git history.
+    GitGraph,
+    /// A numeric series over a category axis (bars / line).
+    #[serde(rename = "xychart")]
+    XyChart,
+    /// Quantities flowing between nodes (energy, budget, traffic).
+    Sankey,
+}
+
+impl MermaidChartType {
+    /// Every chart type, for the tool schema and for header inference.
+    pub const ALL: [MermaidChartType; 14] = [
+        Self::Flowchart,
+        Self::SequenceDiagram,
+        Self::ClassDiagram,
+        Self::StateDiagram,
+        Self::ErDiagram,
+        Self::Mindmap,
+        Self::Timeline,
+        Self::Gantt,
+        Self::Pie,
+        Self::QuadrantChart,
+        Self::Journey,
+        Self::GitGraph,
+        Self::XyChart,
+        Self::Sankey,
+    ];
+
+    /// The `chartType` string as serialized.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Flowchart => "flowchart",
+            Self::SequenceDiagram => "sequenceDiagram",
+            Self::ClassDiagram => "classDiagram",
+            Self::StateDiagram => "stateDiagram",
+            Self::ErDiagram => "erDiagram",
+            Self::Mindmap => "mindmap",
+            Self::Timeline => "timeline",
+            Self::Gantt => "gantt",
+            Self::Pie => "pie",
+            Self::QuadrantChart => "quadrantChart",
+            Self::Journey => "journey",
+            Self::GitGraph => "gitGraph",
+            Self::XyChart => "xychart",
+            Self::Sankey => "sankey",
+        }
+    }
+
+    /// First tokens (lower-cased) Mermaid 12 accepts for this type.
+    pub fn headers(self) -> &'static [&'static str] {
+        match self {
+            Self::Flowchart => &["flowchart", "graph"],
+            Self::SequenceDiagram => &["sequencediagram"],
+            Self::ClassDiagram => &["classdiagram"],
+            Self::StateDiagram => &["statediagram", "statediagram-v2"],
+            Self::ErDiagram => &["erdiagram"],
+            Self::Mindmap => &["mindmap"],
+            Self::Timeline => &["timeline"],
+            Self::Gantt => &["gantt"],
+            Self::Pie => &["pie"],
+            Self::QuadrantChart => &["quadrantchart"],
+            Self::Journey => &["journey"],
+            Self::GitGraph => &["gitgraph", "gitgraph:"],
+            Self::XyChart => &["xychart", "xychart-beta"],
+            Self::Sankey => &["sankey", "sankey-beta"],
+        }
+    }
+
+    /// The type a piece of Mermaid source declares in its first line.
+    pub fn from_code(code: &str) -> Option<Self> {
+        let first = code.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with("%%"))?.to_lowercase();
+        let token = first.split_whitespace().next()?;
+        Self::ALL.into_iter().find(|t| t.headers().contains(&token))
+    }
 }
 
 /// One shape in a `declarative_svg` visual — a hand-specified drawing
@@ -309,6 +399,19 @@ pub enum StaticVisualSpec {
         pedagogical_focus: Option<String>,
         caption: String,
     },
+    /// Something READ IN PIECES, in order: a DNA strand read 3 letters at a
+    /// time, a byte as bits, an IP as octets, a word as syllables, a URL as
+    /// its parts. Each chunk carries its concrete meaning; a second (or third)
+    /// row is the same sequence with a change, and the FRONTEND marks what
+    /// differs (symbol by symbol, and which chunk's meaning moved), so the
+    /// model never has to describe the difference in prose.
+    #[serde(rename = "sequence_strip")]
+    SequenceStrip {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        rows: Vec<SequenceRow>,
+        caption: String,
+    },
     #[serde(rename = "conceptual_matrix")]
     ConceptualMatrix {
         headers: Vec<String>,
@@ -343,6 +446,415 @@ pub enum StaticVisualSpec {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         caption: Option<String>,
     },
+    /// An isometric 3D topology (devices/services from a closed icon
+    /// catalogue) with a step-by-step animated message flow. The model writes
+    /// NO coordinates: the frontend lays the nodes out and routes each message
+    /// along the shortest path over `links`. See `scene3d/TopologyFlowVisual`.
+    #[serde(rename = "topology_flow")]
+    TopologyFlow {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        nodes: Vec<TopologyNode>,
+        #[serde(default)]
+        links: Vec<TopologyLink>,
+        #[serde(default)]
+        steps: Vec<FlowStep>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+    },
+    /// A schematic, explorable 3D object (a cell, an atom, an engine…) built
+    /// from a closed catalogue of low-poly shapes placed by ZONE — again no
+    /// coordinates. See `scene3d/ExplorableModelVisual`.
+    #[serde(rename = "explorable_model")]
+    ExplorableModel {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shell: Option<ModelShell>,
+        parts: Vec<ModelPart>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+    },
+    /// A surface `z = f(x, y)` (safe_expr) the student turns around, with
+    /// parameter sliders and paths the FRONTEND traces on it — real geodesics,
+    /// descents, level curves — plus an optional region whose volume it
+    /// computes. Curved space-time (embedding diagram), potential wells,
+    /// multivariable functions, double integrals. See `scene3d/Surface3dVisual`.
+    #[serde(rename = "surface_3d")]
+    Surface3d {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        expr: String,
+        #[serde(rename = "xRange")]
+        x_range: [f64; 2],
+        #[serde(rename = "yRange")]
+        y_range: [f64; 2],
+        #[serde(default)]
+        params: Vec<ModuleVariable>,
+        #[serde(rename = "zLabel", default, skip_serializing_if = "Option::is_none")]
+        z_label: Option<String>,
+        #[serde(default)]
+        paths: Vec<SurfacePath>,
+        #[serde(default)]
+        markers: Vec<SurfaceMarker>,
+        /// [x0, x1, y0, y1]: shade the volume under the surface over this
+        /// rectangle and show its value (a double integral).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region: Option<[f64; 4]>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+    },
+    /// Atoms + bonds laid out in 3D by the frontend, with mechanism steps that
+    /// form/break bonds — valence checked at every step (`domain::molecule`).
+    #[serde(rename = "molecule_3d")]
+    Molecule3d {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        atoms: Vec<crate::domain::molecule::MoleculeAtom>,
+        #[serde(default)]
+        bonds: Vec<crate::domain::molecule::MoleculeBond>,
+        #[serde(default)]
+        steps: Vec<crate::domain::molecule::MoleculeStep>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+    },
+    /// A finite group by kind and size; the frontend computes its Cayley
+    /// table/graph, a subgroup (from generators) and its cosets (`domain::algebra`).
+    #[serde(rename = "algebraic_structure")]
+    AlgebraicStructure {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        group: GroupSpec,
+        #[serde(default)]
+        subgroup: Vec<String>,
+        /// table | graph | both
+        #[serde(default = "default_group_view")]
+        view: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+    },
+    /// Guitar chords (closed dictionary), a progression and a strum the
+    /// student sees and HEARS (`domain::instrument`).
+    #[serde(rename = "instrument")]
+    Instrument {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default = "default_instrument")]
+        instrument: String,
+        chords: Vec<String>,
+        #[serde(default)]
+        progression: Vec<ChordBar>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        strum: Option<String>,
+        #[serde(default = "default_bpm")]
+        bpm: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+    },
+    /// A 2D illustration composed from a closed kit of pieces placed on grid
+    /// slots, with typed links and force arrows (`domain::illustration`).
+    #[serde(rename = "illustration_kit")]
+    IllustrationKit {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        items: Vec<crate::domain::illustration::IllustrationItem>,
+        #[serde(default)]
+        links: Vec<crate::domain::illustration::IllustrationLink>,
+        #[serde(default)]
+        forces: Vec<crate::domain::illustration::IllustrationForce>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+    },
+    /// Tier 2: a small program against the figure SDK, run in a sandbox; only
+    /// the escalation model may write it (`domain::code_figure`).
+    #[serde(rename = "code_figure")]
+    CodeFigure {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        code: String,
+        #[serde(default = "default_code_height")]
+        height: u32,
+        caption: String,
+    },
+    /// A part with REAL measurements, built feature by feature (see
+    /// [`SolidFeature`]): CAD, technical drawing, solid geometry, 3D printing —
+    /// anything whose point is a SHAPE seen from every side. Here the numbers
+    /// are the content ("40x20x10 mm with a 6 mm through hole"). The frontend
+    /// builds the solid, draws the axes and the standard views and, with
+    /// `showCamera`, the camera orbiting the fixed part. See
+    /// `scene3d/SolidModelVisual`.
+    #[serde(rename = "solid_model")]
+    SolidModel {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default = "default_units")]
+        units: String,
+        features: Vec<SolidFeature>,
+        /// Show an inset with the viewing camera orbiting the fixed part.
+        #[serde(rename = "showCamera", default)]
+        show_camera: bool,
+        /// iso | front | top | right.
+        #[serde(rename = "startView", default = "default_solid_view")]
+        start_view: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+    },
+}
+
+/// One feature of a `solid_model`: a sketch profile on a plane, extruded or
+/// revolved (adds material) or cut / drilled (removes it), in REAL units.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolidFeature {
+    pub id: String,
+    pub label: String,
+    /// extrude | revolve | cut | hole (see [`SOLID_OPS`]).
+    #[serde(default = "default_solid_op")]
+    pub op: String,
+    /// Sketch plane: xy (normal +Z) | xz (normal +Y) | yz (normal +X).
+    #[serde(default = "default_solid_plane")]
+    pub plane: String,
+    pub profile: SolidProfile,
+    /// Where the profile sits on its plane, [u, v]: the centre of a
+    /// rect/circle, an offset added to a polygon's points.
+    #[serde(default)]
+    pub at: [f64; 2],
+    /// Distance of the sketch plane from the origin, along its normal.
+    #[serde(default)]
+    pub offset: f64,
+    /// Length along the normal. Required for `extrude`; omitted on a cut or a
+    /// hole it means "through all".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<f64>,
+    #[serde(default)]
+    pub explanation: String,
+}
+
+/// A sketch profile: `rect` {w, h}, `circle` {d} or `polygon` {points}.
+/// `kind` stays a String so an off-catalogue word is repaired, not rejected.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolidProfile {
+    #[serde(default = "default_profile_kind")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub w: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub d: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<[f64; 2]>,
+}
+
+fn default_solid_op() -> String {
+    "extrude".to_string()
+}
+
+fn default_solid_plane() -> String {
+    "xy".to_string()
+}
+
+fn default_profile_kind() -> String {
+    "rect".to_string()
+}
+
+fn default_units() -> String {
+    "mm".to_string()
+}
+
+fn default_solid_view() -> String {
+    "iso".to_string()
+}
+
+/// One path traced ON a `surface_3d` by the frontend — never drawn by the model:
+/// `geodesic` (the straightest line on the surface, from `start` heading
+/// `direction`), `descent` (where a ball rolls: down the slope) or `level`
+/// (the contour through `start`: same height all along).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SurfacePath {
+    pub id: String,
+    pub label: String,
+    #[serde(default = "default_path_kind")]
+    pub kind: String,
+    pub start: [f64; 2],
+    #[serde(default = "default_direction")]
+    pub direction: [f64; 2],
+    #[serde(default)]
+    pub explanation: String,
+}
+
+/// A named point on the surface (a mass, a minimum, a saddle…).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SurfaceMarker {
+    pub id: String,
+    pub label: String,
+    pub at: [f64; 2],
+    #[serde(default)]
+    pub explanation: String,
+}
+
+fn default_path_kind() -> String {
+    "geodesic".to_string()
+}
+
+fn default_direction() -> [f64; 2] {
+    [1.0, 0.0]
+}
+
+/// The group of an `algebraic_structure`: cyclic n (Z_n), dihedral n (D_n),
+/// symmetric n (S_n).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupSpec {
+    pub kind: String,
+    pub n: u32,
+}
+
+/// One bar of a chord progression.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChordBar {
+    pub chord: String,
+    #[serde(default = "default_beats")]
+    pub beats: u32,
+}
+
+fn default_group_view() -> String {
+    "both".to_string()
+}
+
+fn default_instrument() -> String {
+    "guitar".to_string()
+}
+
+fn default_bpm() -> u32 {
+    80
+}
+
+fn default_beats() -> u32 {
+    4
+}
+
+fn default_code_height() -> u32 {
+    360
+}
+
+pub const GROUP_VIEWS: [&str; 3] = ["table", "graph", "both"];
+
+pub const SURFACE_PATH_KINDS: [&str; 3] = ["geodesic", "descent", "level"];
+pub const MAX_SURFACE_PATHS: usize = 4;
+pub const MAX_SURFACE_MARKERS: usize = 4;
+
+pub const SOLID_OPS: [&str; 4] = ["extrude", "revolve", "cut", "hole"];
+pub const SOLID_PLANES: [&str; 3] = ["xy", "xz", "yz"];
+pub const SOLID_PROFILES: [&str; 3] = ["rect", "circle", "polygon"];
+/// The standard views; each is also a walkthrough target, as is [`CAMERA_TARGET`].
+pub const SOLID_VIEWS: [&str; 4] = ["iso", "front", "top", "right"];
+pub const CAMERA_TARGET: &str = "camera";
+pub const MAX_SOLID_FEATURES: usize = 6;
+pub const MAX_SOLID_DIM: f64 = 1000.0;
+pub const MAX_POLYGON_POINTS: usize = 12;
+
+/// Closed vocabularies of the 3D engines. Kept as `String` fields (like
+/// `DiagramSpec::kind`) so an off-catalogue word is REPAIRED to a default by
+/// `visual_repair` instead of failing the whole tool call in serde.
+pub const TOPOLOGY_ICONS: [&str; 13] =
+    ["laptop", "phone", "server", "database", "router", "switch", "cloud", "firewall", "person", "service", "queue", "storage", "box"];
+pub const FLOW_TONES: [&str; 4] = ["request", "response", "control", "error"];
+/// `layer` = a concentric shell (Earth's mantle, an electron shell, the skin's
+/// dermis): drawn as a nested copy of the envelope, ordered inside-out by zone.
+pub const MODEL_SHAPES: [&str; 12] = ["sphere", "ellipsoid", "capsule", "torus", "disc_stack", "tubes", "helix", "grains", "box", "cylinder", "blob", "layer"];
+/// The walkthrough target that means "the envelope itself" (`explorable_model.shell`).
+pub const SHELL_TARGET: &str = "shell";
+pub const MODEL_SHELL_SHAPES: [&str; 5] = ["sphere", "ellipsoid", "box", "cylinder", "capsule"];
+pub const MODEL_SIZES: [&str; 3] = ["small", "medium", "large"];
+pub const MODEL_ZONES: [&str; 5] = ["center", "inner", "outer", "surface", "outside"];
+pub const MODEL_COLORS: [&str; 6] = ["sky", "green", "rose", "amber", "violet", "neutral"];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopologyNode {
+    pub id: String,
+    pub label: String,
+    #[serde(default = "default_icon")]
+    pub icon: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtext: Option<String>,
+    /// Shown when the student taps the node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopologyLink {
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowStep {
+    pub title: String,
+    #[serde(default)]
+    pub detail: String,
+    #[serde(default)]
+    pub messages: Vec<FlowMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FlowMessage {
+    pub from: String,
+    pub to: String,
+    pub label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tone: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelShell {
+    pub label: String,
+    #[serde(default = "default_shell_shape")]
+    pub shape: String,
+    /// Draw the shell cut open so the inside is visible from the start.
+    #[serde(default = "default_true")]
+    pub cutaway: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelPart {
+    pub id: String,
+    pub label: String,
+    #[serde(default = "default_shell_shape")]
+    pub shape: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    #[serde(default = "default_one")]
+    pub count: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub explanation: String,
+}
+
+fn default_icon() -> String {
+    "box".to_string()
+}
+
+fn default_shell_shape() -> String {
+    "sphere".to_string()
+}
+
+fn default_one() -> u32 {
+    1
 }
 
 /// The closed catalogue of interactive modules. Adding one means: a variant
@@ -364,6 +876,10 @@ pub enum InteractiveModuleSpec {
         params: Vec<ModuleVariable>,
         #[serde(default)]
         tangent: bool,
+        /// The area under the curve from `area.from` up to a point the student
+        /// drags: the integral as accumulated area (see [`FunctionArea`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        area: Option<FunctionArea>,
     },
     /// 2-4 editable 2D vectors and (optionally) their resultant.
     VectorSum {
@@ -393,6 +909,21 @@ pub enum InteractiveModuleSpec {
 
 fn default_true() -> bool {
     true
+}
+
+/// The integral drawn as area: shaded from `from` to a movable upper limit,
+/// its value computed by the frontend (never written by the model).
+/// `riemann` adds rectangles with a slider for how many; `show_accumulated`
+/// also plots A(x) = ∫ f from `from` to x, so the student sees that its slope
+/// is f (the fundamental theorem).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FunctionArea {
+    pub from: f64,
+    #[serde(default)]
+    pub riemann: bool,
+    #[serde(default)]
+    pub show_accumulated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -445,6 +976,44 @@ pub struct ModuleChallenge {
     pub target: f64,
     #[serde(default)]
     pub tolerance: f64,
+}
+
+/// One reading of the sequence (`sequence_strip`): "Original", "Con la mutación"…
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceRow {
+    pub label: String,
+    pub chunks: Vec<SequenceChunk>,
+}
+
+/// One piece as it is read: its symbols (`text`; letters unless it contains
+/// spaces, then words) and what it MEANS — concrete, never "palabra 1".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SequenceChunk {
+    pub text: String,
+    #[serde(default)]
+    pub meaning: String,
+    /// Shown when the student taps the chunk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
+}
+
+/// Rows of a `sequence_strip` and the chunks each may hold.
+pub const MAX_SEQUENCE_ROWS: usize = 3;
+pub const MAX_SEQUENCE_CHUNKS: usize = 12;
+
+/// "palabra 1", "¿palabra 2?", "paso 3 · paso 4": a label made only of
+/// numbered placeholders says nothing — the figure must name the real thing.
+pub fn is_placeholder_label(label: &str) -> bool {
+    let cleaned: String = label.chars().map(|c| if matches!(c, '(' | ')' | '¿' | '?' | '[' | ']') { ' ' } else { c }).collect();
+    let pieces: Vec<&str> = cleaned.split(['·', ',', ';', '/', '|', '-', '→']).map(str::trim).filter(|p| !p.is_empty()).collect();
+    !pieces.is_empty()
+        && pieces.iter().all(|p| {
+            let words: Vec<&str> = p.split_whitespace().collect();
+            matches!(words.as_slice(), [w, n] if n.chars().all(|c| c.is_ascii_digit())
+                && ["palabra", "paso", "elemento", "grupo", "parte", "item", "ítem", "pieza", "cosa", "bloque", "nodo"].contains(&w.to_lowercase().as_str()))
+        })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -626,12 +1195,31 @@ pub enum GeneratedSectionBlock {
         /// and must contrast it against an explicit valid case (see the
         /// prompt in `block_generator_agent.rs`).
         frequent_error: String,
+        /// OPTIONAL figure for the concrete example of `system_rule` (a codon
+        /// strip, a tiny flow, a 3D part model…) — any engine, shown right
+        /// under the rule. Abstract mechanisms read far better drawn than
+        /// described; a deep, walked-through diagram is still its own
+        /// `declarative_visual_diagram` block.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        visual_aid: Option<StaticVisualSpec>,
+        /// What KIND of content the figure shows (see
+        /// `domain::visual_routing::VISUAL_INTENTS`): the model names it
+        /// first, and the review checks the engine fits it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        visual_intent: Option<String>,
     },
-    /// A standalone static diagram (never embedded inside a theory block) —
-    /// labeled connections and an explicit relationship map, walked through
-    /// step by step.
+    /// A standalone static diagram walked through step by step — labeled
+    /// connections and an explicit relationship map. (A theory block may also
+    /// carry a small figure of its own example; this one goes deeper.)
     #[serde(rename = "declarative_visual_diagram", rename_all = "camelCase")]
-    DeclarativeVisualDiagram { title: String, visual_aid: StaticVisualSpec, guided_walkthrough: Vec<WalkthroughStep> },
+    DeclarativeVisualDiagram {
+        title: String,
+        visual_aid: StaticVisualSpec,
+        guided_walkthrough: Vec<WalkthroughStep>,
+        /// Same as the theory's `visual_intent`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        visual_intent: Option<String>,
+    },
     /// Situational decision-making with visible consequences per path —
     /// suited to leadership/strategy/management topics where the content IS
     /// a decision, not a concept or procedure. `visual_aid` is OPTIONAL —

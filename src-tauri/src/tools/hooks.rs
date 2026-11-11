@@ -355,7 +355,8 @@ mod tests {
 
         fn theory(title: &str) -> serde_json::Value {
             serde_json::json!({
-                "blockType": "anchored_micro_theory", "title": title, "intuitiveHook": "h", "systemRule": "r", "frequentError": "f"
+                "blockType": "anchored_micro_theory", "title": title, "intuitiveHook": "h", "systemRule": "r", "frequentError": "f",
+                "visualAid": {"renderEngine": "conceptual_matrix", "headers": ["a"], "rows": [["b"]], "contrastFocus": "c"}
             })
         }
 

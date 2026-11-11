@@ -4,6 +4,12 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react()],
   clearScreen: false,
+  // three.js is only reached through a dynamic import (the 3D visuals), so the
+  // dev server would discover it late and force a full page reload the first
+  // time a 3D visual appears. Pre-bundling it up front avoids that.
+  optimizeDeps: {
+    include: ["three", "three/addons/controls/OrbitControls.js", "three/addons/renderers/CSS2DRenderer.js"],
+  },
   server: {
     port: 1420,
     strictPort: true,

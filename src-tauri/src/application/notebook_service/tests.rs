@@ -88,6 +88,8 @@
             analogy_boundary: Some("La fábrica no explica qué pasa cuando el buffer se llena".to_string()),
             system_rule: "Explicación breve del tema.".to_string(),
             frequent_error: "Confundir la entrada con la salida".to_string(),
+            visual_aid: None,
+            visual_intent: None,
         }
     }
 
@@ -714,6 +716,7 @@
                         criterion: "Entrega un artefacto verificable".to_string(),
                         met: true,
                         evidence: Some("incluye el resultado de la prueba".to_string()),
+                        format_only: false,
                     }],
                     scaffold: None,
                 }]

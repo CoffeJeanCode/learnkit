@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { InteractiveModuleSpec, ModuleChallenge, ModuleVariable } from "../../../lib/schemas";
+import { mulberry32 } from "../../../lib/rng";
+import { integrate, riemannSum } from "../../../lib/calculus";
 import { type CompiledExpr, tryCompileExpr } from "../../../lib/safeExpr";
 
 // Interactive modules (OpenAI-style): the model only fills a small typed spec;
@@ -42,7 +44,7 @@ function safeEval(expr: CompiledExpr | null, env: Record<string, number>): numbe
   }
 }
 
-function Slider({ v, value, onChange, disabled, color }: { v: ModuleVariable; value: number; onChange: (n: number) => void; disabled: boolean; color?: string }) {
+export function Slider({ v, value, onChange, disabled, color }: { v: ModuleVariable; value: number; onChange: (n: number) => void; disabled: boolean; color?: string }) {
   return (
     <label className="im-slider" style={color ? ({ "--im-accent": color } as CSSProperties) : undefined}>
       <span className="im-slider-head">
@@ -172,6 +174,10 @@ function FunctionPlot({ spec, challenge, locked }: { spec: Spec<"function_plot">
   const [lo, hi] = spec.domain;
   const [vals, setVals] = useState(() => initialValues(spec.params));
   const [x0, setX0] = useState((lo + hi) / 2);
+  const area = spec.area && spec.area.from >= lo && spec.area.from < hi ? spec.area : null;
+  // The upper limit the student drags; starts most of the way across.
+  const [upper, setUpper] = useState(() => (area ? area.from + (hi - area.from) * 0.6 : hi));
+  const [rects, setRects] = useState(6);
   const f = (x: number) => safeEval(expr, { ...vals, x });
 
   const pts = Array.from({ length: 160 }, (_, i) => {
@@ -181,11 +187,21 @@ function FunctionPlot({ spec, challenge, locked }: { spec: Spec<"function_plot">
 
   if (!expr || pts.length < 2) return <p className="hint hint-warn">No se pudo dibujar esta función.</p>;
 
+  // The integral, computed here: A(b) = ∫ f from `area.from` to b.
+  const exact = area ? integrate(f, area.from, upper) : NaN;
+  const sum = area?.riemann ? riemannSum(f, area.from, upper, rects) : null;
+  const accumulated = area?.showAccumulated
+    ? Array.from({ length: 80 }, (_, i) => {
+        const x = area.from + ((hi - area.from) * i) / 79;
+        return { x, y: integrate(f, area.from, x, 60) };
+      }).filter((p) => Number.isFinite(p.y))
+    : [];
+
   const W = 360;
   const H = 230;
   const P = 26;
-  const yMin0 = Math.min(...pts.map((p) => p.y));
-  const yMax0 = Math.max(...pts.map((p) => p.y));
+  const yMin0 = Math.min(...pts.map((p) => p.y), ...accumulated.map((p) => p.y), area ? 0 : Infinity);
+  const yMax0 = Math.max(...pts.map((p) => p.y), ...accumulated.map((p) => p.y), area ? 0 : -Infinity);
   const pad = (yMax0 - yMin0 || 1) * 0.1;
   const yMin = yMin0 - pad;
   const yMax = yMax0 + pad;
@@ -209,6 +225,32 @@ function FunctionPlot({ spec, challenge, locked }: { spec: Spec<"function_plot">
         <line x1={axisX} y1={P} x2={axisX} y2={H - P} stroke={NEUTRAL} strokeWidth="1" />
         <text x={W - P} y={axisY - 6} fill={NEUTRAL} fontSize="11" textAnchor="end">x</text>
         <text x={axisX + 6} y={P} fill={NEUTRAL} fontSize="11">y</text>
+        {area && !sum && (
+          <polygon
+            fill={COLORS[0]}
+            fillOpacity="0.28"
+            points={[
+              `${sx(area.from).toFixed(1)},${sy(0).toFixed(1)}`,
+              ...pts.filter((p) => p.x >= area.from && p.x <= upper).map((p) => `${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`),
+              `${sx(upper).toFixed(1)},${sy(f(upper)).toFixed(1)}`,
+              `${sx(upper).toFixed(1)},${sy(0).toFixed(1)}`,
+            ].join(" ")}
+          />
+        )}
+        {sum?.rects.map(([a, b, y], i) =>
+          Number.isFinite(y) ? (
+            <rect key={i} x={sx(a)} width={Math.max(0.5, sx(b) - sx(a))} y={Math.min(sy(y), sy(0))} height={Math.abs(sy(y) - sy(0))} fill={COLORS[2]} fillOpacity="0.35" stroke={COLORS[2]} strokeWidth="1" />
+          ) : null,
+        )}
+        {accumulated.length > 1 && (
+          <polyline fill="none" stroke={COLORS[3]} strokeWidth="2" strokeDasharray="5 4" points={accumulated.map((p) => `${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(" ")} />
+        )}
+        {area && (
+          <>
+            <line x1={sx(upper)} y1={P} x2={sx(upper)} y2={H - P} stroke={COLORS[2]} strokeWidth="1.5" strokeDasharray="3 3" />
+            {accumulated.length > 1 && Number.isFinite(exact) && <circle cx={sx(upper)} cy={sy(exact)} r="5" fill={COLORS[3]} />}
+          </>
+        )}
         <polyline fill="none" stroke={COLORS[0]} strokeWidth="2.5" points={pts.map((p) => `${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(" ")} />
         {tangent && (
           <>
@@ -234,7 +276,31 @@ function FunctionPlot({ spec, challenge, locked }: { spec: Spec<"function_plot">
           <span className="im-hint">{Math.abs(slope) < 1e-3 ? "tangente horizontal" : slope > 0 ? "la función sube ↗" : "la función baja ↘"}</span>
         </div>
       )}
+      {area && (
+        <div className="im-readout" aria-live="polite">
+          <span className="im-readout-label">
+            Área de {fmt(area.from)} a {fmt(upper)}
+          </span>
+          <span className="im-readout-value">≈ {fmt(exact)}</span>
+          {sum && (
+            <span className="im-hint">
+              {rects} rectángulos suman {fmt(sum.total)} (diferencia {fmt(sum.total - exact)})
+            </span>
+          )}
+          {accumulated.length > 1 && <span className="im-hint">La curva punteada es A(x): su pendiente en {fmt(upper)} vale f({fmt(upper)}) = {fmt(f(upper))}</span>}
+        </div>
+      )}
       <div className="im-sliders">
+        {area && (
+          <Slider
+            v={{ sym: "b", label: "Hasta x", min: area.from, max: hi, init: upper, step: (hi - area.from) / 200 }}
+            value={upper}
+            color={COLORS[2]}
+            disabled={locked}
+            onChange={setUpper}
+          />
+        )}
+        {sum && <Slider v={{ sym: "n", label: "Rectángulos", min: 1, max: 40, init: rects, step: 1 }} value={rects} color={COLORS[2]} disabled={locked} onChange={setRects} />}
         {tangent && (
           <Slider
             v={{ sym: "x0", label: "Punto x", min: lo, max: hi, init: x0, step: (hi - lo) / 200 }}
@@ -331,16 +397,6 @@ function VectorSum({ spec, locked }: { spec: Spec<"vector_sum">; locked: boolean
 // --- particle_gradient -----------------------------------------------------
 
 /** Small deterministic PRNG so the same spec always draws the same particles. */
-function mulberry32(seed: number) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 function ParticleGradient({ spec, locked }: { spec: Spec<"particle_gradient">; locked: boolean }) {
   const [t, setT] = useState(0);

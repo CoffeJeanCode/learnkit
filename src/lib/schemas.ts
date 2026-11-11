@@ -412,7 +412,65 @@ export const BlockStatusSchema = z.enum(["ready", "passed", "failed", "escalated
 // Explicitly NOT dynamic simulators — 3 stable rendering engines, chosen per
 // the concept's shape. See `blocks/StaticVisual.tsx` for how each renders.
 
-export const MermaidChartTypeSchema = z.enum(["flowchart", "sequenceDiagram", "classDiagram", "stateDiagram", "erDiagram"]);
+export const MERMAID_CHART_TYPES = [
+  "flowchart",
+  "sequenceDiagram",
+  "classDiagram",
+  "stateDiagram",
+  "erDiagram",
+  "mindmap",
+  "timeline",
+  "gantt",
+  "pie",
+  "quadrantChart",
+  "journey",
+  "gitGraph",
+  "xychart",
+  "sankey",
+] as const;
+export const MermaidChartTypeSchema = z.enum(MERMAID_CHART_TYPES);
+
+// `surface_3d` (mirrors `StaticVisualSpec::Surface3d`): paths are traced by the frontend.
+export const SURFACE_PATH_KINDS = ["geodesic", "descent", "level"] as const;
+export const SurfacePathSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  kind: z.enum(SURFACE_PATH_KINDS).catch("geodesic"),
+  start: z.tuple([z.number(), z.number()]),
+  direction: z.tuple([z.number(), z.number()]).catch([1, 0]).default([1, 0]),
+  explanation: z.string().default(""),
+});
+export const SurfaceMarkerSchema = z.object({ id: z.string(), label: z.string(), at: z.tuple([z.number(), z.number()]), explanation: z.string().default("") });
+export type SurfacePath = z.infer<typeof SurfacePathSchema>;
+
+// `solid_model` vocabularies (mirror `domain::notebook::SOLID_*` in Rust).
+export const SOLID_OPS = ["extrude", "revolve", "cut", "hole"] as const;
+export const SOLID_PLANES = ["xy", "xz", "yz"] as const;
+export const SOLID_PROFILES = ["rect", "circle", "polygon"] as const;
+export const SOLID_VIEWS = ["iso", "front", "top", "right"] as const;
+/** The walkthrough target that means "show the viewing camera". */
+export const CAMERA_TARGET = "camera";
+
+export const SolidProfileSchema = z.object({
+  kind: z.enum(SOLID_PROFILES).catch("rect"),
+  w: z.number().nullish(),
+  h: z.number().nullish(),
+  d: z.number().nullish(),
+  points: z.array(z.tuple([z.number(), z.number()])).default([]),
+});
+
+export const SolidFeatureSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  op: z.enum(SOLID_OPS).catch("extrude"),
+  plane: z.enum(SOLID_PLANES).catch("xy"),
+  profile: SolidProfileSchema,
+  at: z.tuple([z.number(), z.number()]).catch([0, 0]).default([0, 0]),
+  offset: z.number().default(0),
+  depth: z.number().nullish(),
+  explanation: z.string().default(""),
+});
+export type SolidFeature = z.infer<typeof SolidFeatureSchema>;
 export const SvgTagSchema = z.enum(["rect", "circle", "line", "path", "text"]);
 
 export const SvgElementSchema = z.object({
@@ -475,6 +533,10 @@ export const InteractiveModuleSpecSchema = z.discriminatedUnion("module", [
     domain: z.tuple([z.number(), z.number()]),
     params: z.array(ModuleVariableSchema).default([]),
     tangent: z.boolean().default(false),
+    // The integral as accumulated area (mirrors `FunctionArea`).
+    area: z
+      .object({ from: z.number(), riemann: z.boolean().default(false), showAccumulated: z.boolean().default(false) })
+      .nullish(),
   }),
   z.object({
     module: z.literal("vector_sum"),
@@ -503,6 +565,59 @@ export const ModuleChallengeSchema = z.object({
   tolerance: z.number().default(0),
 });
 
+// --- 3D scenes (three.js) ---------------------------------------------------
+// Same contract as the modules: the model names things from CLOSED catalogues
+// and never writes coordinates; layout, routing and geometry live in
+// `lib/scene3d/*` and `blocks/scene3d/*`. The backend repairs off-catalogue
+// words (`domain::visual_repair`); `.catch()` keeps blocks stored before a
+// catalogue change renderable.
+export const TOPOLOGY_ICONS = ["laptop", "phone", "server", "database", "router", "switch", "cloud", "firewall", "person", "service", "queue", "storage", "box"] as const;
+export const FLOW_TONES = ["request", "response", "control", "error"] as const;
+export const MODEL_SHAPES = ["sphere", "ellipsoid", "capsule", "torus", "disc_stack", "tubes", "helix", "grains", "box", "cylinder", "blob", "layer"] as const;
+/** Walkthrough target meaning "the envelope itself" (mirrors `SHELL_TARGET` in Rust). */
+export const SHELL_TARGET = "shell";
+export const MODEL_SHELL_SHAPES = ["sphere", "ellipsoid", "box", "cylinder", "capsule"] as const;
+export const MODEL_ZONES = ["center", "inner", "outer", "surface", "outside"] as const;
+export const MODEL_COLORS = ["sky", "green", "rose", "amber", "violet", "neutral"] as const;
+
+export const TopologyNodeSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  icon: z.enum(TOPOLOGY_ICONS).catch("box"),
+  subtext: z.string().nullish(),
+  explanation: z.string().nullish(),
+});
+
+export const FlowMessageSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  label: z.string(),
+  tone: z.enum(FLOW_TONES).nullish().catch("request"),
+});
+
+export const FlowStepSchema = z.object({
+  title: z.string(),
+  detail: z.string().default(""),
+  messages: z.array(FlowMessageSchema).default([]),
+});
+
+export const ModelShellSchema = z.object({
+  label: z.string(),
+  shape: z.enum(MODEL_SHELL_SHAPES).catch("sphere"),
+  cutaway: z.boolean().default(true),
+});
+
+export const ModelPartSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  shape: z.enum(MODEL_SHAPES).catch("sphere"),
+  size: z.enum(["small", "medium", "large"]).nullish().catch("medium"),
+  count: z.number().default(1),
+  zone: z.enum(MODEL_ZONES).nullish().catch("inner"),
+  color: z.enum(MODEL_COLORS).nullish().catch(null),
+  explanation: z.string().default(""),
+});
+
 export const StaticVisualSpecSchema = z.discriminatedUnion("renderEngine", [
   z.object({
     renderEngine: z.literal("mermaid"),
@@ -516,6 +631,21 @@ export const StaticVisualSpecSchema = z.discriminatedUnion("renderEngine", [
     elements: z.array(SvgElementSchema).default([]),
     groups: z.array(SvgGroupSchema).default([]),
     pedagogicalFocus: z.string().nullish(),
+    caption: z.string(),
+  }),
+  // Something read in pieces + its variants; the frontend marks the diff
+  // (mirrors `StaticVisualSpec::SequenceStrip` in Rust).
+  z.object({
+    renderEngine: z.literal("sequence_strip"),
+    title: z.string().nullish(),
+    rows: z
+      .array(
+        z.object({
+          label: z.string(),
+          chunks: z.array(z.object({ text: z.string(), meaning: z.string().default(""), explanation: z.string().nullish() })),
+        }),
+      )
+      .min(1),
     caption: z.string(),
   }),
   z.object({
@@ -537,6 +667,110 @@ export const StaticVisualSpecSchema = z.discriminatedUnion("renderEngine", [
     renderEngine: z.literal("interactive_module"),
     spec: InteractiveModuleSpecSchema,
     challenge: ModuleChallengeSchema.nullish(),
+    caption: z.string().nullish(),
+  }),
+  z.object({
+    renderEngine: z.literal("topology_flow"),
+    title: z.string().nullish(),
+    nodes: z.array(TopologyNodeSchema),
+    links: z.array(z.object({ from: z.string(), to: z.string() })).default([]),
+    steps: z.array(FlowStepSchema).default([]),
+    caption: z.string().nullish(),
+  }),
+  z.object({
+    renderEngine: z.literal("explorable_model"),
+    title: z.string().nullish(),
+    shell: ModelShellSchema.nullish(),
+    parts: z.array(ModelPartSchema),
+    caption: z.string().nullish(),
+  }),
+  // A CAD-like part with real measurements, built feature by feature
+  // (mirrors `StaticVisualSpec::SolidModel`; see `scene3d/SolidModelVisual`).
+  // Domain kits (mirror `StaticVisualSpec::{Molecule3d, AlgebraicStructure,
+  // Instrument, IllustrationKit, CodeFigure}`): the model names WHAT, the
+  // frontend computes and draws it.
+  z.object({
+    renderEngine: z.literal("molecule_3d"),
+    title: z.string().nullish(),
+    atoms: z.array(z.object({ id: z.string(), element: z.string(), charge: z.number().default(0), label: z.string().nullish() })),
+    bonds: z.array(z.object({ a: z.string(), b: z.string(), order: z.number().default(1) })).default([]),
+    steps: z
+      .array(
+        z.object({
+          title: z.string(),
+          detail: z.string().default(""),
+          form: z.array(z.tuple([z.string(), z.string()])).default([]),
+          break: z.array(z.tuple([z.string(), z.string()])).default([]),
+          charges: z.record(z.string(), z.number()).default({}),
+          highlight: z.array(z.string()).default([]),
+        }),
+      )
+      .default([]),
+    caption: z.string().nullish(),
+  }),
+  z.object({
+    renderEngine: z.literal("algebraic_structure"),
+    title: z.string().nullish(),
+    group: z.object({ kind: z.enum(["cyclic", "dihedral", "symmetric"]).catch("cyclic"), n: z.number() }),
+    subgroup: z.array(z.string()).default([]),
+    view: z.enum(["table", "graph", "both"]).catch("both").default("both"),
+    caption: z.string().nullish(),
+  }),
+  z.object({
+    renderEngine: z.literal("instrument"),
+    title: z.string().nullish(),
+    instrument: z.string().default("guitar"),
+    chords: z.array(z.string()),
+    progression: z.array(z.object({ chord: z.string(), beats: z.number().default(4) })).default([]),
+    strum: z.string().nullish(),
+    bpm: z.number().default(80),
+    caption: z.string().nullish(),
+  }),
+  z.object({
+    renderEngine: z.literal("illustration_kit"),
+    title: z.string().nullish(),
+    items: z.array(
+      z.object({
+        id: z.string(),
+        kind: z.string(),
+        label: z.string().default(""),
+        slot: z.tuple([z.number(), z.number()]),
+        value: z.string().nullish(),
+        angle: z.number().nullish(),
+        explanation: z.string().default(""),
+      }),
+    ),
+    links: z.array(z.object({ from: z.string(), to: z.string(), kind: z.string().default("rope"), label: z.string().nullish() })).default([]),
+    forces: z.array(z.object({ on: z.string(), direction: z.string(), label: z.string(), magnitude: z.number().default(2) })).default([]),
+    caption: z.string().nullish(),
+  }),
+  z.object({
+    renderEngine: z.literal("code_figure"),
+    title: z.string().nullish(),
+    code: z.string(),
+    height: z.number().default(360),
+    caption: z.string(),
+  }),
+  z.object({
+    renderEngine: z.literal("surface_3d"),
+    title: z.string().nullish(),
+    expr: z.string(),
+    xRange: z.tuple([z.number(), z.number()]),
+    yRange: z.tuple([z.number(), z.number()]),
+    params: z.array(ModuleVariableSchema).default([]),
+    zLabel: z.string().nullish(),
+    paths: z.array(SurfacePathSchema).default([]),
+    markers: z.array(SurfaceMarkerSchema).default([]),
+    region: z.tuple([z.number(), z.number(), z.number(), z.number()]).nullish(),
+    caption: z.string().nullish(),
+  }),
+  z.object({
+    renderEngine: z.literal("solid_model"),
+    title: z.string().nullish(),
+    units: z.string().default("mm"),
+    features: z.array(SolidFeatureSchema),
+    showCamera: z.boolean().default(false),
+    startView: z.enum(SOLID_VIEWS).catch("iso").default("iso"),
     caption: z.string().nullish(),
   }),
 ]);
@@ -639,12 +873,19 @@ export const DynamicSectionBlockSchema = z.discriminatedUnion("blockType", [
     frequentError: z
       .string()
       .describe("⚠️ Contraste explícito entre un caso VÁLIDO y la confusión típica ('esto SÍ / esto NO, porque...')"),
+    // Optional figure of systemRule's concrete example (any engine). Nullish
+    // like the other optional visuals, so theory blocks persisted before it
+    // existed still parse.
+    visualAid: StaticVisualSpecSchema.nullish(),
+    // What kind of content the figure shows (`domain::visual_routing`).
+    visualIntent: z.string().nullish(),
   }),
   z.object({
     blockType: z.literal("declarative_visual_diagram"),
     title: z.string(),
     visualAid: StaticVisualSpecSchema,
     guidedWalkthrough: z.array(WalkthroughStepSchema),
+    visualIntent: z.string().nullish(),
   }),
   z.object({
     blockType: z.literal("branching_scenario_challenge"),

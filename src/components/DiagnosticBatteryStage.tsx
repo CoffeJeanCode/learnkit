@@ -1,13 +1,6 @@
 import { useEffect, useState } from "react";
 import type { DiagnosticBatteryState } from "../lib/schemas";
-import { InlineText } from "../features/notebook/blocks/RichText";
-
-const DIMENSION_LABEL: Record<string, string> = {
-  intuition: "Intuición",
-  mechanics: "Mecánica",
-  critical_case: "Caso crítico",
-  boundary: "Frontera",
-};
+import { DiagnosticQuestionList } from "./DiagnosticQuestionList";
 
 /**
  * The live Diagnostic stage, rendered inline in the chat — NOT a notebook
@@ -16,7 +9,7 @@ const DIMENSION_LABEL: Record<string, string> = {
  * here, in real time, BEFORE the syllabus is generated (see
  * `RoadmapService::answer_diagnostic_question`). Picks are revealed via
  * LOCAL state (see below) rather than `battery.answers` directly, so
- * feedback shows immediately on click regardless of how long the backend
+ * the pick shows immediately on click regardless of how long the backend
  * round trip takes. There is deliberately NO skip: if the battery is up,
  * the model judged it necessary for this student, so it has to be answered.
  */
@@ -30,12 +23,12 @@ export function DiagnosticBatteryStage({
   busy: boolean;
 }) {
   // BUG THIS FIXED: reading `chosen` straight from `battery.answers` meant
-  // the LAST question never showed feedback — answering it triggers a real
+  // the LAST question never showed the pick — answering it triggers a real
   // model turn (finish_diagnostic_stage) on the backend, so the session
   // (and this card's `battery` prop) doesn't update until that whole turn
   // resolves, by which point the battery is already fully answered and the
   // card unmounts immediately in favor of the proposed plan. Local state
-  // reveals the pick + feedback the INSTANT the student clicks, independent
+  // reveals the pick the INSTANT the student clicks, independent
   // of how long the round trip takes — seeded from `battery.answers` so a
   // restored/reopened session still renders already-answered questions.
   const [localAnswers, setLocalAnswers] = useState<Record<string, string>>(battery.answers);
@@ -55,39 +48,7 @@ export function DiagnosticBatteryStage({
         <span className="badge">calibrando</span>
       </div>
       <p className="hint">{battery.goalAlignment}</p>
-      <ol className="diagnostic-question-list">
-        {battery.questions.map((q, i) => {
-          const chosen = localAnswers[String(i)];
-          return (
-            <li key={i} className="diagnostic-question">
-              <div className="diagnostic-question-head">
-                <span className="badge">{DIMENSION_LABEL[q.dimension] ?? q.dimension}</span>
-                <p className="block-question">
-                  <InlineText text={q.prompt} />
-                </p>
-              </div>
-              <div className="prediction-options">
-                {q.options.map((opt) => (
-                  <button
-                    key={opt}
-                    className={chosen === opt ? "btn-primary" : ""}
-                    onClick={() => choose(i, opt)}
-                    disabled={busy || chosen !== undefined}
-                  >
-                    <InlineText text={opt} />
-                  </button>
-                ))}
-              </div>
-              {chosen && (
-                <p className="hint">
-                  {chosen === q.correctOption ? "Correcto. " : `La respuesta esperada era "${q.correctOption}". `}
-                  {q.diagnosticInsight}
-                </p>
-              )}
-            </li>
-          );
-        })}
-      </ol>
+      <DiagnosticQuestionList questions={battery.questions} answers={localAnswers} onChoose={choose} disabled={busy} />
     </div>
   );
 }

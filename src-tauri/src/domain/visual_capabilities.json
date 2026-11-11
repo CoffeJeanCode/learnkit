@@ -1,0 +1,122 @@
+{
+  "threshold": 0.85,
+  "minSamples": 3,
+  "models": {
+    "mimo-v2.6-pro": {
+      "sequence_strip": {
+        "n": 4,
+        "ok": 4
+      },
+      "diagram_spec": {
+        "n": 6,
+        "ok": 5
+      },
+      "interactive_module": {
+        "n": 8,
+        "ok": 7
+      },
+      "topology_flow": {
+        "n": 4,
+        "ok": 4
+      },
+      "explorable_model": {
+        "n": 4,
+        "ok": 4
+      },
+      "solid_model": {
+        "n": 13,
+        "ok": 12
+      },
+      "mermaid": {
+        "n": 11,
+        "ok": 10
+      },
+      "declarative_svg": {
+        "n": 1,
+        "ok": 1
+      },
+      "surface_3d": {
+        "n": 1,
+        "ok": 1
+      }
+    },
+    "mimo-v2.6-flash": {
+      "sequence_strip": {
+        "n": 5,
+        "ok": 4
+      },
+      "diagram_spec": {
+        "n": 4,
+        "ok": 3
+      },
+      "interactive_module": {
+        "n": 7,
+        "ok": 5
+      },
+      "explorable_model": {
+        "n": 4,
+        "ok": 4
+      },
+      "solid_model": {
+        "n": 14,
+        "ok": 11
+      },
+      "mermaid": {
+        "n": 8,
+        "ok": 7
+      },
+      "conceptual_matrix": {
+        "n": 4,
+        "ok": 3
+      },
+      "topology_flow": {
+        "n": 3,
+        "ok": 3
+      },
+      "surface_3d": {
+        "n": 2,
+        "ok": 2
+      }
+    },
+    "deepseek-chat": {
+      "sequence_strip": {
+        "n": 7,
+        "ok": 5
+      },
+      "diagram_spec": {
+        "n": 7,
+        "ok": 7
+      },
+      "topology_flow": {
+        "n": 4,
+        "ok": 4
+      },
+      "explorable_model": {
+        "n": 4,
+        "ok": 4
+      },
+      "solid_model": {
+        "n": 14,
+        "ok": 14
+      },
+      "mermaid": {
+        "n": 5,
+        "ok": 5
+      },
+      "interactive_module": {
+        "n": 7,
+        "ok": 6
+      },
+      "surface_3d": {
+        "n": 2,
+        "ok": 2
+      },
+      "conceptual_matrix": {
+        "n": 1,
+        "ok": 1
+      }
+    }
+  },
+  "generatedFrom": 6,
+  "outputs": 156
+}

@@ -33,6 +33,7 @@ const RETRY_BACKOFF_BASE: Duration = Duration::from_millis(500);
 /// which are never sent to the client at all.
 pub(super) fn redact_block(block: &NotebookBlock) -> NotebookBlock {
     let mut b = block.clone();
+    b.last_feedback = b.last_feedback.as_deref().map(student_facing_feedback);
     if let Some(obj) = b.content_json.as_object_mut() {
         match b.block_type {
             DynamicBlockType::InteractivePredictionGate => {
@@ -75,6 +76,17 @@ pub(super) fn redact_block(block: &NotebookBlock) -> NotebookBlock {
         }
     }
     b
+}
+
+/// Feedback as the student may read it. Grades stored before the XML
+/// tool-call parser existed kept the grader's raw call (`<tool_call><function=
+/// grade_gate_submission>…`), often cut off mid-word by the output budget:
+/// strip the markup on the way out, and close a sentence the budget cut.
+pub(super) fn student_facing_feedback(raw: &str) -> String {
+    let had_markup = raw.contains("<tool_call") || raw.contains("<parameter") || raw.contains("<function");
+    let cleaned = clean_tool_and_xml_tags(raw);
+    let ends_sentence = cleaned.trim_end().ends_with(['.', '!', '?', ')', '…', '"', '»']);
+    if had_markup && !cleaned.is_empty() && !ends_sentence { format!("{}…", cleaned.trim_end()) } else { cleaned }
 }
 
 pub(super) fn redact_all(blocks: Vec<NotebookBlock>) -> Vec<NotebookBlock> {
@@ -225,6 +237,23 @@ pub(super) async fn grade_retrieval_with_model(
     run_gate_grader(orchestrator, app, render::render_retrieval_grading_input(item, answer)).await
 }
 
+/// A fail whose only unmet criteria are about PRESENTATION: the student
+/// showed the skill, so the gate passes (a format requirement the generator
+/// slipped into the rubric must never send a correct answer to escalation).
+pub(super) fn concept_shown_despite_format(criteria: &[RubricCriterion]) -> bool {
+    let unmet: Vec<&RubricCriterion> = criteria.iter().filter(|c| !c.met).collect();
+    !unmet.is_empty() && unmet.iter().all(|c| c.format_only) && criteria.iter().any(|c| c.met && !c.format_only)
+}
+
+/// The grader's verdict with the concept-over-form rule applied.
+fn settle(passed: bool, feedback: Option<String>, criteria: Vec<RubricCriterion>) -> ModelGrade {
+    if !passed && concept_shown_despite_format(&criteria) {
+        tracing::info!("gate passed: only presentation criteria were unmet");
+        return ModelGrade { passed: true, scaffold_feedback: None, criteria };
+    }
+    ModelGrade { passed, scaffold_feedback: feedback, criteria }
+}
+
 async fn run_gate_grader(orchestrator: &Orchestrator, app: Option<&AppHandle>, base_input: String) -> AppResult<ModelGrade> {
     let mut note = String::new();
     let mut last_err: Option<AppError> = None;
@@ -236,14 +265,14 @@ async fn run_gate_grader(orchestrator: &Orchestrator, app: Option<&AppHandle>, b
                 let result = capture.lock().unwrap_or_else(|e| e.into_inner()).take();
                 if let Some(r) = result {
                     let feedback = r.scaffold.map(|s| clean_tool_and_xml_tags(&s.content));
-                    return Ok(ModelGrade { passed: r.passed, scaffold_feedback: feedback, criteria: r.criteria });
+                    return Ok(settle(r.passed, feedback, r.criteria));
                 }
 
                 // Fallback 1: Parse verdict directly from model text response (handles XML tool calls & JSON)
                 if let Some(r) = parse_gate_grade_from_text(&output.text) {
                     tracing::info!("recovered gate grading result directly from model text output");
                     let feedback = r.scaffold.map(|s| clean_tool_and_xml_tags(&s.content));
-                    return Ok(ModelGrade { passed: r.passed, scaffold_feedback: feedback, criteria: r.criteria });
+                    return Ok(settle(r.passed, feedback, r.criteria));
                 }
 
                 // Fallback 2: Retry with assertive system note if attempts remain
@@ -279,6 +308,16 @@ NOTA_DEL_SISTEMA: No llamaste a la herramienta obligatoria grade_gate_submission
         }
     }
     Err(last_err.unwrap_or_else(|| AppError::AgentExecutionFailed("el calificador de compuertas falló".to_string())))
+}
+
+/// A reflection the student really wrote: enough words to say something
+/// (not "ok", "todo bien"), whatever the grader thinks of its depth.
+pub(super) const MIN_REFLECTION_WORDS: usize = 8;
+
+pub(super) fn is_genuine_reflection(reflection: &str) -> bool {
+    let words: Vec<&str> = reflection.split_whitespace().filter(|w| w.chars().any(char::is_alphabetic)).collect();
+    let distinct: std::collections::HashSet<String> = words.iter().map(|w| w.to_lowercase()).collect();
+    words.len() >= MIN_REFLECTION_WORDS && distinct.len() * 2 > words.len()
 }
 
 /// Grades the closing block's free-text reflection via
@@ -430,6 +469,44 @@ mod tests {
         assert!(open.get("modelSolution").is_none() && open.get("faultyLineNumber").is_none());
         let passed = redact_block(&block(DynamicBlockType::HeuristicErrorAudit, BlockStatus::Passed, audit_content)).content_json;
         assert_eq!(passed["faultyLineNumber"], 2, "revealed once the gate is passed");
+    }
+
+    #[test]
+    fn a_real_reflection_completes_the_class_but_filler_does_not() {
+        // The real reflection from the QA'd class, which the grader first failed.
+        assert!(is_genuine_reflection("Puedo cambiar la densidad de la escala de los token usando factores y permitiendo cambiar la forma sin cambiar las proporciones"));
+        assert!(!is_genuine_reflection("todo bien, entendí"));
+        assert!(!is_genuine_reflection("ok ok ok ok ok ok ok ok ok ok"), "repetition is not a reflection");
+    }
+
+    #[test]
+    fn stored_raw_tool_calls_never_reach_the_student() {
+        // Verbatim shape of a real stored feedback (block 3 of a design-systems class).
+        let stored = "<tool_call><function=grade_gate_submission><parameter=passed>false</parameter><parameter=rationale>La entrega acierta el factor 1.25, el ancla 20.0 pero incumple tres criterios centrales: no escribe la derivación (constraint explíci";
+        let shown = student_facing_feedback(stored);
+        assert!(!shown.contains('<') && !shown.contains("passed"), "{shown}");
+        assert!(shown.starts_with("La entrega acierta") && shown.ends_with('…'), "{shown}");
+        let mut b = block(DynamicBlockType::HandsOnMission, BlockStatus::Escalated, serde_json::json!({}));
+        b.last_feedback = Some(stored.into());
+        assert!(!redact_block(&b).last_feedback.unwrap().contains("<tool_call"));
+        // Clean feedback is left as it is.
+        assert_eq!(student_facing_feedback("Revisa la fila 2."), "Revisa la fila 2.");
+    }
+
+    #[test]
+    fn a_correct_answer_that_only_misses_the_presentation_passes() {
+        let c = |criterion: &str, met: bool, format_only: bool| RubricCriterion { criterion: criterion.into(), met, evidence: None, format_only };
+        // The real case: 1.25, 20.0 and 30.0 right; "derivation in one sentence" and "factors in headers" missing.
+        let real = vec![c("deriva 1.25", true, false), c("valores 20.0 y 30.0", true, false), c("frase antes de la tabla", false, true), c("factores en encabezados", false, true)];
+        assert!(concept_shown_despite_format(&real));
+        assert!(settle(false, Some("pista".into()), real).passed);
+        // A missing concept still fails, whatever the format.
+        let wrong = vec![c("deriva 1.25", false, false), c("frase antes de la tabla", false, true)];
+        assert!(!concept_shown_despite_format(&wrong));
+        assert!(!settle(false, Some("pista".into()), wrong).passed);
+        // Only format criteria and none met: nothing shows the skill.
+        assert!(!concept_shown_despite_format(&[c("frase", false, true)]));
+        assert!(!concept_shown_despite_format(&[]));
     }
 
     #[test]

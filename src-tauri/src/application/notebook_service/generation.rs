@@ -7,13 +7,14 @@
 //! block at a time instead of one whole payload at a time.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use tauri::AppHandle;
 
-use crate::agents::block_generator_agent::system_prompt_for;
+use crate::agents::block_generator_agent::{FIGURE_ESCALATION_AGENT_ID, system_prompt_for};
+use crate::domain::visual_capabilities::{self, figure_engine, is_figure_feedback};
 use crate::agents::notebook_agent::NOTEBOOK_AGENT_ID;
 use crate::agents::pedagogical_critic_agent::PEDAGOGICAL_CRITIC_AGENT_ID;
 use crate::domain::block_planner::{self, BlockPlan, LearnerSignals, PlanInputs, Presentation};
@@ -554,7 +555,12 @@ impl NotebookService {
         block.content_json = content;
 
         let graded = grading::grade_closure_with_model(&self.orchestrator, app, &block, reflection, block.attempt_count + 1).await?;
-        let status = if graded.passed { BlockStatus::Passed } else { BlockStatus::Failed };
+        // The closure is a reflection, never a gate: any genuine attempt
+        // completes the class. The grader's verdict still shapes the feedback
+        // ("go deeper") and the evidence row, but it no longer locks a class
+        // the student already worked through.
+        let completes = graded.passed || grading::is_genuine_reflection(reflection);
+        let status = if completes { BlockStatus::Passed } else { BlockStatus::Failed };
         let updated = self.store.update_block_status(block_id, status, Some(&graded.feedback), true)?;
         if let Ok(Some(gen_ctx)) = self.store.class_generation_context(&document.class_id) {
             let outcome = if graded.passed { EvidenceOutcome::Passed } else { EvidenceOutcome::Failed };
@@ -699,6 +705,7 @@ impl NotebookService {
             mechanical_template: Mutex::new(false),
             document_id: document.id.clone(),
             attempts_started: AtomicU8::new(0),
+            figure: FigureRouting::default(),
             // A repair already runs in the background or on an explicit user
             // action; it keeps the critic blocking so it never loops.
             defer_critic: false,
@@ -1166,6 +1173,11 @@ async fn generate_candidate_block(
     if let Some(hint) = plan.to_hint_json() {
         base_input.push_str(&format!("\n\nPLAN_DEL_SISTEMA: {hint}"));
     }
+    if escalation.is_none() {
+        if let Some(reference) = figure_reference(store, &ctx, &plan) {
+            base_input.push_str(&reference);
+        }
+    }
 
     let expected_block_count = existing_blocks.len() as u32;
     let presentation = plan.presentation;
@@ -1192,6 +1204,7 @@ async fn generate_candidate_block(
         semantic_pending: Mutex::new(false),
         last_candidate_json: Mutex::new(None),
         plan,
+        figure: FigureRouting::default(),
     };
     let started = std::time::Instant::now();
     let report = run_generator_critic_loop(&job, MAX_ATTEMPTS, RETRY_BACKOFF_BASE).await?;
@@ -1225,6 +1238,9 @@ fn persist_candidate_block(
     let block_type = candidate.report.value.block_type();
     let content_json = content_with_presentation(&candidate.report.value, candidate.presentation)?;
     let inserted = store.insert_block_if_count(document_id, block_type, &content_json, BlockStatus::Ready, Some(candidate.expected_block_count))?;
+    if inserted.is_some() && candidate.report.source == LoopSource::Model {
+        remember_figure(store, class_id, &candidate.report.value);
+    }
     log_block_timing(class_id, candidate.expected_block_count, block_type, &candidate.report, candidate.elapsed, defer_critic);
 
     if let (true, Some(block), Some(rc)) = (candidate.owes_review, inserted.as_ref(), candidate.review_context) {
@@ -1240,6 +1256,49 @@ fn persist_candidate_block(
     }
     Ok(inserted)
 }
+
+/// A theory or diagram figure that passed every deterministic review goes
+/// into the figure library (best-effort: a failed write never blocks a block).
+fn remember_figure(store: &NotebookStore, class_id: &str, block: &GeneratedSectionBlock) {
+    let (visual, intent) = match block {
+        GeneratedSectionBlock::AnchoredMicroTheory { visual_aid: Some(v), visual_intent, .. } => (v, visual_intent),
+        GeneratedSectionBlock::DeclarativeVisualDiagram { visual_aid, visual_intent, .. } => (visual_aid, visual_intent),
+        _ => return,
+    };
+    let Ok(Some(ctx)) = store.class_generation_context(class_id) else { return };
+    let Ok(visual_json) = serde_json::to_string(visual) else { return };
+    let fig = crate::notebook_store::LibraryFigure {
+        class_id: class_id.to_string(),
+        class_title: format!("{} {}", ctx.milestone.title, ctx.class.title),
+        engine: crate::domain::visual_routing::engine_keys(visual).0.to_string(),
+        intent: intent.clone(),
+        visual_json,
+    };
+    if let Err(e) = store.save_figure(&fig, now_ms()) {
+        tracing::warn!(error = %e, "could not save the figure to the library");
+    }
+}
+
+/// A validated figure from a similar class, offered as a reference the model
+/// adapts (never copies). Only for blocks that may draw a theory/diagram figure.
+fn figure_reference(store: &NotebookStore, ctx: &ClassGenerationContext, plan: &BlockPlan) -> Option<String> {
+    if !plan.block_type.is_none_or(|t| matches!(t, DynamicBlockType::AnchoredMicroTheory | DynamicBlockType::DeclarativeVisualDiagram)) {
+        return None;
+    }
+    let title = format!("{} {}", ctx.milestone.title, ctx.class.title);
+    let (score, fig) = store.similar_figures(&title, &ctx.class.id, FIGURE_REFERENCE_MIN_SIMILARITY, 1).ok()?.into_iter().next()?;
+    if fig.visual_json.len() > 4000 {
+        return None;
+    }
+    Some(format!(
+        "\n\nFIGURA_VALIDADA_DE_REFERENCIA (de la clase «{}», similitud {score:.2}; ya pasó todas las revisiones): {} — si el \
+         ejemplo de tu teoría es del mismo tipo, ADÁPTALA a tus valores y textos; si no encaja, ignórala. Nunca la copies tal cual.",
+        fig.class_title, fig.visual_json
+    ))
+}
+
+/// Titles must share at least this share of content words to count as similar.
+const FIGURE_REFERENCE_MIN_SIMILARITY: f64 = 0.3;
 
 async fn generate_and_persist_block(
     store: &NotebookStore,
@@ -1368,6 +1427,24 @@ struct BlockGenerationJob<'a> {
     /// the type is fixed, the FIRST attempt runs with the short type-specific
     /// prompt; any retry falls back to the full one.
     plan: BlockPlan,
+    /// Figure routing across attempts (see [`FigureRouting`]).
+    figure: FigureRouting,
+}
+
+/// How this block's FIGURE has fared across attempts, to route the next one
+/// (`domain::visual_capabilities`): the second rejection of the figure — or
+/// one rejection of a figure drawn with an engine the matrix marks as
+/// unreliable for the model that drew it — hands the next attempt to the
+/// figure-escalation model, when one is configured.
+#[derive(Default)]
+struct FigureRouting {
+    rejections: AtomicU8,
+    escalate_next: AtomicBool,
+    /// Whether the attempt under review ran on the escalation model (only
+    /// it may write a `code_figure`).
+    escalated_attempt: AtomicBool,
+    /// (engine, model) of the last candidate.
+    last: Mutex<Option<(&'static str, String)>>,
 }
 
 #[async_trait::async_trait]
@@ -1384,7 +1461,27 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
         // A retry means something about the plan or the content was wrong, so
         // it gets the full prompt (and the model's own judgment) back.
         let lean_prompt = if attempt == 1 { self.plan.block_type.map(|t| system_prompt_for(Some(t))) } else { None };
-        let run = self.orchestrator.run_notebook_block_agent_with(self.app, NOTEBOOK_AGENT_ID, lean_prompt.as_deref(), &turn_input, capture.clone());
+        // Figure routing: escalate when the figure already failed (see FigureRouting);
+        // otherwise warn the model off the engines it is measurably bad at.
+        let escalate = self.figure.escalate_next.load(Ordering::Relaxed) && self.orchestrator.agent_model(FIGURE_ESCALATION_AGENT_ID).is_some();
+        let agent_id = if escalate { FIGURE_ESCALATION_AGENT_ID } else { NOTEBOOK_AGENT_ID };
+        let model = self.orchestrator.agent_model(agent_id).map(|m| m.model).unwrap_or_default();
+        let mut turn_input = turn_input;
+        self.figure.escalated_attempt.store(escalate, Ordering::Relaxed);
+        if escalate {
+            tracing::info!(class_id = %self.class_id, attempt, model = %model, "figure escalated to the escalation model");
+            dev_trace::trace_note("route", "figure_escalation", &self.class_id, "escalated", &[format!("attempt={attempt}"), format!("model={model}")]);
+        } else {
+            let avoid = visual_capabilities::matrix().unreliable_engines(&model);
+            if !avoid.is_empty() {
+                turn_input.push_str(&format!(
+                    "\n\nMOTORES_POCO_FIABLES_CON_TU_MODELO: {} — si el mismo visualIntent admite otro motor, usa ese.",
+                    avoid.join(", ")
+                ));
+            }
+        }
+        let lean_prompt = if escalate { None } else { lean_prompt };
+        let run = self.orchestrator.run_notebook_block_agent_with(self.app, agent_id, lean_prompt.as_deref(), &turn_input, capture.clone());
         // Live progress is only scoped when there is a UI to show it on; the
         // provider factory reads the sink and streams, otherwise it blocks.
         let run_result = match self.progress_sink(attempt) {
@@ -1406,6 +1503,7 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
                 tracing::info!(class_id = %self.class_id, attempt, fixes, "repaired the generated visual deterministically");
                 dev_trace::trace_note("repair", "visual_repair", &self.class_id, "visual_repaired", &[format!("fixes={fixes}"), format!("block_type={}", block.block_type().as_str())]);
             }
+            *self.figure.last.lock().unwrap_or_else(|e| e.into_inner()) = figure_engine(&block).map(|e| (e, model.clone()));
             let content_fixes = crate::domain::content_repair::repair_block_content(&mut block);
             if content_fixes > 0 {
                 tracing::info!(class_id = %self.class_id, attempt, content_fixes, "repaired block content deterministically");
@@ -1476,6 +1574,15 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
             self.is_escalation || self.is_regeneration || self.force_close,
         ));
         violations.extend(block_guardrail_violations(candidate));
+        violations.extend(grounding::visual_routing_violations(candidate, render::course_visual_domain(&self.ctx), total_so_far.saturating_sub(1)));
+        violations.extend(grounding::closure_honesty_violations(candidate, &self.existing_blocks));
+        if figure_engine(candidate) == Some("code_figure") && !self.figure.escalated_attempt.load(Ordering::Relaxed) {
+            violations.push(
+                "visualAid code_figure solo lo puede escribir el modelo de escalado: dibuja la figura con un motor declarativo \
+                 (surface_3d, solid_model, molecule_3d, illustration_kit, interactive_module…)"
+                    .to_string(),
+            );
+        }
         if !violations.is_empty() {
             self.trace_critique(candidate, "deterministic_rejected", violations.clone());
             tracing::warn!(class_id = %self.class_id, ?violations, "generated block failed deterministic review");
@@ -1507,6 +1614,21 @@ impl GeneratorCriticLoop for BlockGenerationJob<'_> {
     }
 
     fn corrective_note(&self, cause: &Cause) -> String {
+        if let Cause::Rejected { feedback } = cause {
+            if feedback.iter().any(|f| is_figure_feedback(f)) {
+                let n = self.figure.rejections.fetch_add(1, Ordering::Relaxed) + 1;
+                let unreliable = self
+                    .figure
+                    .last
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_ref()
+                    .is_some_and(|(engine, model)| visual_capabilities::matrix().unreliable(model, engine));
+                if n >= 2 || unreliable {
+                    self.figure.escalate_next.store(true, Ordering::Relaxed);
+                }
+            }
+        }
         match cause {
             Cause::Rejected { feedback } => {
                 let checkpoint = self
@@ -1834,6 +1956,8 @@ mod tests {
                     analogy_boundary: None,
                     system_rule: "s".into(),
                     frequent_error: "f".into(),
+                    visual_aid: None,
+                    visual_intent: None,
                 },
                 source: LoopSource::Model,
                 attempts: 1,
@@ -1862,6 +1986,8 @@ mod tests {
                     analogy_boundary: None,
                     system_rule: "s".into(),
                     frequent_error: "f".into(),
+                    visual_aid: None,
+                    visual_intent: None,
                 },
                 source: LoopSource::Model,
                 attempts: 1,
@@ -1877,4 +2003,121 @@ mod tests {
         assert_eq!(prefetch_cache_len(), 0);
     }
 
+}
+
+#[cfg(test)]
+mod figure_escalation_tests {
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+
+    use super::super::NotebookService;
+    use crate::agents::AgentRegistry;
+    use crate::agents::block_generator_agent::FIGURE_ESCALATION_AGENT_ID;
+    use crate::domain::model::ModelRef;
+    use crate::domain::notebook::{DiagramNodeSpec, GeneratedSectionBlock, ModuleVariable, StaticVisualSpec, SurfacePath};
+    use crate::error::AppResult;
+    use crate::notebook_store::NotebookStore;
+    use crate::orchestration::{Orchestrator, PromptRunner};
+    use crate::providers::factory::PromptOutput;
+    use crate::tools::{NotebookBlockCapture, PublishedBlock};
+
+    /// Publishes scripted blocks and records which MODEL each generation ran on.
+    #[derive(Default)]
+    struct ModelRecordingRunner {
+        blocks: Mutex<VecDeque<GeneratedSectionBlock>>,
+        models: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl PromptRunner for ModelRecordingRunner {
+        async fn run(&self, _: &str, _: &str, _: &str, _: &str, _: &[String]) -> AppResult<PromptOutput> {
+            unreachable!("generation only")
+        }
+
+        async fn run_notebook_block_execution(&self, _: &str, model: &str, _: &str, _: &str, capture: NotebookBlockCapture) -> AppResult<PromptOutput> {
+            self.models.lock().unwrap().push(model.to_string());
+            if let Some(block) = self.blocks.lock().unwrap().pop_front() {
+                *capture.lock().unwrap() = Some(PublishedBlock { block, mechanical_template: false });
+            }
+            Ok(PromptOutput { text: String::new(), tool_calls: vec![] })
+        }
+    }
+
+    const RULE: &str = "1. La gravedad no es una fuerza: es la curvatura del espacio-tiempo. 2. Los cuerpos libres siguen geodésicas.";
+
+    fn theory(visual: StaticVisualSpec) -> GeneratedSectionBlock {
+        GeneratedSectionBlock::AnchoredMicroTheory {
+            title: "La gravedad como curvatura".into(),
+            intuitive_hook: "Dos hormigas caminan rectas sobre una pelota y se acercan.".into(),
+            analogy_boundary: Some("La pelota no tiene tiempo; el espacio-tiempo sí.".into()),
+            system_rule: RULE.into(),
+            frequent_error: "Esto SÍ: sigue una geodésica. Esto NO: una fuerza tira, porque en caída libre no sientes nada.".into(),
+            visual_aid: Some(visual),
+            visual_intent: Some("curved_surface".into()),
+        }
+    }
+
+    fn boxes() -> StaticVisualSpec {
+        let node = |id: &str| DiagramNodeSpec { id: id.into(), label: format!("Etapa {id}"), shape: None, subtext: None, explanation: None };
+        StaticVisualSpec::DiagramSpec { kind: "flowchart".into(), direction: None, title: None, nodes: vec![node("a"), node("b")], edges: vec![], caption: None }
+    }
+
+    fn well() -> StaticVisualSpec {
+        StaticVisualSpec::Surface3d {
+            title: None,
+            expr: "-m / sqrt(x^2 + y^2 + 0.5)".into(),
+            x_range: [-4.0, 4.0],
+            y_range: [-4.0, 4.0],
+            params: vec![ModuleVariable { sym: "m".into(), label: "Masa".into(), unit: None, min: 0.5, max: 3.0, step: None, init: 1.5 }],
+            z_label: None,
+            paths: vec![SurfacePath { id: "g".into(), label: "Geodésica cercana".into(), kind: "geodesic".into(), start: [-4.0, 1.5], direction: [1.0, 0.0], explanation: "Se dobla hacia la masa.".into() }],
+            markers: vec![],
+            region: None,
+            caption: Some("Mueve la masa.".into()),
+        }
+    }
+
+    fn service(runner: Arc<ModelRecordingRunner>, escalation: bool) -> NotebookService {
+        let agents = Arc::new(AgentRegistry::new());
+        let mut strong = crate::agents::notebook_agent::definition();
+        strong.model = ModelRef::new("xiaomi", "mimo-v2.6-pro");
+        agents.register(strong).unwrap();
+        if escalation {
+            let mut opus = crate::agents::notebook_agent::definition();
+            opus.id = FIGURE_ESCALATION_AGENT_ID.into();
+            opus.model = ModelRef::new("anthropic", "claude-opus-5-5");
+            agents.register(opus).unwrap();
+        }
+        let store = NotebookStore::open_in_memory().unwrap();
+        NotebookService::new(store, Arc::new(Orchestrator::new(agents, runner)))
+    }
+
+    async fn first_block(svc: &NotebookService) -> GeneratedSectionBlock {
+        let course = svc.store.create_course("Relatividad general", "Entender la gravedad", 1).unwrap();
+        let milestone = svc.store.create_milestone(&course.id, 1, "Curvatura", "Explicar la caída libre").unwrap();
+        let class = svc.store.create_class(&milestone.id, 1, "Curvatura y geodésicas", 0, 2.0).unwrap();
+        let payload = svc.start_class_notebook(None, &class.id).await.expect("a block lands");
+        serde_json::from_value(payload.blocks[0].content_json.clone()).expect("block json")
+    }
+
+    #[tokio::test]
+    async fn a_figure_rejected_twice_goes_to_the_escalation_model() {
+        let runner = Arc::new(ModelRecordingRunner { blocks: Mutex::new(vec![theory(boxes()), theory(boxes()), theory(well())].into()), ..Default::default() });
+        let svc = service(runner.clone(), true);
+        let block = first_block(&svc).await;
+        let models = runner.models.lock().unwrap().clone();
+        assert_eq!(&models[..3], ["mimo-v2.6-pro", "mimo-v2.6-pro", "claude-opus-5-5"], "two figure rejections, then the escalation model");
+        assert!(matches!(block, GeneratedSectionBlock::AnchoredMicroTheory { visual_aid: Some(StaticVisualSpec::Surface3d { .. }), .. }));
+    }
+
+    #[tokio::test]
+    async fn without_an_escalation_model_the_strong_model_keeps_trying() {
+        let runner = Arc::new(ModelRecordingRunner { blocks: Mutex::new(vec![theory(boxes()), theory(boxes()), theory(well())].into()), ..Default::default() });
+        let svc = service(runner.clone(), false);
+        first_block(&svc).await;
+        let models = runner.models.lock().unwrap().clone();
+        assert!(models[..3].iter().all(|m| m == "mimo-v2.6-pro"), "{models:?}");
+    }
 }
